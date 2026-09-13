@@ -45,22 +45,20 @@ export type Branding = {
 };
 
 export const DEFAULT_BRANDING: Branding = {
-  name: "Vocero",
-  // El azul eléctrico de vocerocrm.com: la instancia recién instalada se ve
-  // igual que la landing. Una agencia lo cambia en Configuración → Marca.
+  name: "Conecta Digital",
+  // Acento base de Conecta Digital. Una agencia puede cambiarlo en Configuración → Marca.
   accent: "#0d5bff",
   currency: DEFAULT_CURRENCY,
   favicon: null,
 };
 
 /**
- * Presets. El primero es la marca Vocero (valores exactos de la landing); los
- * demás son los tonos sobrios del handoff Atlas, que siguen disponibles para
- * quien quiera un CRM más discreto.
+ * Presets. El primero es el acento base de Conecta Digital; los demás son
+ * tonos sobrios del handoff Atlas para quien quiera un CRM más discreto.
  */
 export const ACCENT_PRESETS: Record<string, { label: string; set: AccentSet }> = {
   "#0d5bff": {
-    label: "Azul Vocero",
+    label: "Azul Conecta",
     set: { accent: "#0d5bff", hover: "#0a4de6", soft: "#d3e2ff", tint: "#ebf1ff", text: "#0038d8", fg: "#ffffff" },
   },
   "#3f5972": {
