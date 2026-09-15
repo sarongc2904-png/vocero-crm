@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { requireBotKey } from "@/server/bot/auth";
 import { mergeFicha, normalizeFicha } from "@/server/bot/ficha";
 import { toHandoffReason } from "@/server/bot/handoff";
 import { resetRateLimit } from "@/lib/rate-limit";
 
 /** La puerta de toda la superficie `/api/bot/*`. */
 
-const KEY = "clave-de-servicio-larga-0123456789abcdef";
+const KEY_ORG_A = "clave-de-la-organizacion-a-0123456789abcdef";
+const KEY_ORG_B = "clave-de-la-organizacion-b-fedcba9876543210";
 
 function reqWith(key?: string): Request {
   return new Request("http://localhost/api/bot/context", {
@@ -14,39 +14,53 @@ function reqWith(key?: string): Request {
   });
 }
 
-describe("requireBotKey", () => {
+/**
+ * Fase 1 — la clave YA NO vive en una env var de instancia: cada organización
+ * tiene la suya (`bot_api_key`). Se mockea `resolveOrgByApiKey` para simular
+ * DOS organizaciones simultáneas sin necesitar Postgres — es la prueba de
+ * regresión de la fuga que tenía `resolveInstanceOrg()` ("la primera fila de
+ * `organization`", la misma para cualquier clave).
+ */
+vi.mock("@/server/bot/api-keys", () => ({
+  resolveOrgByApiKey: async (key: string) => {
+    if (key === KEY_ORG_A) return "org_a";
+    if (key === KEY_ORG_B) return "org_b";
+    return null;
+  },
+}));
+
+describe("authenticateBotRequest — aislamiento multi-tenant", () => {
   beforeEach(() => {
-    vi.stubEnv("BOT_API_KEY", KEY);
     resetRateLimit();
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("key correcta → pasa (null)", () => {
-    expect(requireBotKey(reqWith(KEY))).toBeNull();
+  it("la clave de la organización A resuelve A, nunca B", async () => {
+    const { authenticateBotRequest } = await import("@/server/bot/auth");
+    const res = await authenticateBotRequest(reqWith(KEY_ORG_A));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.organizationId).toBe("org_a");
   });
 
-  it("key incorrecta → 401", () => {
-    const res = requireBotKey(reqWith("otra-clave-igual-de-larga-pero-mala!!"));
-    expect(res?.status).toBe(401);
+  it("la clave de la organización B resuelve B, nunca A", async () => {
+    const { authenticateBotRequest } = await import("@/server/bot/auth");
+    const res = await authenticateBotRequest(reqWith(KEY_ORG_B));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.organizationId).toBe("org_b");
   });
 
-  it("sin header → 401", () => {
-    expect(requireBotKey(reqWith())?.status).toBe(401);
+  it("una clave que no pertenece a ninguna organización → 401 (nunca cae a una por defecto)", async () => {
+    const { authenticateBotRequest } = await import("@/server/bot/auth");
+    const res = await authenticateBotRequest(reqWith("clave-que-no-existe-en-ninguna-org"));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.response.status).toBe(401);
   });
 
-  it("sin BOT_API_KEY configurada → 401 SIEMPRE (aunque manden algo)", () => {
-    vi.stubEnv("BOT_API_KEY", "");
-    expect(requireBotKey(reqWith("cualquier-cosa"))?.status).toBe(401);
-  });
-
-  it("key demasiado corta configurada → 401 (no se acepta una key débil)", () => {
-    vi.stubEnv("BOT_API_KEY", "corta");
-    expect(requireBotKey(reqWith("corta"))?.status).toBe(401);
-  });
-
-  it("longitudes distintas no filtran información (401 uniforme)", () => {
-    const res = requireBotKey(reqWith("x"));
-    expect(res?.status).toBe(401);
+  it("sin header → 401", async () => {
+    const { authenticateBotRequest } = await import("@/server/bot/auth");
+    const res = await authenticateBotRequest(reqWith());
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.response.status).toBe(401);
   });
 });
 

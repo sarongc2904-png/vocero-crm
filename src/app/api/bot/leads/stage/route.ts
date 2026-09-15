@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import { apiError, parseBody } from "@/lib/api";
-import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
+import { authenticateBotRequest } from "@/server/bot/auth";
 import { resolveStage } from "@/server/ai/actions";
 import { moveLeadToStage } from "@/server/leads/stage-history";
 import { LOSS_REASON_LABEL, type LossReason } from "@/lib/types";
@@ -28,13 +28,9 @@ const bodySchema = z.object({
  * case-insensitive vía `resolveStage`) — el cerebro externo no inventa IDs.
  */
 export async function PUT(req: Request) {
-  const denied = requireBotKey(req);
-  if (denied) return denied;
-
-  const organizationId = await resolveInstanceOrg();
-  if (!organizationId) {
-    return apiError(409, "no_org", "La instancia aún no tiene organización");
-  }
+  const auth = await authenticateBotRequest(req);
+  if (!auth.ok) return auth.response;
+  const organizationId = auth.organizationId;
 
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;

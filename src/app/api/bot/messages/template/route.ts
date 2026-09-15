@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiError, parseBody } from "@/lib/api";
-import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
+import { authenticateBotRequest } from "@/server/bot/auth";
 import { SendError } from "@/server/inbox/send";
 import {
   sendTemplate,
@@ -28,13 +28,9 @@ const bodySchema = z.object({
  * cuadran, sin importar quién la pida.
  */
 export async function POST(req: Request) {
-  const denied = requireBotKey(req);
-  if (denied) return denied;
-
-  const organizationId = await resolveInstanceOrg();
-  if (!organizationId) {
-    return apiError(409, "no_org", "La instancia aún no tiene organización");
-  }
+  const auth = await authenticateBotRequest(req);
+  if (!auth.ok) return auth.response;
+  const organizationId = auth.organizationId;
 
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;

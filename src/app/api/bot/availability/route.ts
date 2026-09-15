@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { apiError } from "@/lib/api";
 import { scoped } from "@/lib/db/tenant";
-import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
+import { authenticateBotRequest } from "@/server/bot/auth";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { computeAvailability } from "@/server/agenda/availability";
 import { getSettings } from "@/server/agenda/settings";
@@ -41,13 +41,9 @@ export async function GET(req: Request) {
   // agenda, el endpoint no existe — no hay nada que autenticar.
   if (!agendaEnabled()) return agendaDisabledResponse();
 
-  const denied = requireBotKey(req);
-  if (denied) return denied;
-
-  const organizationId = await resolveInstanceOrg();
-  if (!organizationId) {
-    return apiError(409, "no_org", "La instancia aún no tiene organización");
-  }
+  const auth = await authenticateBotRequest(req);
+  if (!auth.ok) return auth.response;
+  const organizationId = auth.organizationId;
 
   const url = new URL(req.url);
   const conversationId = url.searchParams.get("conversationId");

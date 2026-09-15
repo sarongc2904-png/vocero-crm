@@ -30,8 +30,11 @@ export function aiMockCompletion(messages: InMessage[]): string {
         hallazgos: [
           {
             tipo: "fuera_de_kb",
+            severity: "grave",
             evidencia:
               "El cliente preguntó por garantías y devoluciones y el conocimiento no lo cubre.",
+            reason:
+              "El agente no tenía conocimiento configurado para responder ni redirigir con una alternativa concreta.",
             sugerencia: {
               pregunta: "¿Cuál es la política de garantías y devoluciones?",
               respuesta:

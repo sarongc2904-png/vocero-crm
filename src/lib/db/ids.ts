@@ -29,6 +29,8 @@ const prefixes = {
   adAttribution: "att",
   conversionEvent: "cve",
   capiSettings: "capi",
+  // Fase 1 — clave del bot API por organización
+  botApiKey: "bak",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

@@ -21,10 +21,18 @@ vi.mock("@/lib/db", async (importOriginal) => {
   return { ...actual, getDb: () => builder };
 });
 
-vi.mock("@/server/bot/auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/server/bot/auth")>();
-  return { ...actual, resolveInstanceOrg: async () => "org_1" };
-});
+/**
+ * Fase 1 — auth por clave-por-organización: `authenticateBotRequest` ya NO
+ * usa `resolveInstanceOrg`/`BOT_API_KEY` de instancia, así que se mockea
+ * `resolveOrgByApiKey` directo (mismo patrón que `bot-gateway.test.ts`) en
+ * vez de simular la env var legada, que hoy no autentica nada.
+ */
+const KEY = "clave-de-servicio-larga-0123456789abcdef";
+
+vi.mock("@/server/bot/api-keys", () => ({
+  resolveOrgByApiKey: async (key: string) =>
+    key === "clave-de-servicio-larga-0123456789abcdef" ? "org_1" : null,
+}));
 
 /** Perfil del agente + knowledge base vía la API de servicio `/api/bot/*`. */
 
@@ -112,10 +120,7 @@ describe("serializeBotProfile", () => {
 });
 
 describe("GET /api/bot/profile (ruta, DB fake)", () => {
-  const KEY = "clave-de-servicio-larga-0123456789abcdef";
-
   beforeEach(() => {
-    vi.stubEnv("BOT_API_KEY", KEY);
     resetRateLimit();
     dbState.queue = [];
   });

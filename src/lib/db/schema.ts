@@ -66,6 +66,33 @@ export const verification = pgTable("verification", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+/**
+ * Fase 1 (aislamiento multi-tenant real de /api/bot/*): una clave por
+ * organización, nunca una global de instancia. Antes de esto, TODA la
+ * superficie del bot resolvía "la primera organización de la base" — con más
+ * de un tenant, cualquier clave hablaba con los datos de la primera empresa
+ * creada, sin importar de quién era la clave. Ver server/bot/auth.ts.
+ *
+ * Se guarda el HASH (sha256), nunca la clave en claro: es exactamente lo que
+ * ya se hace con `session.token` — un valor de un solo uso al crearse que
+ * nadie vuelve a leer, solo a comparar.
+ */
+export const botApiKey = pgTable(
+  "bot_api_key",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    keyHash: text("key_hash").notNull().unique(),
+    /** Últimos 4 caracteres, solo para que el dueño reconozca cuál es cuál. */
+    keyLast4: text("key_last4").notNull(),
+    lastUsedAt: timestamp("last_used_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("bot_api_key_org_uq").on(t.organizationId)]
+);
+
 export const organization = pgTable("organization", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),

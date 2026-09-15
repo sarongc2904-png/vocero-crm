@@ -1,7 +1,6 @@
 import { and, asc, eq, lt, ne } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
-import { apiError } from "@/lib/api";
-import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
+import { authenticateBotRequest } from "@/server/bot/auth";
 import { serializeFicha } from "@/server/bot/ficha";
 
 export const dynamic = "force-dynamic";
@@ -27,13 +26,9 @@ const MAX_LIMIT = 200;
  * una simulación no es un lead real al que perseguir.
  */
 export async function GET(req: Request) {
-  const denied = requireBotKey(req);
-  if (denied) return denied;
-
-  const organizationId = await resolveInstanceOrg();
-  if (!organizationId) {
-    return apiError(409, "no_org", "La instancia aún no tiene organización");
-  }
+  const auth = await authenticateBotRequest(req);
+  if (!auth.ok) return auth.response;
+  const organizationId = auth.organizationId;
 
   const url = new URL(req.url);
   const stageName = url.searchParams.get("stageName");
