@@ -5,6 +5,7 @@ import { accentCssVariables, DEFAULT_BRANDING } from "@/lib/branding";
 import { faviconHref } from "@/lib/favicon";
 import { normalizeThemePreference, THEME_COOKIE } from "@/lib/theme";
 import { getBranding } from "@/server/branding";
+import { getSessionOrNull } from "@/lib/auth/session";
 import "./globals.css";
 
 const archivo = Archivo({
@@ -29,7 +30,10 @@ const plexMono = IBM_Plex_Mono({
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const branding = await getBranding().catch(() => DEFAULT_BRANDING);
+  const session = await getSessionOrNull();
+  const branding = await getBranding(session?.organizationId).catch(
+    () => DEFAULT_BRANDING
+  );
   return {
     title: `${branding.name} — CRM de WhatsApp`,
     description:
@@ -41,7 +45,10 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const branding = await getBranding().catch(() => DEFAULT_BRANDING);
+  const session = await getSessionOrNull();
+  const branding = await getBranding(session?.organizationId).catch(
+    () => DEFAULT_BRANDING
+  );
   const theme = normalizeThemePreference(
     (await cookies()).get(THEME_COOKIE)?.value
   );

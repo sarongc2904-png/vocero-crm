@@ -23,10 +23,12 @@ const ADS_TAB: Tab = { href: "/settings/ads", label: "Anuncios" };
 const MESSENGER_TAB: Tab = { href: "/settings/messenger", label: "Messenger" };
 
 export function SettingsNav({
+  role,
   agenda = false,
   atribucion = false,
   messenger = false,
 }: {
+  role: "owner" | "admin" | "agent";
   agenda?: boolean;
   atribucion?: boolean;
   messenger?: boolean;
@@ -41,7 +43,11 @@ export function SettingsNav({
     ...TABS.slice(1),
     ...(agenda ? [AGENDA_TAB] : []),
     ...(atribucion ? [ADS_TAB] : []),
-  ];
+  ].filter(
+    (tab) =>
+      role === "owner" ||
+      (tab.href !== "/settings/branding" && tab.href !== "/settings/team")
+  );
   return (
     <nav className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 sm:w-44 sm:flex-col sm:space-y-1 sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3">
       {tabs.map((t) => (

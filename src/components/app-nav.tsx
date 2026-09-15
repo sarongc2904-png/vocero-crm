@@ -21,6 +21,7 @@ import { signOut } from "@/lib/auth/client";
 import { useEvents } from "@/components/use-events";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { BrandLogo } from "@/components/brand-mark";
+import { OrganizationSwitcher } from "@/components/organization-switcher";
 import { APP_VERSION, BUILD_COMMIT, versionLabel } from "@/lib/version";
 
 type NavItem = {
@@ -62,6 +63,7 @@ export function AppNav({
   branding,
   userName,
   role,
+  activeOrganizationId,
   theme,
   commit,
   agenda = false,
@@ -71,6 +73,7 @@ export function AppNav({
   branding: Branding;
   userName: string;
   role: string;
+  activeOrganizationId: string;
   theme: ThemePreference;
   /**
    * Commit resuelto en el servidor. Gana al de build porque puede venir de la
@@ -113,9 +116,12 @@ export function AppNav({
   const settingsActive = pathname.startsWith("/settings");
   // Citas va después de Pipeline: es el paso siguiente de un trato, no una
   // sección aparte.
-  const items = agenda
-    ? [...NAV.slice(0, 2), AGENDA_ITEM, ...NAV.slice(2)]
+  const availableItems = role === "agent"
+    ? NAV.filter((item) => item.href !== "/agent" && item.href !== "/lab")
     : NAV;
+  const items = agenda
+    ? [...availableItems.slice(0, 2), AGENDA_ITEM, ...availableItems.slice(2)]
+    : availableItems;
 
   return (
     <aside
@@ -147,6 +153,11 @@ export function AppNav({
         </div>
       </div>
 
+      <OrganizationSwitcher
+        activeOrganizationId={activeOrganizationId}
+        canCreate={role === "owner"}
+      />
+
       <nav className="flex flex-col gap-0.5">
         {items.map((item) => {
           const active =
@@ -170,13 +181,15 @@ export function AppNav({
 
       <div className="flex-1" />
 
-      <Link href="/settings" className={navItemClass(settingsActive)}>
-        <Settings
-          className={cn("h-[17px] w-[17px]", settingsActive ? "text-brand" : "text-text-3")}
-          strokeWidth={1.8}
-        />
-        Ajustes
-      </Link>
+      {role !== "agent" && (
+        <Link href="/settings" className={navItemClass(settingsActive)}>
+          <Settings
+            className={cn("h-[17px] w-[17px]", settingsActive ? "text-brand" : "text-text-3")}
+            strokeWidth={1.8}
+          />
+          Ajustes
+        </Link>
+      )}
 
       <div className="mt-1 flex items-center gap-2.5 rounded-sm px-2.5 py-2 hover:bg-accent">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-soft text-xs font-bold text-brand-text">
@@ -185,7 +198,7 @@ export function AppNav({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-semibold">{userName}</span>
           <span className="block truncate text-[11px] text-text-3">
-            {role === "owner" ? "Propietario" : "Equipo"} · En línea
+            {role === "owner" ? "Propietario" : role === "admin" ? "Administrador" : "Agente"} · En línea
           </span>
         </span>
         <ThemeToggle initial={theme} />

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { effectiveSource } from "@/server/contact-source";
@@ -54,7 +54,10 @@ export async function getContactStage(
     .from(schema.lead)
     .innerJoin(
       schema.pipelineStage,
-      eq(schema.lead.stageId, schema.pipelineStage.id)
+      and(
+        eq(schema.lead.stageId, schema.pipelineStage.id),
+        eq(schema.pipelineStage.organizationId, schema.lead.organizationId)
+      )
     )
     .where(
       scoped(

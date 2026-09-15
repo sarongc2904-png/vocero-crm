@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { partsInTz } from "@/lib/time/slots";
@@ -40,7 +40,13 @@ export async function listBookings(
       contactName: schema.contact.name,
     })
     .from(schema.booking)
-    .leftJoin(schema.contact, eq(schema.booking.contactId, schema.contact.id))
+    .leftJoin(
+      schema.contact,
+      and(
+        eq(schema.booking.contactId, schema.contact.id),
+        eq(schema.contact.organizationId, schema.booking.organizationId)
+      )
+    )
     .where(scoped(schema.booking.organizationId, organizationId))
     .orderBy(desc(schema.booking.scheduledAt))
     .limit(200);

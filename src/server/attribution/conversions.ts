@@ -307,15 +307,24 @@ export async function listConversionActivity(
     .from(schema.conversionEvent)
     .leftJoin(
       schema.conversation,
-      eq(schema.conversation.id, schema.conversionEvent.conversationId)
+      and(
+        eq(schema.conversation.id, schema.conversionEvent.conversationId),
+        eq(schema.conversation.organizationId, schema.conversionEvent.organizationId)
+      )
     )
     .leftJoin(
       schema.contact,
-      eq(schema.contact.id, schema.conversation.contactId)
+      and(
+        eq(schema.contact.id, schema.conversation.contactId),
+        eq(schema.contact.organizationId, schema.conversionEvent.organizationId)
+      )
     )
     .leftJoin(
       schema.adAttribution,
-      eq(schema.adAttribution.conversationId, schema.conversionEvent.conversationId)
+      and(
+        eq(schema.adAttribution.conversationId, schema.conversionEvent.conversationId),
+        eq(schema.adAttribution.organizationId, schema.conversionEvent.organizationId)
+      )
     )
     .where(scoped(schema.conversionEvent.organizationId, organizationId))
     .orderBy(desc(schema.conversionEvent.createdAt))

@@ -317,7 +317,10 @@ export async function sendTemplate(input: {
     .from(schema.conversation)
     .innerJoin(
       schema.contact,
-      eq(schema.conversation.contactId, schema.contact.id)
+      and(
+        eq(schema.conversation.contactId, schema.contact.id),
+        eq(schema.contact.organizationId, schema.conversation.organizationId)
+      )
     )
     .where(
       scoped(

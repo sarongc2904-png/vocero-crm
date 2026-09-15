@@ -1,6 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { scoped } from "@/lib/db/tenant";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
 import { destinatarioMeta, type Destinatario } from "@/lib/meta/destinatario";
 import { publish } from "@/server/events/bus";
@@ -91,12 +92,21 @@ async function prepareSend(
     .from(schema.conversation)
     .innerJoin(
       schema.contact,
-      eq(schema.conversation.contactId, schema.contact.id)
+      and(
+        eq(schema.conversation.contactId, schema.contact.id),
+        eq(schema.contact.organizationId, schema.conversation.organizationId)
+      )
     )
-    .where(eq(schema.conversation.id, conversationId))
+    .where(
+      scoped(
+        schema.conversation.organizationId,
+        organizationId,
+        eq(schema.conversation.id, conversationId)
+      )
+    )
     .limit(1);
   const row = rows[0];
-  if (!row || row.conversation.organizationId !== organizationId) {
+  if (!row) {
     throw new SendError("meta_error", "Conversación no encontrada");
   }
 

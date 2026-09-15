@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { zoomConnector } from "@/server/agenda/connectors/zoom";
 import {
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  * el navegador solo van sus últimos 4 y el estado.
  */
 
-export const GET = withAuth(async (session) => {
+export const GET = withOrgRoles(["owner", "admin"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   const creds = await getZoomCredentials(session.organizationId);
   if (!creds) return Response.json({ connection: null });
@@ -36,7 +36,7 @@ const credsSchema = z.object({
 });
 
 /** Guarda validando ANTES contra Zoom: unas credenciales que no sirven no llegan a la base. */
-export const PUT = withAuth(async (session, req: Request) => {
+export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   const body = await parseBody(req, credsSchema);
   if (!body.ok) return body.response;
@@ -61,7 +61,7 @@ export const PUT = withAuth(async (session, req: Request) => {
   });
 });
 
-export const DELETE = withAuth(async (session) => {
+export const DELETE = withOrgRoles(["owner", "admin"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   await deleteZoomCredentials(session.organizationId);
   return Response.json({ ok: true });

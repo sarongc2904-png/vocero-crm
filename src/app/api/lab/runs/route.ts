@@ -1,5 +1,5 @@
 import { desc } from "drizzle-orm";
-import { apiError, withAuth } from "@/lib/api";
+import { apiError, withOrgRoles } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { isAiConfigured } from "@/lib/env";
@@ -8,7 +8,7 @@ import { RunConflictError, startRun } from "@/server/lab/runner";
 export const dynamic = "force-dynamic";
 
 /** Historial de corridas con delta de score vs la anterior (FR-033). */
-export const GET = withAuth(async (session) => {
+export const GET = withOrgRoles(["owner", "admin"], async (session) => {
   const db = getDb();
   const runs = await db
     .select()
@@ -37,7 +37,7 @@ export const GET = withAuth(async (session) => {
   return Response.json({ runs: withDelta, aiConfigured: isAiConfigured() });
 });
 
-export const POST = withAuth(async (session) => {
+export const POST = withOrgRoles(["owner", "admin"], async (session) => {
   if (!isAiConfigured()) {
     return apiError(
       409,

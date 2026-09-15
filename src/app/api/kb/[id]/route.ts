@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 
@@ -14,7 +14,7 @@ const patchSchema = z.object({
   content: z.string().trim().min(1).max(8000).optional(),
 });
 
-export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
+export const PATCH = withOrgRoles(["owner", "admin"], async (session, req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const body = await parseBody(req, patchSchema);
   if (!body.ok) return body.response;
@@ -35,7 +35,7 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
   return Response.json({ entry: updated[0] });
 });
 
-export const DELETE = withAuth(async (session, _req: Request, ctx: Params) => {
+export const DELETE = withOrgRoles(["owner", "admin"], async (session, _req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const db = getDb();
   const deleted = await db

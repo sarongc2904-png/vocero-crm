@@ -23,6 +23,7 @@ export function TeamClient() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [tempPassword, setTempPassword] = useState("");
+  const [role, setRole] = useState<"admin" | "agent">("agent");
   const [created, setCreated] = useState<{ email: string; password: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -60,7 +61,7 @@ export function TeamClient() {
     const res = await fetch("/api/settings/team", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, email, password: tempPassword }),
+      body: JSON.stringify({ name, email, password: tempPassword, role }),
     }).catch(() => null);
     setSaving(false);
     if (!res?.ok) {
@@ -74,6 +75,7 @@ export function TeamClient() {
     setName("");
     setEmail("");
     setTempPassword("");
+    setRole("agent");
     void refetch();
   }
 
@@ -147,6 +149,18 @@ export function TeamClient() {
               </Button>
             </div>
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="team-role">Rol</Label>
+            <select
+              id="team-role"
+              value={role}
+              onChange={(event) => setRole(event.target.value as "admin" | "agent")}
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+            >
+              <option value="agent">Agente</option>
+              <option value="admin">Administrador</option>
+            </select>
+          </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
           {created && (
             <div className="rounded-md border border-success-soft bg-success-tint p-3 text-sm">
@@ -186,7 +200,11 @@ export function TeamClient() {
               <p className="text-xs text-muted-foreground">{m.email}</p>
             </div>
             <Badge variant={m.role === "owner" ? "default" : "secondary"}>
-              {m.role === "owner" ? "Propietario" : "Miembro"}
+              {m.role === "owner"
+                ? "Propietario"
+                : m.role === "admin"
+                  ? "Administrador"
+                  : "Agente"}
             </Badge>
             {canManageMembers && m.role !== "owner" && (
               <Button

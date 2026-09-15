@@ -1,4 +1,4 @@
-import { apiError, withAuth } from "@/lib/api";
+import { withOrgRoles } from "@/lib/api";
 import { getBotApiKeyInfo, issueBotApiKey } from "@/server/bot/api-keys";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * multi-tenant no sirve de nada si nadie puede sacar su clave.
  */
 
-export const GET = withAuth(async (session) => {
+export const GET = withOrgRoles(["owner"], async (session) => {
   const info = await getBotApiKeyInfo(session.organizationId);
   return Response.json({
     exists: info !== null,
@@ -25,10 +25,7 @@ export const GET = withAuth(async (session) => {
  * anterior en el mismo UPDATE. La clave cruda se devuelve UNA sola vez aquí;
  * nunca se guarda ni se puede volver a consultar.
  */
-export const POST = withAuth(async (session) => {
-  if (session.role !== "owner") {
-    return apiError(403, "forbidden", "Solo el propietario puede emitir o rotar esta clave");
-  }
+export const POST = withOrgRoles(["owner"], async (session) => {
   const { key, last4 } = await issueBotApiKey(session.organizationId);
   return Response.json({ key, keyLast4: last4 }, { status: 201 });
 });

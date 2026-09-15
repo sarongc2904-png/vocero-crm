@@ -24,6 +24,7 @@ export function AppShell({
   branding,
   userName,
   role,
+  activeOrganizationId,
   theme,
   commit,
   agenda = false,
@@ -32,6 +33,7 @@ export function AppShell({
   branding: Branding;
   userName: string;
   role: string;
+  activeOrganizationId: string;
   theme: ThemePreference;
   /** Commit resuelto en el servidor (build-arg o variable de la plataforma). */
   commit?: string;
@@ -73,6 +75,7 @@ export function AppShell({
         commit={commit}
         userName={userName}
         role={role}
+        activeOrganizationId={activeOrganizationId}
         theme={theme}
         agenda={agenda}
         open={navOpen}

@@ -26,6 +26,7 @@ export default async function AppLayout({
       branding={branding}
       userName={authSession?.user.name ?? "Usuario"}
       role={session.role}
+      activeOrganizationId={session.organizationId}
       theme={theme}
       // Se resuelve aquí, en el servidor: el cliente no ve `SOURCE_COMMIT`.
       commit={resolveBuildCommit()}

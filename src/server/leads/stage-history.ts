@@ -66,7 +66,10 @@ export async function moveLeadToStage(input: MoveInput): Promise<MoveResult> {
       .from(schema.lead)
       .leftJoin(
         schema.pipelineStage,
-        eq(schema.lead.stageId, schema.pipelineStage.id)
+        and(
+          eq(schema.lead.stageId, schema.pipelineStage.id),
+          eq(schema.pipelineStage.organizationId, schema.lead.organizationId)
+        )
       )
       .where(
         scoped(

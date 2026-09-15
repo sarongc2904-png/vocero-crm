@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -19,7 +19,7 @@ const bodySchema = z.object({
   respuesta: z.string().trim().min(1).max(4000),
 });
 
-export const POST = withAuth(async (session, req: Request) => {
+export const POST = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;
 
