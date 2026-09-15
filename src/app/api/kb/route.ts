@@ -1,13 +1,13 @@
 import { asc } from "drizzle-orm";
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 
 export const dynamic = "force-dynamic";
 
-export const GET = withAuth(async (session) => {
+export const GET = withOrgRoles(["owner", "admin"], async (session) => {
   const db = getDb();
   const entries = await db
     .select()
@@ -30,7 +30,7 @@ const createSchema = z
     }),
   ]);
 
-export const POST = withAuth(async (session, req: Request) => {
+export const POST = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
   const body = await parseBody(req, createSchema);
   if (!body.ok) return body.response;
 

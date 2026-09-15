@@ -31,16 +31,13 @@ export async function getBrandingContext(
   organizationId?: string | null
 ): Promise<{ organizationId: string | null; branding: Branding }> {
   const db = getDb();
-  const rows = organizationId
-    ? await db
+  if (!organizationId) {
+    return { organizationId: null, branding: DEFAULT_BRANDING };
+  }
+  const rows = await db
         .select({ id: schema.organization.id, metadata: schema.organization.metadata })
         .from(schema.organization)
         .where(eq(schema.organization.id, organizationId))
-        .limit(1)
-    : // Sin sesión (login, layout raíz): la única organización de la instancia.
-      await db
-        .select({ id: schema.organization.id, metadata: schema.organization.metadata })
-        .from(schema.organization)
         .limit(1);
   if (!rows[0]) return { organizationId: null, branding: DEFAULT_BRANDING };
   const meta = parseMetadata(rows[0].metadata);

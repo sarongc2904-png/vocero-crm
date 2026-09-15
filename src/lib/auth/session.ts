@@ -1,11 +1,12 @@
 import { headers } from "next/headers";
 import { getAuth } from "@/lib/auth";
-import { resolveMembership } from "@/server/auth/on-signup";
+import type { OrganizationRole } from "@/lib/auth/roles";
+import { resolveActiveMembership } from "@/server/auth/organizations";
 
 export type SessionContext = {
   userId: string;
   organizationId: string;
-  role: string;
+  role: OrganizationRole;
 };
 
 export class UnauthorizedError extends Error {
@@ -15,19 +16,34 @@ export class UnauthorizedError extends Error {
   }
 }
 
+export class ForbiddenError extends Error {
+  constructor(message = "Sin acceso a una organización") {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
 /**
  * Sesión + organización activa para route handlers y server components.
  * Lanza UnauthorizedError si no hay sesión u organización.
  */
 export async function requireSession(): Promise<SessionContext> {
   const auth = getAuth();
-  const session = await auth.api.getSession({ headers: await headers() });
+  const requestHeaders = await headers();
+  const session = await auth.api.getSession({ headers: requestHeaders });
   if (!session) throw new UnauthorizedError();
-  // La sesión puede crearse antes de que la membresía exista (registro
-  // inicial) — la membresía en BD es la fuente de verdad de org + rol.
-  const membership = await resolveMembership(session.user.id);
+  const membership = await resolveActiveMembership(
+    session.user.id,
+    session.session.activeOrganizationId
+  );
   if (!membership) {
-    throw new UnauthorizedError("Sesión sin organización activa");
+    throw new ForbiddenError("El usuario no pertenece a ninguna organización");
+  }
+  if (membership.usedFallback) {
+    await auth.api.setActiveOrganization({
+      headers: requestHeaders,
+      body: { organizationId: membership.organizationId },
+    });
   }
   return {
     userId: session.user.id,

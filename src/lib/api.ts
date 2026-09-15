@@ -1,5 +1,14 @@
 import { z } from "zod";
-import { requireSession, UnauthorizedError, type SessionContext } from "@/lib/auth/session";
+import {
+  ForbiddenError,
+  requireSession,
+  UnauthorizedError,
+  type SessionContext,
+} from "@/lib/auth/session";
+import {
+  hasOrganizationRole,
+  type OrganizationRole,
+} from "@/lib/auth/roles";
 
 /** Respuesta de error estándar de la API interna (contrato api.md). */
 export function apiError(
@@ -25,6 +34,9 @@ export function withAuth<Args extends unknown[]>(
       if (err instanceof UnauthorizedError) {
         return apiError(401, "unauthorized", "No autenticado");
       }
+      if (err instanceof ForbiddenError) {
+        return apiError(403, "no_membership", err.message);
+      }
       throw err;
     }
     try {
@@ -34,6 +46,23 @@ export function withAuth<Args extends unknown[]>(
       return apiError(500, "internal", "Error interno");
     }
   };
+}
+
+/** Gate único para autorización por rol dentro de la organización activa. */
+export function withOrgRoles<Args extends unknown[]>(
+  roles: readonly OrganizationRole[],
+  handler: (session: SessionContext, ...args: Args) => Promise<Response>
+): (...args: Args) => Promise<Response> {
+  return withAuth(async (session, ...args: Args) => {
+    if (!hasOrganizationRole(session.role, roles)) {
+      return apiError(
+        403,
+        "forbidden",
+        "Tu rol no permite realizar esta acción en la organización activa"
+      );
+    }
+    return handler(session, ...args);
+  });
 }
 
 /** Parsea el body JSON con un esquema Zod; inválido → Response 422. */

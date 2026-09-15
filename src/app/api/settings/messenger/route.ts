@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { graphRequest, MetaApiError } from "@/lib/meta/client";
 import {
   getMessengerCredentialsByOrg,
@@ -15,7 +15,7 @@ import { verifyZernioToken } from "@/server/zernio";
 export const dynamic = "force-dynamic";
 
 /** 017 — Estado de la conexión de Messenger (el token nunca sale entero). */
-export const GET = withAuth(async (session) => {
+export const GET = withOrgRoles(["owner", "admin"], async (session) => {
   if (!isChannelEnabled("messenger")) return channelDisabledResponse();
   const creds = await getMessengerCredentialsByOrg(session.organizationId);
   if (!creds) return Response.json({ connection: null });
@@ -44,11 +44,8 @@ const putSchema = z.object({
  * de WhatsApp: un token que no sirve no llega a la base. Solo el propietario
  * de la organización puede hacerlo.
  */
-export const PUT = withAuth(async (session, req: Request) => {
+export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
   if (!isChannelEnabled("messenger")) return channelDisabledResponse();
-  if (session.role !== "owner") {
-    return apiError(403, "forbidden", "Solo el propietario puede conectar la página");
-  }
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
   // `.default()` deja el tipo opcional aunque Zod siempre lo rellene: se fija

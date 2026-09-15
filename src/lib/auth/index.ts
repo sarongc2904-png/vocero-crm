@@ -39,6 +39,26 @@ function isInternalSignup(): boolean {
 }
 
 const RATE_LIMITED_PATHS = new Set(["/sign-in/email", "/sign-up/email"]);
+const BLOCKED_ORGANIZATION_MUTATIONS = new Set([
+  "/organization/create",
+  "/organization/update",
+  "/organization/delete",
+  "/organization/invite-member",
+  "/organization/accept-invitation",
+  "/organization/reject-invitation",
+  "/organization/cancel-invitation",
+  "/organization/remove-member",
+  "/organization/update-member-role",
+  "/organization/leave",
+  "/organization/create-role",
+  "/organization/update-role",
+  "/organization/delete-role",
+  "/organization/create-team",
+  "/organization/update-team",
+  "/organization/remove-team",
+  "/organization/add-team-member",
+  "/organization/remove-team-member",
+]);
 
 function createAuth() {
   const env = getEnv();
@@ -62,9 +82,21 @@ function createAuth() {
       requireEmailVerification: false,
       minPasswordLength: 8,
     },
-    plugins: [organization({ creatorRole: "owner" })],
+    plugins: [
+      organization({
+        creatorRole: "owner",
+        // La única alta permitida es POST /api/organizations, donde se exige
+        // owner y se ejecuta el bootstrap completo del tenant.
+        allowUserToCreateOrganization: false,
+      }),
+    ],
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
+        if (BLOCKED_ORGANIZATION_MUTATIONS.has(ctx.path)) {
+          throw new APIError("FORBIDDEN", {
+            message: "Usa la API controlada de organizaciones y equipo",
+          });
+        }
         // Rate limit por IP en login/registro (FR-062): 10 / 10 min → 429.
         if (RATE_LIMITED_PATHS.has(ctx.path)) {
           const ip =

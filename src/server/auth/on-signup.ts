@@ -1,15 +1,10 @@
-import { count, eq, sql } from "drizzle-orm";
+import { count, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
-
-/** Etapas sembradas del pipeline (US2). */
-const SEED_STAGES: { name: string; kind: "open" | "won" | "lost" }[] = [
-  { name: "Nuevo", kind: "open" },
-  { name: "En conversación", kind: "open" },
-  { name: "Interesado", kind: "open" },
-  { name: "Cliente", kind: "won" },
-  { name: "Perdido", kind: "lost" },
-];
+import {
+  initializeOrganization,
+  resolveActiveMembership,
+} from "@/server/auth/organizations";
 
 /**
  * Primer registro de la instancia: crea la organización, deja al usuario como
@@ -31,29 +26,11 @@ export async function onUserCreated(userId: string, userName: string) {
     if ((orgs?.n ?? 0) > 0) return;
 
     const orgId = newId("organization");
-    await tx.insert(schema.organization).values({
-      id: orgId,
+    await initializeOrganization(tx, {
+      organizationId: orgId,
+      ownerUserId: userId,
       name: userName ? `Negocio de ${userName}` : "Mi negocio",
       slug: "principal",
-    });
-    await tx.insert(schema.member).values({
-      id: newId("member"),
-      organizationId: orgId,
-      userId,
-      role: "owner",
-    });
-    await tx.insert(schema.pipelineStage).values(
-      SEED_STAGES.map((s, i) => ({
-        id: newId("stage"),
-        organizationId: orgId,
-        name: s.name,
-        position: i,
-        kind: s.kind,
-      }))
-    );
-    await tx.insert(schema.agentProfile).values({
-      id: newId("agentProfile"),
-      organizationId: orgId,
     });
   });
 }
@@ -62,20 +39,12 @@ export async function onUserCreated(userId: string, userName: string) {
 export async function resolveActiveOrganizationId(
   userId: string
 ): Promise<string | null> {
-  return (await resolveMembership(userId))?.organizationId ?? null;
+  return (await resolveActiveMembership(userId, null))?.organizationId ?? null;
 }
 
+/** @deprecated Usa resolveActiveMembership(userId, activeOrganizationId). */
 export async function resolveMembership(
   userId: string
 ): Promise<{ organizationId: string; role: string } | null> {
-  const db = getDb();
-  const rows = await db
-    .select({
-      organizationId: schema.member.organizationId,
-      role: schema.member.role,
-    })
-    .from(schema.member)
-    .where(eq(schema.member.userId, userId))
-    .limit(1);
-  return rows[0] ?? null;
+  return resolveActiveMembership(userId, null);
 }

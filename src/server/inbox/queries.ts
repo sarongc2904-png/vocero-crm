@@ -13,6 +13,7 @@ export async function listConversations(
     select coalesce(m.text, m.type)
     from message m
     where m.conversation_id = ${schema.conversation.id}
+      and m.organization_id = ${schema.conversation.organizationId}
     order by m.created_at desc
     limit 1
   )`;
@@ -20,6 +21,8 @@ export async function listConversations(
     select s.name from lead l
     join pipeline_stage s on s.id = l.stage_id
     where l.contact_id = ${schema.contact.id}
+      and l.organization_id = ${schema.contact.organizationId}
+      and s.organization_id = l.organization_id
     limit 1
   )`;
 
@@ -33,7 +36,10 @@ export async function listConversations(
     .from(schema.conversation)
     .innerJoin(
       schema.contact,
-      eq(schema.conversation.contactId, schema.contact.id)
+      and(
+        eq(schema.conversation.contactId, schema.contact.id),
+        eq(schema.contact.organizationId, schema.conversation.organizationId)
+      )
     )
     .where(
       scoped(
@@ -60,7 +66,10 @@ export async function getConversation(
     .from(schema.conversation)
     .innerJoin(
       schema.contact,
-      eq(schema.conversation.contactId, schema.contact.id)
+      and(
+        eq(schema.conversation.contactId, schema.contact.id),
+        eq(schema.contact.organizationId, schema.conversation.organizationId)
+      )
     )
     .where(
       scoped(
@@ -84,7 +93,10 @@ export async function listMessages(
     .from(schema.message)
     .leftJoin(
       schema.mediaAsset,
-      eq(schema.message.mediaAssetId, schema.mediaAsset.id)
+      and(
+        eq(schema.message.mediaAssetId, schema.mediaAsset.id),
+        eq(schema.mediaAsset.organizationId, schema.message.organizationId)
+      )
     )
     .where(
       scoped(

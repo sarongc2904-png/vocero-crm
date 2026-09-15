@@ -2,15 +2,19 @@ import { SettingsNav } from "@/components/settings/settings-nav";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { atribucionEnabled } from "@/server/attribution/flag";
 import { isChannelEnabled } from "@/server/channels/enabled";
+import { redirect } from "next/navigation";
+import { requireSession } from "@/lib/auth/session";
 
 // La bandera se lee en cada petición: si esto se resolviera al construir, la
 // imagen quedaría con la agenda apagada para siempre y encenderla en la
 // plataforma no haría nada.
 export const dynamic = "force-dynamic";
 
-export default function SettingsLayout({
+export default async function SettingsLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const session = await requireSession();
+  if (session.role === "agent") redirect("/inbox");
   return (
     <div className="flex h-full flex-col">
       <header className="border-b px-4 py-3 sm:px-6 sm:py-4">
@@ -19,6 +23,7 @@ export default function SettingsLayout({
       {/* En móvil las pestañas van arriba (en fila), no como columna lateral. */}
       <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
         <SettingsNav
+          role={session.role}
           agenda={agendaEnabled()}
           atribucion={atribucionEnabled()}
           messenger={isChannelEnabled("messenger")}

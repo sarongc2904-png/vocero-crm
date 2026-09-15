@@ -1,6 +1,7 @@
 import { DEFAULT_BRANDING } from "@/lib/branding";
 import { getBranding } from "@/server/branding";
 import { BrandLogo } from "@/components/brand-mark";
+import { getSessionOrNull } from "@/lib/auth/session";
 
 /**
  * Pantalla de entrada de Conecta Digital: identidad white-label, fondo sobrio
@@ -9,7 +10,10 @@ import { BrandLogo } from "@/components/brand-mark";
 export default async function AuthLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const branding = await getBranding().catch(() => DEFAULT_BRANDING);
+  const session = await getSessionOrNull();
+  const branding = await getBranding(session?.organizationId).catch(
+    () => DEFAULT_BRANDING
+  );
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-subtle p-4">

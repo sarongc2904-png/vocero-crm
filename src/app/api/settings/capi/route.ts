@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import {
   atribucionDisabledResponse,
   atribucionEnabled,
@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
  * revelar sobre un endpoint que esta instancia no tiene.
  */
 
-export const GET = withAuth(async (session) => {
+export const GET = withOrgRoles(["owner", "admin"], async (session) => {
   if (!atribucionEnabled()) return atribucionDisabledResponse();
   const capi = await getCapiSettingsView(session.organizationId);
   return Response.json({ capi });
@@ -39,7 +39,7 @@ const putSchema = z.object({
   qualifiedStageId: z.string().trim().min(1).nullish(),
 });
 
-export const PUT = withAuth(async (session, req: Request) => {
+export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
   if (!atribucionEnabled()) return atribucionDisabledResponse();
 
   const body = await parseBody(req, putSchema);
@@ -79,7 +79,7 @@ export const PUT = withAuth(async (session, req: Request) => {
   return Response.json({ ok: true });
 });
 
-export const DELETE = withAuth(async (session) => {
+export const DELETE = withOrgRoles(["owner", "admin"], async (session) => {
   if (!atribucionEnabled()) return atribucionDisabledResponse();
   await deleteCapiSettings(session.organizationId);
   return Response.json({ ok: true });

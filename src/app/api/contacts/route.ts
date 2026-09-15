@@ -1,4 +1,4 @@
-import { desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
@@ -40,7 +40,10 @@ export const GET = withAuth(async (session, req: Request) => {
     .from(schema.lead)
     .innerJoin(
       schema.pipelineStage,
-      eq(schema.pipelineStage.id, schema.lead.stageId)
+      and(
+        eq(schema.pipelineStage.id, schema.lead.stageId),
+        eq(schema.pipelineStage.organizationId, schema.lead.organizationId)
+      )
     )
     .where(scoped(schema.lead.organizationId, session.organizationId));
   const stageByContact = new Map(

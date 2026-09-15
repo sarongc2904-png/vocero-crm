@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { isEmbeddedSignupConfigured } from "@/lib/env";
 import { saveCredentials } from "@/server/whatsapp/credentials";
 import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
@@ -23,7 +23,7 @@ const bodySchema = z.object({
  * `code` de un solo uso (nunca un token — el App Secret no sale de aquí) más
  * el waba_id/phone_number_id que el cliente eligió en el login de Meta.
  */
-export const POST = withAuth(async (session, req: Request) => {
+export const POST = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
   if (!isEmbeddedSignupConfigured()) {
     return apiError(
       501,

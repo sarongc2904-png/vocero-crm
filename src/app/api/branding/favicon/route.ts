@@ -2,6 +2,7 @@ import { readMediaFile } from "@/server/whatsapp/media";
 import { getBrandingContext } from "@/server/branding";
 import { DEFAULT_BRANDING } from "@/lib/branding";
 import { FAVICON_ASSET, generatedFaviconSvg } from "@/lib/favicon";
+import { getSessionOrNull } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -28,14 +29,14 @@ function cabeceras(mime: string, cacheable: boolean): HeadersInit {
 
 /**
  * El icono de la pestaña. **Ruta pública**: el login también tiene pestaña, y
- * ahí todavía no hay sesión. Es la misma decisión que ya toma el GET de la
- * marca — en una instancia de un solo negocio, su nombre y su logo no son un
- * secreto.
+ * ahí todavía no hay sesión. Sin sesión usa la marca pública por defecto; con
+ * sesión resuelve exclusivamente la organización activa validada.
  */
 export async function GET(req: Request) {
   const cacheable = new URL(req.url).searchParams.has("v");
 
-  const ctx = await getBrandingContext().catch(() => null);
+  const session = await getSessionOrNull();
+  const ctx = await getBrandingContext(session?.organizationId).catch(() => null);
   const branding = ctx?.branding ?? DEFAULT_BRANDING;
 
   if (ctx?.organizationId && branding.favicon) {

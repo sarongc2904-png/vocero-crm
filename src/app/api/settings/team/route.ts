@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { getAuth, runInternalSignup } from "@/lib/auth";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
@@ -8,7 +8,7 @@ import { scoped } from "@/lib/db/tenant";
 
 export const dynamic = "force-dynamic";
 
-export const GET = withAuth(async (session) => {
+export const GET = withOrgRoles(["owner"], async (session) => {
   const db = getDb();
   const members = await db
     .select({
@@ -22,7 +22,7 @@ export const GET = withAuth(async (session) => {
     .innerJoin(schema.user, eq(schema.member.userId, schema.user.id))
     .where(scoped(schema.member.organizationId, session.organizationId));
   return Response.json({
-    canManageMembers: session.role === "owner",
+    canManageMembers: true,
     members: members.map((m) => ({
       id: m.id,
       role: m.role,
@@ -37,6 +37,7 @@ const createSchema = z.object({
   name: z.string().trim().min(1).max(120),
   email: z.string().trim().email(),
   password: z.string().min(8).max(128),
+  role: z.enum(["admin", "agent"]).default("agent"),
 });
 
 const deleteSchema = z.object({
@@ -44,10 +45,7 @@ const deleteSchema = z.object({
 });
 
 /** Alta de cuenta de equipo (owner only): email + contraseña temporal (FR-061). */
-export const POST = withAuth(async (session, req: Request) => {
-  if (session.role !== "owner") {
-    return apiError(403, "forbidden", "Solo el propietario puede crear cuentas");
-  }
+export const POST = withOrgRoles(["owner"], async (session, req: Request) => {
   const body = await parseBody(req, createSchema);
   if (!body.ok) return body.response;
 
@@ -80,7 +78,7 @@ export const POST = withAuth(async (session, req: Request) => {
       id: newId("member"),
       organizationId: session.organizationId,
       userId: newUserId,
-      role: "member",
+      role: body.data.role,
     })
     .onConflictDoNothing();
 
@@ -88,11 +86,7 @@ export const POST = withAuth(async (session, req: Request) => {
 });
 
 /** Baja de cuenta de equipo (owner only). Nunca permite eliminar propietarios. */
-export const DELETE = withAuth(async (session, req: Request) => {
-  if (session.role !== "owner") {
-    return apiError(403, "forbidden", "Solo el propietario puede eliminar cuentas");
-  }
-
+export const DELETE = withOrgRoles(["owner"], async (session, req: Request) => {
   const body = await parseBody(req, deleteSchema);
   if (!body.ok) return body.response;
 

@@ -44,7 +44,10 @@ export async function GET(req: Request) {
       .from(schema.conversation)
       .innerJoin(
         schema.contact,
-        eq(schema.conversation.contactId, schema.contact.id)
+        and(
+          eq(schema.conversation.contactId, schema.contact.id),
+          eq(schema.contact.organizationId, schema.conversation.organizationId)
+        )
       )
       .where(
         and(
@@ -95,7 +98,10 @@ export async function GET(req: Request) {
     .from(schema.lead)
     .innerJoin(
       schema.pipelineStage,
-      eq(schema.lead.stageId, schema.pipelineStage.id)
+      and(
+        eq(schema.lead.stageId, schema.pipelineStage.id),
+        eq(schema.pipelineStage.organizationId, schema.lead.organizationId)
+      )
     )
     .where(
       and(

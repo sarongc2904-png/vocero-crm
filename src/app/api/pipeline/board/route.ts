@@ -23,11 +23,18 @@ export const GET = withAuth(async (session) => {
       conversationId: schema.conversation.id,
     })
     .from(schema.lead)
-    .innerJoin(schema.contact, eq(schema.lead.contactId, schema.contact.id))
+    .innerJoin(
+      schema.contact,
+      and(
+        eq(schema.lead.contactId, schema.contact.id),
+        eq(schema.contact.organizationId, schema.lead.organizationId)
+      )
+    )
     .leftJoin(
       schema.conversation,
       and(
         eq(schema.conversation.contactId, schema.contact.id),
+        eq(schema.conversation.organizationId, schema.lead.organizationId),
         eq(schema.conversation.isTest, false)
       )
     )

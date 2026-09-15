@@ -62,7 +62,13 @@ export async function GET(req: Request) {
       stage: schema.pipelineStage,
     })
     .from(schema.lead)
-    .innerJoin(schema.contact, eq(schema.lead.contactId, schema.contact.id))
+    .innerJoin(
+      schema.contact,
+      and(
+        eq(schema.lead.contactId, schema.contact.id),
+        eq(schema.contact.organizationId, schema.lead.organizationId)
+      )
+    )
     .innerJoin(
       schema.conversation,
       and(
@@ -70,7 +76,13 @@ export async function GET(req: Request) {
         eq(schema.conversation.organizationId, schema.lead.organizationId)
       )
     )
-    .innerJoin(schema.pipelineStage, eq(schema.lead.stageId, schema.pipelineStage.id))
+    .innerJoin(
+      schema.pipelineStage,
+      and(
+        eq(schema.lead.stageId, schema.pipelineStage.id),
+        eq(schema.pipelineStage.organizationId, schema.lead.organizationId)
+      )
+    )
     .where(and(...conditions))
     .orderBy(asc(schema.conversation.lastMessageAt))
     .limit(limit);

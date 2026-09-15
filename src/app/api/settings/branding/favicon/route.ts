@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { apiError, withAuth } from "@/lib/api";
+import { apiError, withOrgRoles } from "@/lib/api";
 import {
   FAVICON_ASSET,
   MAX_FAVICON_BYTES,
@@ -15,11 +15,7 @@ export const dynamic = "force-dynamic";
  * multipart: es un archivo suelto y montar un parser de formulario para eso
  * es trabajo que no compra nada.
  */
-export const PUT = withAuth(async (session, req: Request) => {
-  if (session.role !== "owner") {
-    return apiError(403, "forbidden", "Solo el propietario puede cambiar la marca");
-  }
-
+export const PUT = withOrgRoles(["owner"], async (session, req: Request) => {
   const buf = new Uint8Array(await req.arrayBuffer());
   if (buf.byteLength === 0) {
     return apiError(422, "empty", "No llegó ningún archivo");
@@ -61,11 +57,7 @@ export const PUT = withAuth(async (session, req: Request) => {
 });
 
 /** Quitar el subido y volver al generado de la marca. */
-export const DELETE = withAuth(async (session) => {
-  if (session.role !== "owner") {
-    return apiError(403, "forbidden", "Solo el propietario puede cambiar la marca");
-  }
-
+export const DELETE = withOrgRoles(["owner"], async (session) => {
   const branding = await getBranding(session.organizationId);
   await saveBranding(session.organizationId, { ...branding, favicon: null });
   // El archivo se borra DESPUÉS de que la marca ya no lo referencia: si esto
