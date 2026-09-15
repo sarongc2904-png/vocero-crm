@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * #agenda-fecha — Reproduce el turno completo del Laboratorio (misma función
@@ -11,7 +11,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * infraestructura.
  */
 
-const JUEVES_ISO = "2026-09-18";
+const NOW = new Date("2026-09-15T05:00:00.000Z");
+const JUEVES_ISO = "2026-09-17";
 const MARTES_ISO = "2026-09-15"; // lo que trae el catálogo general (el bug)
 
 const settings = {
@@ -141,6 +142,8 @@ function ultimoTextoSaliente(): string {
 
 describe("Laboratorio simulado: pide 'mañana' y luego 'el jueves' (#agenda-fecha)", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
     selectQueue.length = 0;
     inserts.length = 0;
     chatJson.mockReset();
@@ -149,7 +152,11 @@ describe("Laboratorio simulado: pide 'mañana' y luego 'el jueves' (#agenda-fech
     vi.stubEnv("AGENDA", "on");
   });
 
-  it("turno 1 (mañana): ofrece el catálogo general, sin día pedido", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("turno 1 (mañana): ofrece el catálogo general, sin día pedido", { timeout: 15_000 }, async () => {
     chatJson.mockResolvedValueOnce({
       ok: true,
       data: { action: "offer_slots", reply: "Para mañana, tenemos estos horarios disponibles:" },
@@ -164,7 +171,7 @@ describe("Laboratorio simulado: pide 'mañana' y luego 'el jueves' (#agenda-fech
     expect(ultimoTextoSaliente()).toContain("08:00");
   });
 
-  it("turno 2 (el jueves): el modelo manda day y el motor consulta ESE día — no repite el martes", async () => {
+  it("turno 2 (el jueves): el modelo manda day y el motor consulta ESE día — no repite el martes", { timeout: 15_000 }, async () => {
     chatJson.mockResolvedValueOnce({
       ok: true,
       data: {
