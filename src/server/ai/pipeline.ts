@@ -19,6 +19,8 @@ import { buildAgentSystemPrompt } from "@/server/ai/prompts";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { bookSlot, offerSlots } from "@/server/agenda/agent";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
+import { getSettings } from "@/server/agenda/settings";
+import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
 
 /**
  * Turno del agente (FR-021..FR-025).
@@ -177,10 +179,32 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
   const ofertas = agenda ? await getOffers(organizationId, conversationId) : [];
   const mapaDeHuecos = mapaDeHuecosParaModelo(ofertas);
 
+  /**
+   * Ancla de fecha para `offer_slots.day` (ver prompts.ts / #agenda-fecha):
+   * sin decirle al modelo qué día es hoy, no tiene forma de calcular "mañana"
+   * o "el viernes" — solo cuando hay agenda, para no pagar la consulta si la
+   * instancia no la usa.
+   */
+  let todayInfo: { iso: string; label: string } | undefined;
+  if (agenda) {
+    const settings = await getSettings(organizationId);
+    const now = new Date();
+    todayInfo = {
+      iso: todayInTz(now, settings.timezone),
+      label: todayLabelInTz(now, settings.timezone),
+    };
+  }
+
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: buildAgentSystemPrompt({ profile, kb, stages, agenda }),
+      content: buildAgentSystemPrompt({
+        profile,
+        kb,
+        stages,
+        agenda,
+        today: todayInfo,
+      }),
     },
     ...history
       .filter((m) => m.text)
@@ -221,6 +245,7 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
                 organizationId,
                 conversationId,
                 intro: action.reply,
+                day: action.day,
               })
             : await bookSlot({
                 organizationId,

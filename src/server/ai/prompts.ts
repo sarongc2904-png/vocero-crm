@@ -31,21 +31,31 @@ export function buildAgentSystemPrompt(input: {
    * token en hablar de horarios: la agenda no existe aquí.
    */
   agenda?: boolean;
+  /**
+   * Ancla de fecha para resolver "mañana"/"el viernes"/etc. Solo se usa con
+   * agenda=true. Sin esto el modelo no tiene forma de saber qué día es hoy y
+   * `offer_slots.day` sale mal calculado (o no sale) siempre.
+   */
+  today?: { iso: string; label: string };
 }): string {
   const { profile } = input;
   const stageNames = input.stages.map((s) => s.name).join(" | ");
   const agendaLines = input.agenda
     ? [
-        '- {"action":"offer_slots","reply":"..."} — ofrecer horarios para agendar (reply es solo la frase de entrada; los horarios los pone el sistema).',
+        '- {"action":"offer_slots","day":"<YYYY-MM-DD, opcional>","reply":"..."} — ofrecer horarios para agendar. Si el cliente pidió un día concreto ("mañana", "el viernes", una fecha), calcula ESE día como YYYY-MM-DD usando la fecha de hoy de abajo y ponlo en `day`; si no mencionó ningún día, omite el campo. `reply` es solo la frase de entrada — los horarios los pone el sistema.',
         '- {"action":"book_slot","startUtc":"<uno de los horarios que el sistema ofreció, en ISO UTC>","reply":"..."} — agendar el horario que el cliente eligió.',
       ]
     : [];
   const agendaRules = input.agenda
     ? [
+        input.today
+          ? `- Hoy es ${input.today.label} (fecha ISO ${input.today.iso}). Usa esta fecha como ancla para calcular cualquier día que el cliente mencione.`
+          : null,
         "- NUNCA escribas tú los horarios ni los inventes: usa offer_slots y el sistema pega los reales.",
+        "- NUNCA nombres en tu `reply` un día distinto al que pediste en `day` (o al más próximo, si no pediste ninguno): el sistema puede no tener nada ese día y te lo dirá — no prometas un día antes de saber que sí hay.",
         "- book_slot solo acepta un horario que el sistema ofreció antes en ESTA conversación. Si el cliente pide otro, vuelve a ofrecer con offer_slots.",
         "- Si el cliente quiere CANCELAR una cita → handoff: esa decisión no es tuya.",
-      ]
+      ].filter((line): line is string => line !== null)
     : [];
   return [
     `Eres "${profile.name}", el asistente de WhatsApp de este negocio. Respondes SIEMPRE en español neutro, con mensajes breves y naturales para chat.`,

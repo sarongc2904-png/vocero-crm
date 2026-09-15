@@ -38,6 +38,16 @@ const baseActions = [
 const agendaActions = [
   z.object({
     action: z.literal("offer_slots"),
+    /**
+     * Día que el cliente pidió, si mencionó uno ("mañana", "el viernes", una
+     * fecha), como YYYY-MM-DD calculado por el modelo a partir de la fecha de
+     * "hoy" que el prompt le da. Ausente si no mencionó ningún día: el motor
+     * ofrece entonces los más próximos, sin filtrar.
+     */
+    day: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
     reply: z.string().optional(),
   }),
   z.object({
