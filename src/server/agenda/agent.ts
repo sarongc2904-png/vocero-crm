@@ -9,6 +9,11 @@ import { capitalize, formatHoursEs } from "@/server/agenda/schedule-intent";
 
 const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Cuántos huecos por día como máximo en una respuesta de rango/general (WhatsApp: nada de decenas de líneas). */
+const RANGE_PER_DAY = 4;
+/** Tope total de huecos que se registran como oferta reservable en un rango/general. */
+const RANGE_TOTAL = 24;
+
 /**
  * 015 — Lo que el agente incluido puede hacer con la agenda.
  *
@@ -167,6 +172,139 @@ export async function offerSlots(input: {
   const lista = shown.map((s) => `• ${s.dayLabel} a las ${s.time}`).join("\n");
   const intro = input.intro?.trim() || "Tengo estos horarios disponibles:";
   return { ok: true, text: `${intro}\n${lista}` };
+}
+
+/**
+ * Fase 1 — bug de rangos ("de lunes a domingo" devolvía solo lunes).
+ *
+ * Causa raíz (dos partes, ver reporte): 1) la clasificación colapsaba el
+ * rango a una sola fecha (ya corregido en `schedule-scope.ts`); 2) INCLUSO
+ * con la fecha correcta, la selección de qué mostrar usaba
+ * `spread.slice(0, SHOWN)` sobre un catálogo ya limitado a `perDay` del
+ * PRIMER día — la aritmética garantizaba que los primeros `SHOWN` elementos
+ * fueran siempre del día más próximo. Esta función agrupa por día desde el
+ * inicio: nunca corta antes de repartir entre los días del rango.
+ */
+async function offerGrouped(input: {
+  organizationId: string;
+  conversationId: string;
+  fromISO?: string;
+  toISO?: string;
+  vacioTexto: string;
+  encabezado: string;
+}): Promise<AgendaTurn> {
+  const settings = await getSettings(input.organizationId);
+  const now = new Date();
+  const all = await computeAvailability(input.organizationId, {
+    settings,
+    now,
+    fromISO: input.fromISO,
+    toISO: input.toISO,
+  });
+  if (all.length === 0) {
+    return { ok: false, text: input.vacioTexto };
+  }
+
+  // Reparte por día ANTES de aplicar cualquier tope total: así un rango de
+  // varios días nunca se queda con solo el primero.
+  const spread = spreadByDay(all, {
+    timezone: settings.timezone,
+    limit: RANGE_TOTAL,
+    perDay: RANGE_PER_DAY,
+    now,
+  });
+
+  await replaceOffers(
+    input.organizationId,
+    input.conversationId,
+    spread.map((s) => ({ startUtc: s.startUtc, label: s.label }))
+  );
+
+  // Cuántos huecos había DE VERDAD por día (antes del tope de exhibición),
+  // para saber si hace falta el pie "tengo más horarios ese día".
+  const totalPorDia = new Map<string, number>();
+  for (const s of all) {
+    const d = dayIsoInTz(new Date(s.startUtc), settings.timezone);
+    totalPorDia.set(d, (totalPorDia.get(d) ?? 0) + 1);
+  }
+
+  const porDia = new Map<string, typeof spread>();
+  for (const s of spread) {
+    const bucket = porDia.get(s.dayIso);
+    if (bucket) bucket.push(s);
+    else porDia.set(s.dayIso, [s]);
+  }
+
+  const bloques = [...porDia.entries()].map(([dayIso, slots]) => {
+    const titulo = capitalize(slots[0]!.dayLabel);
+    const horas = slots.map((s) => `• ${s.time}`).join("\n");
+    const quedanMas = (totalPorDia.get(dayIso) ?? 0) > slots.length;
+    const pie = quedanMas ? "\n(tengo más horarios ese día si quieres verlos)" : "";
+    return `${titulo}\n${horas}${pie}`;
+  });
+
+  return { ok: true, text: `${input.encabezado}\n\n${bloques.join("\n\n")}` };
+}
+
+/**
+ * Rango explícito ("de lunes a domingo", "esta semana"): consulta TODO el
+ * rango y reparte la exhibición entre los días que sí tienen cupo.
+ */
+export async function offerRange(input: {
+  organizationId: string;
+  conversationId: string;
+  startDate: string;
+  endDate: string;
+}): Promise<AgendaTurn> {
+  return offerGrouped({
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+    fromISO: input.startDate,
+    toISO: input.endDate,
+    vacioTexto:
+      "No tengo horarios disponibles en ese rango de fechas. ¿Te gustaría que revise otras fechas?",
+    encabezado: "Estos son los horarios disponibles:",
+  });
+}
+
+/**
+ * "Dame todos los horarios disponibles", sin día ni rango: antes esto
+ * obligaba al modelo a preguntar "¿qué día?" porque no existía ninguna forma
+ * de mostrar disponibilidad general — ahora sí la hay, agrupada por día
+ * dentro de la ventana normal de `maxDaysAhead`.
+ */
+export async function offerGeneralAvailability(input: {
+  organizationId: string;
+  conversationId: string;
+}): Promise<AgendaTurn> {
+  return offerGrouped({
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+    vacioTexto:
+      "Por ahora no me quedan horarios libres. Déjame confirmarlo con el equipo y te aviso.",
+    encabezado: "Esta es la disponibilidad que tengo:",
+  });
+}
+
+/** "Cuál es la próxima cita disponible" — el hueco más próximo, sin más. */
+export async function offerNextAvailable(input: {
+  organizationId: string;
+  conversationId: string;
+}): Promise<AgendaTurn> {
+  const settings = await getSettings(input.organizationId);
+  const now = new Date();
+  const all = await computeAvailability(input.organizationId, { settings, now });
+  if (all.length === 0) {
+    return {
+      ok: false,
+      text: "Por ahora no tengo horarios libres. Déjame confirmarlo con el equipo y te aviso.",
+    };
+  }
+  const first = all[0]!; // computeAvailability ya viene ordenado ascendente
+  await replaceOffers(input.organizationId, input.conversationId, [
+    { startUtc: first.startUtc, label: first.label },
+  ]);
+  return { ok: true, text: `La próxima cita disponible es ${first.label}. ¿Te la agendo?` };
 }
 
 /**
