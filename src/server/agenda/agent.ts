@@ -1,22 +1,11 @@
 import { computeAvailability } from "@/server/agenda/availability";
 import { getSettings } from "@/server/agenda/settings";
-import { spreadByDay, type SpreadSlot } from "@/server/agenda/spread";
+import { spreadByDay } from "@/server/agenda/spread";
 import { replaceOffers } from "@/server/agenda/offers";
 import { BookingError, createSessionBooking } from "@/server/agenda/service";
+import { googleAddEventUrl } from "@/lib/calendar-link";
 
 const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Une dos catálogos de huecos sin repetir instante (por `startUtc`). */
-function mergeSlots(a: SpreadSlot[], b: SpreadSlot[]): SpreadSlot[] {
-  const seen = new Set<string>();
-  const out: SpreadSlot[] = [];
-  for (const s of [...a, ...b]) {
-    if (seen.has(s.startUtc)) continue;
-    seen.add(s.startUtc);
-    out.push(s);
-  }
-  return out;
-}
 
 /**
  * 015 — Lo que el agente incluido puede hacer con la agenda.
@@ -91,7 +80,19 @@ export async function offerSlots(input: {
     now,
   });
 
-  const catalogo = mergeSlots(spread, dayShown);
+  const pidioDiaConCupo = Boolean(input.day) && dayShown.length > 0;
+  /**
+   * Bug #agenda-fecha-2: registrar el catálogo GENERAL (otros días) junto con
+   * el del día pedido dejaba ambas fechas como "vigentes" a la vez — el
+   * cliente pedía el sábado, y al confirmar el modelo podía copiar por error
+   * el `startUtc` de un slot del jueves que seguía en la misma lista.
+   *
+   * Cuando el día pedido SÍ tiene cupo, lo vigente es SOLO ese día: no hay
+   * nada más que el modelo pueda confundir al confirmar. El catálogo general
+   * solo entra cuando no hay día pedido, o cuando ese día no tiene nada que
+   * ofrecer (ahí sí hacen falta alternativas de otros días).
+   */
+  const catalogo = pidioDiaConCupo ? dayShown : spread;
   if (catalogo.length === 0) {
     // Agenda llena no es un error: es una respuesta que el cliente entiende.
     return {
@@ -102,9 +103,8 @@ export async function offerSlots(input: {
     };
   }
 
-  // Se REGISTRA todo el catálogo (general + el día pedido), no solo lo que se
-  // enseña: si el cliente pide otro día, el agente tiene alternativas
-  // legítimas que aceptar.
+  // Reemplaza TODA la oferta vigente de la conversación: lo de un turno
+  // anterior (quizás de otro día) deja de ser confirmable.
   await replaceOffers(
     input.organizationId,
     input.conversationId,
@@ -112,7 +112,7 @@ export async function offerSlots(input: {
   );
 
   if (input.day) {
-    if (dayShown.length > 0) {
+    if (pidioDiaConCupo) {
       const lista = dayShown
         .map((s) => `• ${s.dayLabel} a las ${s.time}`)
         .join("\n");
@@ -155,17 +155,33 @@ export async function bookSlot(input: {
 
     const base =
       input.confirmation?.trim() || `¡Listo! Te agendé para ${result.label}.`;
+
+    // Recordatorio para el CLIENTE (no la reunión): un enlace público de
+    // Google Calendar que cualquiera puede abrir para guardar SU cita, sin
+    // que dependa del conector del negocio ni de credenciales de nadie.
+    const recordatorio = googleAddEventUrl({
+      title: "Tu cita",
+      startUtc: input.startUtc,
+      durationMinutes: result.booking.durationMinutes,
+    });
+    const conRecordatorio = (texto: string) =>
+      `${texto}\nAgrega la cita a tu calendario: ${recordatorio}`;
+
     if (result.meetingLink) {
-      return { ok: true, text: `${base}\nEnlace: ${result.meetingLink}` };
-    }
-    if (result.linkPending) {
-      // La cita existe; el enlace no. No se promete lo que no se tiene.
       return {
         ok: true,
-        text: `${base}\nEn un momento te comparto el enlace por aquí.`,
+        text: conRecordatorio(`${base}\nEnlace: ${result.meetingLink}`),
       };
     }
-    return { ok: true, text: base };
+    if (result.linkPending) {
+      // La cita existe; el enlace de la reunión no. No se promete lo que no
+      // se tiene — el recordatorio de calendario no depende de eso.
+      return {
+        ok: true,
+        text: conRecordatorio(`${base}\nEn un momento te comparto el enlace por aquí.`),
+      };
+    }
+    return { ok: true, text: conRecordatorio(base) };
   } catch (err) {
     if (!(err instanceof BookingError)) throw err;
 

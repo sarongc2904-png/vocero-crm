@@ -101,6 +101,20 @@ describe("offerSlots con día pedido (#agenda-fecha)", () => {
     expect(turn.text).not.toContain("08:00"); // NUNCA el catálogo general
     expect(turn.text).not.toContain("08:15");
 
+    // Bug #agenda-fecha-2: las ofertas VIGENTES de la conversación deben ser
+    // SOLO el día pedido — si quedara también el catálogo general (otro día)
+    // registrado como "ofrecido", el modelo podría confirmar por error un
+    // slot de ese otro día al reservar.
+    expect(replaceOffers).toHaveBeenCalledTimes(1);
+    const llamada = replaceOffers.mock.calls[0] as unknown as [
+      string,
+      string,
+      { startUtc: string }[],
+    ];
+    const ofertasRegistradas = llamada[2];
+    expect(ofertasRegistradas).toHaveLength(1);
+    expect(ofertasRegistradas[0]!.startUtc).toBe(`${DIA_PEDIDO}T20:00:00.000Z`);
+
     // Se consultó el día puntual, acotado — no solo el catálogo general.
     expect(computeAvailability).toHaveBeenCalledWith(
       "org_1",
