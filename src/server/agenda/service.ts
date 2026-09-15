@@ -535,6 +535,7 @@ async function deliverMeeting(
             durationMinutes: booking.durationMinutes,
             timezone: settings.timezone,
             notes: booking.notes ?? undefined,
+            videoCall: settings.videoCall,
           });
 
     return await persistDelivery(booking.id, {
@@ -542,8 +543,12 @@ async function deliverMeeting(
       meetingLink: meeting.joinUrl,
       // Un conector que promete enlace por cita y no lo trajo todavía deja la
       // cita "sin enlace" — reintentable. `enlace-fijo` sin sala configurada,
-      // en cambio, no tiene nada pendiente: simplemente no hay enlace.
-      linkPending: CONNECTOR_META[connectorId].perBookingLink && !meeting.joinUrl,
+      // o una cita presencial (videoCall=false), en cambio, no tienen nada
+      // pendiente: simplemente no hay enlace que prometer.
+      linkPending:
+        settings.videoCall &&
+        CONNECTOR_META[connectorId].perBookingLink &&
+        !meeting.joinUrl,
     });
   } catch (err) {
     console.warn(

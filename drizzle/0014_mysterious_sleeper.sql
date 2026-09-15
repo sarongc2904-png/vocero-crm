@@ -1,0 +1,1 @@
+ALTER TABLE "calendar_settings" ADD COLUMN "video_call" boolean DEFAULT true NOT NULL;

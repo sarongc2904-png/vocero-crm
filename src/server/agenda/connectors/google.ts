@@ -174,10 +174,13 @@ export const googleConnector: AgendaConnector<GoogleCreds> = {
     const endUtc = new Date(
       Date.parse(req.startUtc) + req.durationMinutes * 60_000
     ).toISOString();
+    // Default true: instancias que no mandan el flag (llamadores viejos,
+    // tests) conservan el comportamiento de siempre.
+    const conMeet = req.videoCall ?? true;
 
     const created = (await googleFetch(
       creds,
-      `${eventsPath(creds)}?conferenceDataVersion=1`,
+      conMeet ? `${eventsPath(creds)}?conferenceDataVersion=1` : eventsPath(creds),
       {
         method: "POST",
         body: JSON.stringify({
@@ -185,14 +188,18 @@ export const googleConnector: AgendaConnector<GoogleCreds> = {
           description: req.notes ?? undefined,
           start: { dateTime: req.startUtc, timeZone: "UTC" },
           end: { dateTime: endUtc, timeZone: "UTC" },
-          conferenceData: {
-            createRequest: {
-              // Google exige un id de petición propio; el instante lo hace
-              // único por cita sin necesitar aleatoriedad.
-              requestId: `vocero-${Date.parse(req.startUtc)}`,
-              conferenceSolutionKey: { type: "hangoutsMeet" },
-            },
-          },
+          ...(conMeet
+            ? {
+                conferenceData: {
+                  createRequest: {
+                    // Google exige un id de petición propio; el instante lo
+                    // hace único por cita sin necesitar aleatoriedad.
+                    requestId: `vocero-${Date.parse(req.startUtc)}`,
+                    conferenceSolutionKey: { type: "hangoutsMeet" },
+                  },
+                },
+              }
+            : {}),
         }),
       }
     )) as GoogleEvent | null;
@@ -200,6 +207,12 @@ export const googleConnector: AgendaConnector<GoogleCreds> = {
     const eventId = created?.id ?? null;
     if (!eventId) {
       throw new ConnectorError("google", "Google no devolvió el evento creado");
+    }
+
+    // Cita presencial: el evento existe en el calendario, pero deliberadamente
+    // no hay enlace que compartir — no es un fallo del proveedor.
+    if (!conMeet) {
+      return { externalId: eventId, joinUrl: null };
     }
 
     let link = meetLinkOf(created);

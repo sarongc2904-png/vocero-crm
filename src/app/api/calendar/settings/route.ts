@@ -46,6 +46,8 @@ const putSchema = z.object({
     })
     .optional(),
   meetingLink: z.string().nullish(),
+  /** false ⇒ citas presenciales: Google no genera Meet. */
+  videoCall: z.boolean().optional(),
 });
 
 /**

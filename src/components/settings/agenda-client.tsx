@@ -37,6 +37,7 @@ type Settings = {
   timezone: string;
   connector: ConnectorId;
   meetingLink: string | null;
+  videoCall: boolean;
 };
 
 const DAYS: { key: DayKey; label: string }[] = [
@@ -144,6 +145,7 @@ export function AgendaClient() {
         meetingLink: settings.meetingLink?.trim()
           ? settings.meetingLink.trim()
           : null,
+        videoCall: settings.videoCall,
       }),
     }).catch(() => null);
     setSaving(false);
@@ -344,6 +346,37 @@ export function AgendaClient() {
           })}
         </CardContent>
       </Card>
+
+      {settings.connector === "google" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Tipo de cita</CardTitle>
+            <CardDescription>
+              La cita siempre queda en tu Google Calendar. Esto solo decide si
+              además se genera un enlace de Meet.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={!settings.videoCall}
+                onChange={(e) => patch({ videoCall: !e.target.checked })}
+              />
+              <span>
+                <span className="block font-medium">
+                  Solo presencial (sin videollamada)
+                </span>
+                <span className="block text-text-3">
+                  El cliente viene a tu local: no se crea Meet, solo el evento
+                  en el calendario.
+                </span>
+              </span>
+            </label>
+          </CardContent>
+        </Card>
+      )}
 
       {settings.connector === "enlace-fijo" && (
         <Card>

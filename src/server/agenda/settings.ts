@@ -43,6 +43,12 @@ export type CalendarSettings = {
   connector: ConnectorId;
   /** Sala fija del conector `enlace-fijo`; null ⇒ citas sin link. */
   meetingLink: string | null;
+  /**
+   * false ⇒ cita presencial: el conector de Google crea el evento SIN
+   * generar Meet (la cita igual queda en el calendario del dueño). Los demás
+   * conectores no lo miran — solo Google agrega videollamada por su cuenta.
+   */
+  videoCall: boolean;
 };
 
 /** Lo que ve una instancia recién encendida: útil sin configurar nada. */
@@ -55,6 +61,7 @@ export const DEFAULT_CALENDAR_SETTINGS: CalendarSettings = {
   timezone: DEFAULT_TIMEZONE,
   connector: DEFAULT_CONNECTOR,
   meetingLink: null,
+  videoCall: true,
 };
 
 export const LIMITS = {
@@ -89,6 +96,7 @@ export async function getSettings(
     // puede dejar la agenda inservible: se degrada al soberano.
     connector: isConnectorId(row.connector) ? row.connector : DEFAULT_CONNECTOR,
     meetingLink: row.meetingLink,
+    videoCall: row.videoCall,
   };
 }
 
@@ -158,6 +166,7 @@ export async function upsertSettings(
     meetingLink: normalizeLink(
       input.meetingLink !== undefined ? input.meetingLink : current.meetingLink
     ),
+    videoCall: input.videoCall ?? current.videoCall,
   };
 
   const db = getDb();
@@ -170,6 +179,7 @@ export async function upsertSettings(
     timezone: next.timezone,
     connector: next.connector,
     meetingLink: next.meetingLink,
+    videoCall: next.videoCall,
   };
   await db
     .insert(schema.calendarSettings)

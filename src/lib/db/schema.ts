@@ -710,6 +710,12 @@ export const calendarSettings = pgTable(
     connector: text("connector").notNull().default("enlace-fijo"),
     /** Sala fija del conector `enlace-fijo`; null ⇒ citas sin link. */
     meetingLink: text("meeting_link"),
+    /**
+     * false ⇒ cita presencial: el conector de Google crea el evento en el
+     * calendario del dueño SIN generar Meet. Default true para no cambiarle
+     * el comportamiento a nadie que ya dependía del enlace de videollamada.
+     */
+    videoCall: boolean("video_call").notNull().default(true),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },

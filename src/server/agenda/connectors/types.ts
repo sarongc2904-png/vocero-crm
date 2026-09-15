@@ -29,6 +29,13 @@ export type MeetingRequest = {
   /** Zona IANA del negocio: el proveedor la usa para mostrarla a los suyos. */
   timezone: string;
   notes?: string;
+  /**
+   * false ⇒ cita presencial: el conector de Google no debe generar Meet.
+   * Los conectores que no dan videollamada por su cuenta (Zoom, enlace fijo)
+   * no tienen nada que mirar aquí — solo Google agrega conferencia sin que
+   * se le pida.
+   */
+  videoCall?: boolean;
 };
 
 export type MeetingResult = {
