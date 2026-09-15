@@ -192,7 +192,12 @@ describe("Laboratorio simulado: pide 'mañana' y luego 'el jueves' (#agenda-fech
     await runAgentTurn("cv_lab");
 
     const texto = ultimoTextoSaliente();
-    expect(texto).toContain("Para el jueves");
+    // Fase 1 (fix domingo): el guardarraíl de `resolveScheduleIntent` descarta
+    // el `reply`/intro del modelo por completo cuando el turno menciona una
+    // fecha — incluida esta, donde el modelo ya acertaba — para que un intro
+    // adversarial nunca pueda contradecir los horarios reales que le siguen.
+    expect(texto).toContain("jueves");
+    expect(texto).toContain("17 de septiembre");
     expect(texto).toContain("20:00"); // el horario REAL del jueves
     expect(texto).not.toContain("08:00"); // NUNCA el martes del catálogo general — este era el bug
   });

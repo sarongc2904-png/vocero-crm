@@ -5,6 +5,7 @@ import { replaceOffers } from "@/server/agenda/offers";
 import { BookingError, createSessionBooking } from "@/server/agenda/service";
 import { googleAddEventUrl } from "@/lib/calendar-link";
 import { dayIsoInTz } from "@/lib/time/slots";
+import { capitalize, formatHoursEs } from "@/server/agenda/schedule-intent";
 
 const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -42,6 +43,14 @@ export async function offerSlots(input: {
    * que se le da como ancla.
    */
   day?: string;
+  /**
+   * Fase 1 (fix domingo) — hecho de horario ya resuelto por el backend para
+   * `day` (ver `server/agenda/schedule-intent.ts`). Sin esto, "ese día no
+   * tiene cupo" sonaba igual tanto si el negocio estaba CERRADO ese día como
+   * si estaba abierto pero ya sin horarios — dos situaciones distintas que el
+   * cliente necesita distinguir (Caso 1 vs Caso 3 del reporte).
+   */
+  businessFact?: { businessOpen: boolean; businessHours: string; dateLabel: string };
 }): Promise<AgendaTurn> {
   const settings = await getSettings(input.organizationId);
   const now = new Date();
@@ -139,9 +148,18 @@ export async function offerSlots(input: {
       .slice(0, SHOWN)
       .map((s) => `• ${s.dayLabel} a las ${s.time}`)
       .join("\n");
+    // Caso 1 (cerrado) vs Caso 3 (abierto pero sin cupo): sin `businessFact`
+    // no hay cómo distinguirlos, así que se usa el genérico de antes; con él,
+    // el cliente sabe si el negocio no trabaja ese día o si sí trabaja y
+    // simplemente ya no hay horarios.
+    const encabezado = input.businessFact
+      ? input.businessFact.businessOpen
+        ? `Sí abrimos ${input.businessFact.dateLabel} de ${formatHoursEs(input.businessFact.businessHours)}, pero ya no tengo horarios disponibles ese día.`
+        : `${capitalize(input.businessFact.dateLabel)} estamos cerrados.`
+      : "Ese día no tengo horarios disponibles.";
     return {
       ok: true,
-      text: `Ese día no tengo horarios disponibles. Estas son mis próximas opciones:\n${lista}`,
+      text: `${encabezado} Estas son mis próximas opciones:\n${lista}`,
     };
   }
 

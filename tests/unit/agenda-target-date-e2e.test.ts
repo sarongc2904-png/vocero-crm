@@ -246,7 +246,7 @@ describe("runAgentTurn + resolveTargetDate: el backend manda la fecha, nunca el 
     expect((consultaDelDia?.[1] as { fromISO?: string })?.fromISO).toBe(SABADO_ISO);
   });
 
-  it("sábado lleno → avisa que ESE día no hay cupo y ofrece alternativas con su fecha real (no finge que son del sábado)", async () => {
+  it("sábado lleno (Caso 3: abierto pero sin cupo) → lo distingue de 'cerrado' y ofrece alternativas con su fecha real", async () => {
     computeAvailability.mockImplementation(async (_org: string, opts?: { fromISO?: string; toISO?: string }) => {
       const consultaDeUnDia = opts?.fromISO !== undefined && opts.fromISO === opts.toISO;
       if (consultaDeUnDia) return []; // el sábado (o cualquier día pedido) está lleno
@@ -264,7 +264,13 @@ describe("runAgentTurn + resolveTargetDate: el backend manda la fecha, nunca el 
     await runAgentTurn("cv_lab");
 
     const texto = ultimoTextoSaliente();
-    expect(texto).toContain("Ese día no tengo horarios disponibles");
+    // Caso 3 (fix domingo): el sábado SÍ está configurado abierto, así que la
+    // frase debe decirlo explícitamente — nunca el genérico "no tengo
+    // horarios" que no distinguía "cerrado" de "abierto pero sin cupo".
+    expect(texto).toContain("Sí abrimos");
+    expect(texto).toContain("09:00 a 17:00");
+    expect(texto).toContain("pero ya no tengo horarios disponibles ese día");
+    expect(texto).not.toMatch(/estamos cerrados/i);
     expect(texto).toContain("09:00"); // 15:00 UTC = 09:00 America/Mexico_City, alternativa real
   });
 
