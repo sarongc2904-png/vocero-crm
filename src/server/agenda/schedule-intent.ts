@@ -1,5 +1,6 @@
 import { dateLabelInTz } from "@/lib/time/slots";
-import { businessHoursFact, resolveTargetDate } from "@/lib/time/target-date";
+import { businessHoursFact } from "@/lib/time/target-date";
+import { resolveScheduleScope } from "@/server/agenda/schedule-scope";
 import type { WeeklyHours } from "@/server/agenda/settings";
 
 /**
@@ -76,10 +77,18 @@ export function resolveScheduleIntent(input: {
   weeklyHours: WeeklyHours;
   timezone: string;
 }): ScheduleIntent {
-  const match = resolveTargetDate(input.text, input.now, input.timezone);
-  if (!match) return { kind: "none" };
+  /**
+   * Bug de rangos — "de lunes a domingo" NO debe pasar por aquí: antes se
+   * llamaba directo a `resolveTargetDate`, que encontraba "lunes" (la
+   * primera palabra de día del texto) y colapsaba el rango a una fecha
+   * única. Pasando por `resolveScheduleScope` primero, un rango se clasifica
+   * como `date_range` y este módulo lo ignora (`kind: "none"`) — lo maneja
+   * `pipeline.ts` con `offerRange`, nunca con una fecha única inventada.
+   */
+  const scope = resolveScheduleScope(input.text, input.now, input.timezone);
+  if (!scope || scope.type !== "single_date") return { kind: "none" };
 
-  const fact = businessHoursFact(match.iso, input.weeklyHours, input.timezone);
+  const fact = businessHoursFact(scope.date, input.weeklyHours, input.timezone);
   const norm = normalize(input.text);
   const pideDisponibilidad = AVAILABILITY_WORDS.test(norm);
   const soloPreguntaHorario = !pideDisponibilidad && HOURS_ONLY_WORDS.test(norm);

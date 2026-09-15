@@ -17,7 +17,13 @@ import {
 import { matchesHandoffIntent } from "@/server/ai/handoff";
 import { buildAgentSystemPrompt } from "@/server/ai/prompts";
 import { agendaEnabled } from "@/server/agenda/flag";
-import { bookSlot, offerSlots } from "@/server/agenda/agent";
+import {
+  bookSlot,
+  offerGeneralAvailability,
+  offerNextAvailable,
+  offerRange,
+  offerSlots,
+} from "@/server/agenda/agent";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
 import { getSettings } from "@/server/agenda/settings";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
@@ -26,6 +32,7 @@ import {
   resolveScheduleIntent,
   type ScheduleIntent,
 } from "@/server/agenda/schedule-intent";
+import { resolveScheduleScope, type ScheduleScope } from "@/server/agenda/schedule-scope";
 
 /**
  * Turno del agente (FR-021..FR-025).
@@ -204,6 +211,15 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
    * modelo pueda desobedecer.
    */
   let scheduleIntent: ScheduleIntent = { kind: "none" };
+  /**
+   * Fase 1 — bug de rangos: `scheduleScope` es el clasificador AMPLIO
+   * (`schedule-scope.ts`) que corre antes que nada — decide si el turno pide
+   * una fecha única, un rango ("de lunes a domingo", "esta semana"),
+   * disponibilidad general sin día, o "la próxima cita disponible". Antes
+   * solo existía el camino de fecha única, y un rango terminaba
+   * colapsándose a la primera palabra de día que el texto mencionara.
+   */
+  let scheduleScope: ScheduleScope | null = null;
   let businessFact: Parameters<typeof buildAgentSystemPrompt>[0]["businessFact"];
   if (agenda) {
     const settings = await getSettings(organizationId);
@@ -212,6 +228,9 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
       iso: todayInTz(now, settings.timezone),
       label: todayLabelInTz(now, settings.timezone),
     };
+    scheduleScope = lastInbound.text
+      ? resolveScheduleScope(lastInbound.text, now, settings.timezone)
+      : null;
     scheduleIntent = lastInbound.text
       ? resolveScheduleIntent({
           text: lastInbound.text,
@@ -268,6 +287,47 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
   }
 
   let action: AgentActionType = result.data;
+
+  /**
+   * Fase 1 — bug de rangos. Igual que el guardarraíl de fecha única de abajo,
+   * pero para los otros tres alcances (`date_range`, `general_availability`,
+   * `next_available`): si `resolveScheduleScope` reconoció uno de estos en el
+   * mensaje del cliente, el backend construye la respuesta completa desde el
+   * motor de disponibilidad — nunca deja que el modelo pregunte "¿qué día
+   * específico?" cuando SÍ hay información útil que mostrar, ni que reduzca
+   * un rango a un solo día.
+   */
+  if (
+    agenda &&
+    scheduleScope &&
+    scheduleScope.type !== "single_date" &&
+    (action.action === "reply" || action.action === "offer_slots")
+  ) {
+    try {
+      const turn =
+        scheduleScope.type === "date_range"
+          ? await offerRange({
+              organizationId,
+              conversationId,
+              startDate: scheduleScope.startDate,
+              endDate: scheduleScope.endDate,
+            })
+          : scheduleScope.type === "general_availability"
+            ? await offerGeneralAvailability({ organizationId, conversationId })
+            : await offerNextAvailable({ organizationId, conversationId });
+      await deliverReply(conversation, turn.text);
+      if (turn.ok) {
+        publish(organizationId, {
+          type: "conversation.updated",
+          data: { conversation: { id: conversationId } },
+        });
+      }
+      return;
+    } catch (err) {
+      console.error(`[agente] el motor de agenda (rango/general) falló: ${err}`);
+      action = degradeAction(action);
+    }
+  }
 
   /**
    * Fase 1 (fix domingo) — el guardarraíl que faltaba. Si el backend
