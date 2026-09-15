@@ -22,6 +22,11 @@ const envSchema = z.object({
   META_APP_SECRET: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default("v25.0"),
   META_GRAPH_BASE_URL: z.string().url().default("https://graph.facebook.com"),
+  // Embedded Signup (modo agencia): el cliente conecta SU WhatsApp con un
+  // clic, sin copiar tokens. Sin las tres, el botón no se muestra — se cae al
+  // formulario manual (ver isEmbeddedSignupConfigured).
+  META_APP_ID: z.string().optional(),
+  META_EMBEDDED_SIGNUP_CONFIG_ID: z.string().optional(),
   OPENROUTER_API_TOKEN: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api"),
   OPENROUTER_MODEL: z.string().optional(),
@@ -112,4 +117,18 @@ export function isMockEnabled(): boolean {
 export function isAiConfigured(): boolean {
   const token = process.env.OPENROUTER_API_TOKEN;
   return typeof token === "string" && token.trim().length > 0;
+}
+
+/**
+ * true si Embedded Signup puede ofrecerse: sin las tres variables, el botón
+ * de "Conectar WhatsApp" no tiene con qué armar el login de Meta, así que se
+ * oculta y solo queda el formulario manual (degradación, no error).
+ */
+export function isEmbeddedSignupConfigured(): boolean {
+  const has = (v: string | undefined) => typeof v === "string" && v.trim().length > 0;
+  return (
+    has(process.env.META_APP_ID) &&
+    has(process.env.META_APP_SECRET) &&
+    has(process.env.META_EMBEDDED_SIGNUP_CONFIG_ID)
+  );
 }

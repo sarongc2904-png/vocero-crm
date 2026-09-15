@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Copy,
   Info,
   ShieldCheck,
@@ -13,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EmbeddedSignupButton } from "@/components/settings/embedded-signup-button";
 
 type Connection = {
   wabaId: string;
@@ -30,17 +32,28 @@ type WebhookInfo = {
   signatureLayer: boolean;
 };
 
+type EmbeddedSignupInfo =
+  | { available: true; appId: string; configId: string; graphVersion: string }
+  | { available: false };
+
 export function WhatsappWizard() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [webhook, setWebhook] = useState<WebhookInfo | null>(null);
+  const [embeddedSignup, setEmbeddedSignup] = useState<EmbeddedSignupInfo>({
+    available: false,
+  });
   const [loaded, setLoaded] = useState(false);
+  const [showManual, setShowManual] = useState(false);
 
   const refetch = useCallback(async () => {
     const [c, w] = await Promise.all([
       fetch("/api/settings/whatsapp").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/settings/webhook").then((r) => (r.ok ? r.json() : null)),
     ]).catch(() => [null, null]);
-    if (c) setConnection(c.connection);
+    if (c) {
+      setConnection(c.connection);
+      setEmbeddedSignup(c.embeddedSignup ?? { available: false });
+    }
     if (w) setWebhook(w);
     setLoaded(true);
   }, []);
@@ -63,8 +76,8 @@ export function WhatsappWizard() {
               El token de WhatsApp expiró o fue revocado.
             </p>
             <p className="text-danger-text opacity-80">
-              Los envíos están pausados. Pega un token nuevo abajo y prueba la
-              conexión para reconectar.
+              Los envíos están pausados. Conecta de nuevo abajo para
+              reactivarlos.
             </p>
           </div>
         </div>
@@ -86,7 +99,43 @@ export function WhatsappWizard() {
         </div>
       )}
 
-      <ConnectForm existing={connection} onSaved={() => void refetch()} />
+      {embeddedSignup.available && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {connection ? "Reconectar WhatsApp" : "Conectar WhatsApp"}
+            </CardTitle>
+            <CardDescription>
+              Inicia sesión con Facebook, elige tu negocio y tu número — Meta
+              nos entrega la conexión directamente, sin que tengas que copiar
+              nada.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <EmbeddedSignupButton
+              config={embeddedSignup}
+              onConnected={() => void refetch()}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setShowManual((v) => !v)}
+        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ChevronDown
+          className={`h-4 w-4 transition-transform ${showManual ? "rotate-180" : ""}`}
+        />
+        {embeddedSignup.available
+          ? "Conexión manual (avanzado)"
+          : "Conectar con credenciales manuales"}
+      </button>
+
+      {(showManual || !embeddedSignup.available) && (
+        <ConnectForm existing={connection} onSaved={() => void refetch()} />
+      )}
 
       {webhook && <WebhookCard webhook={webhook} />}
     </div>
