@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { UserPlus } from "lucide-react";
+import { Trash2, UserPlus } from "lucide-react";
 import { ContactAvatar } from "@/components/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,17 +19,23 @@ type Member = {
 
 export function TeamClient() {
   const [members, setMembers] = useState<Member[]>([]);
+  const [canManageMembers, setCanManageMembers] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [tempPassword, setTempPassword] = useState("");
   const [created, setCreated] = useState<{ email: string; password: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const refetch = useCallback(async () => {
     const res = await fetch("/api/settings/team").catch(() => null);
     if (!res?.ok) return;
-    const data = (await res.json()) as { members: Member[] };
+    const data = (await res.json()) as {
+      canManageMembers: boolean;
+      members: Member[];
+    };
+    setCanManageMembers(data.canManageMembers);
     setMembers(data.members);
   }, []);
 
@@ -69,6 +75,32 @@ export function TeamClient() {
     setEmail("");
     setTempPassword("");
     void refetch();
+  }
+
+  async function remove(member: Member) {
+    const confirmed = window.confirm(
+      `¿Eliminar a ${member.name} del equipo? Perderá el acceso al CRM de inmediato.`
+    );
+    if (!confirmed) return;
+
+    setDeletingId(member.id);
+    setError(null);
+    const res = await fetch("/api/settings/team", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ memberId: member.id }),
+    }).catch(() => null);
+    setDeletingId(null);
+
+    if (!res?.ok) {
+      const data = (await res?.json().catch(() => null)) as {
+        error?: { message?: string };
+      } | null;
+      setError(data?.error?.message ?? "No se pudo eliminar la cuenta");
+      return;
+    }
+
+    setMembers((current) => current.filter((item) => item.id !== member.id));
   }
 
   return (
@@ -156,8 +188,21 @@ export function TeamClient() {
             <Badge variant={m.role === "owner" ? "default" : "secondary"}>
               {m.role === "owner" ? "Propietario" : "Miembro"}
             </Badge>
+            {canManageMembers && m.role !== "owner" && (
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={deletingId !== null}
+                aria-label={`Eliminar a ${m.name}`}
+                onClick={() => void remove(m)}
+              >
+                <Trash2 className="h-4 w-4" />
+                {deletingId === m.id ? "Eliminando…" : "Eliminar"}
+              </Button>
+            )}
           </div>
         ))}
+        {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
     </div>
   );
