@@ -2,13 +2,23 @@ import { z } from "zod";
 import { chatJson } from "@/lib/ai";
 import { buildJudgePrompt } from "@/server/ai/prompts";
 
-/** Veredicto estructurado del juez (FR-032, contrato ai.md). */
+/**
+ * Veredicto estructurado del juez (FR-032, contrato ai.md).
+ *
+ * `severity` y `reason` (auditoría del evaluador, ver `buildJudgePrompt`)
+ * obligan al juez a justificar CADA hallazgo por el COMPORTAMIENTO del
+ * agente, no por la mera ocurrencia de un evento difícil (pregunta fuera del
+ * conocimiento, cliente enojado) — es la corrección al falso negativo
+ * reportado en "Comprador decidido".
+ */
 export const Verdict = z.object({
   veredicto: z.enum(["verde", "amarillo", "rojo"]),
   hallazgos: z.array(
     z.object({
       tipo: z.enum(["alucinacion", "fuera_de_kb", "debio_escalar", "tono"]),
+      severity: z.enum(["grave", "menor"]),
       evidencia: z.string(),
+      reason: z.string(),
       sugerencia: z
         .object({ pregunta: z.string(), respuesta: z.string() })
         .optional(),

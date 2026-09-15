@@ -4,6 +4,7 @@ import { spreadByDay } from "@/server/agenda/spread";
 import { replaceOffers } from "@/server/agenda/offers";
 import { BookingError, createSessionBooking } from "@/server/agenda/service";
 import { googleAddEventUrl } from "@/lib/calendar-link";
+import { dayIsoInTz } from "@/lib/time/slots";
 
 const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -64,7 +65,7 @@ export async function offerSlots(input: {
    * Se consulta el día pedido APARTE, acotado a esa sola fecha: el catálogo
    * general no tiene por qué alcanzarlo.
    */
-  const dayAvailability =
+  const dayAvailabilityRaw =
     input.day && DAY_ISO.test(input.day)
       ? await computeAvailability(input.organizationId, {
           settings,
@@ -73,6 +74,18 @@ export async function offerSlots(input: {
           toISO: input.day,
         })
       : [];
+  /**
+   * Fase 1 — assert(slot.localDate === targetDate): `computeAvailability`
+   * acotado a un solo día YA debería devolver solo ese día, pero esto es la
+   * última barrera antes de que algo llegue al cliente. Si algún día un bug
+   * en el motor de disponibilidad devolviera un slot de otro día, esta línea
+   * lo descarta en vez de ofrecerlo como si fuera el pedido.
+   */
+  const dayAvailability = input.day
+    ? dayAvailabilityRaw.filter(
+        (s) => dayIsoInTz(new Date(s.startUtc), settings.timezone) === input.day
+      )
+    : dayAvailabilityRaw;
   const dayShown = spreadByDay(dayAvailability, {
     timezone: settings.timezone,
     limit: SHOWN,
@@ -138,11 +151,18 @@ export async function offerSlots(input: {
   return { ok: true, text: `${intro}\n${lista}` };
 }
 
+/**
+ * Fase 1 — ya NO recibe el `reply`/`confirmation` del modelo: se ignoraba a
+ * propósito para la fecha/hora (causa raíz del bug de agenda — el LLM no
+ * calcula fechas de forma confiable, y confirmar con SU texto podía felicitar
+ * al cliente por un día distinto al que de verdad se agendó), así que
+ * mantenerlo en la firma era una puerta sin usar. El texto de confirmación lo
+ * construye este módulo, siempre desde `result.label` (el booking real).
+ */
 export async function bookSlot(input: {
   organizationId: string;
   conversationId: string;
   startUtc: string;
-  confirmation?: string;
 }): Promise<AgendaTurn> {
   try {
     const result = await createSessionBooking({
@@ -153,8 +173,11 @@ export async function bookSlot(input: {
       requireOffer: true,
     });
 
-    const base =
-      input.confirmation?.trim() || `¡Listo! Te agendé para ${result.label}.`;
+    // SIEMPRE `result.label` (el booking real que quedó en la base) — nunca
+    // el texto libre del modelo. Es la corrección directa al bug de
+    // producción: el cliente pedía sábado, el `reply` del modelo decía
+    // "sábado", y el booking real caía el jueves.
+    const base = `¡Listo! Te agendé para ${result.label}.`;
 
     // Recordatorio para el CLIENTE (no la reunión): un enlace público de
     // Google Calendar que cualquiera puede abrir para guardar SU cita, sin

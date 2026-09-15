@@ -2,7 +2,7 @@ import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import { apiError, parseBody } from "@/lib/api";
-import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
+import { authenticateBotRequest } from "@/server/bot/auth";
 import {
   createTemplate,
   TemplateError,
@@ -22,13 +22,9 @@ export const dynamic = "force-dynamic";
  * sirve.
  */
 export async function GET(req: Request) {
-  const denied = requireBotKey(req);
-  if (denied) return denied;
-
-  const organizationId = await resolveInstanceOrg();
-  if (!organizationId) {
-    return apiError(409, "no_org", "La instancia aún no tiene organización");
-  }
+  const auth = await authenticateBotRequest(req);
+  if (!auth.ok) return auth.response;
+  const organizationId = auth.organizationId;
 
   const db = getDb();
   const rows = await db
@@ -58,13 +54,9 @@ const postBodySchema = z.object({
  * tiempo de revisión.
  */
 export async function POST(req: Request) {
-  const denied = requireBotKey(req);
-  if (denied) return denied;
-
-  const organizationId = await resolveInstanceOrg();
-  if (!organizationId) {
-    return apiError(409, "no_org", "La instancia aún no tiene organización");
-  }
+  const auth = await authenticateBotRequest(req);
+  if (!auth.ok) return auth.response;
+  const organizationId = auth.organizationId;
 
   const body = await parseBody(req, postBodySchema);
   if (!body.ok) return body.response;

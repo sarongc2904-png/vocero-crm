@@ -112,9 +112,12 @@ describe("white-label: acento en tema oscuro", () => {
 });
 
 describe("white-label: normalización", () => {
-  it("nombre vacío o nulo → default 'Vocero'; se recorta a 30", () => {
-    expect(normalizeBranding(null).name).toBe("Vocero");
-    expect(normalizeBranding({ name: "   " }).name).toBe("Vocero");
+  it("nombre vacío o nulo → default 'Conecta Digital'; se recorta a 30", () => {
+    // El default cambió de "Vocero" a "Conecta Digital" con el rebranding del
+    // fork (branding.ts): esta es la expectativa vigente, no la original de
+    // vocerocrm.com — ver la auditoría de favicon.test.ts para el porqué.
+    expect(normalizeBranding(null).name).toBe("Conecta Digital");
+    expect(normalizeBranding({ name: "   " }).name).toBe("Conecta Digital");
     expect(normalizeBranding({ name: "x".repeat(50) }).name).toHaveLength(30);
   });
 

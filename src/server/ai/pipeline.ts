@@ -20,7 +20,8 @@ import { agendaEnabled } from "@/server/agenda/flag";
 import { bookSlot, offerSlots } from "@/server/agenda/agent";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
 import { getSettings } from "@/server/agenda/settings";
-import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
+import { todayInTz, todayLabelInTz, type WeekdayKey } from "@/lib/time/slots";
+import { businessHoursFact, resolveTargetDate } from "@/lib/time/target-date";
 
 /**
  * Turno del agente (FR-021..FR-025).
@@ -39,6 +40,16 @@ type CoalesceEntry = {
 
 const globalForAgent = globalThis as unknown as {
   __agentCoalesce?: Map<string, CoalesceEntry>;
+};
+
+const WEEKDAY_LABEL_ES: Record<WeekdayKey, string> = {
+  mon: "lunes",
+  tue: "martes",
+  wed: "miércoles",
+  thu: "jueves",
+  fri: "viernes",
+  sat: "sábado",
+  sun: "domingo",
 };
 
 function coalesceMap(): Map<string, CoalesceEntry> {
@@ -186,6 +197,18 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
    * instancia no la usa.
    */
   let todayInfo: { iso: string; label: string } | undefined;
+  /**
+   * Fase 1 — fecha objetivo resuelta por el BACKEND (`resolveTargetDate`),
+   * nunca por el modelo. Causa raíz del bug de agenda: `offer_slots.day` lo
+   * calculaba el LLM desde lenguaje natural y fallaba con frecuencia; cuando
+   * fallaba (o acertaba distinto), el sistema igual mostraba texto libre del
+   * modelo junto a slots de otro día. Si el parser reconoce una expresión de
+   * fecha en el ÚLTIMO mensaje del cliente, esa fecha queda BLOQUEADA — el
+   * `day` que mande el modelo en su acción es solo un respaldo para cuando el
+   * parser no reconoce nada.
+   */
+  let resolvedTargetISO: string | undefined;
+  let businessFact: Parameters<typeof buildAgentSystemPrompt>[0]["businessFact"];
   if (agenda) {
     const settings = await getSettings(organizationId);
     const now = new Date();
@@ -193,6 +216,20 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
       iso: todayInTz(now, settings.timezone),
       label: todayLabelInTz(now, settings.timezone),
     };
+    const match = lastInbound.text
+      ? resolveTargetDate(lastInbound.text, now, settings.timezone)
+      : null;
+    if (match) {
+      resolvedTargetISO = match.iso;
+      const fact = businessHoursFact(match.iso, settings.weeklyHours, settings.timezone);
+      businessFact = {
+        targetDate: fact.targetDate,
+        dayOfWeekLabel: fact.dayOfWeek ? WEEKDAY_LABEL_ES[fact.dayOfWeek] : "",
+        businessOpen: fact.businessOpen,
+        businessHours: fact.businessHours,
+        timezone: fact.timezone,
+      };
+    }
   }
 
   const messages: ChatMessage[] = [
@@ -204,6 +241,7 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
         stages,
         agenda,
         today: todayInfo,
+        businessFact,
       }),
     },
     ...history
@@ -245,13 +283,16 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
                 organizationId,
                 conversationId,
                 intro: action.reply,
-                day: action.day,
+                // El backend manda: si `resolveTargetDate` reconoció una
+                // fecha en el mensaje del cliente, el `day` del modelo NO
+                // puede sobrescribirla — es solo respaldo cuando el parser
+                // no reconoció nada.
+                day: resolvedTargetISO ?? action.day,
               })
             : await bookSlot({
                 organizationId,
                 conversationId,
                 startUtc: action.startUtc,
-                confirmation: action.reply,
               });
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
