@@ -20,8 +20,12 @@ import { agendaEnabled } from "@/server/agenda/flag";
 import { bookSlot, offerSlots } from "@/server/agenda/agent";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
 import { getSettings } from "@/server/agenda/settings";
-import { todayInTz, todayLabelInTz, type WeekdayKey } from "@/lib/time/slots";
-import { businessHoursFact, resolveTargetDate } from "@/lib/time/target-date";
+import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
+import {
+  factualHoursReply,
+  resolveScheduleIntent,
+  type ScheduleIntent,
+} from "@/server/agenda/schedule-intent";
 
 /**
  * Turno del agente (FR-021..FR-025).
@@ -40,16 +44,6 @@ type CoalesceEntry = {
 
 const globalForAgent = globalThis as unknown as {
   __agentCoalesce?: Map<string, CoalesceEntry>;
-};
-
-const WEEKDAY_LABEL_ES: Record<WeekdayKey, string> = {
-  mon: "lunes",
-  tue: "martes",
-  wed: "miércoles",
-  thu: "jueves",
-  fri: "viernes",
-  sat: "sábado",
-  sun: "domingo",
 };
 
 function coalesceMap(): Map<string, CoalesceEntry> {
@@ -198,16 +192,18 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
    */
   let todayInfo: { iso: string; label: string } | undefined;
   /**
-   * Fase 1 — fecha objetivo resuelta por el BACKEND (`resolveTargetDate`),
-   * nunca por el modelo. Causa raíz del bug de agenda: `offer_slots.day` lo
-   * calculaba el LLM desde lenguaje natural y fallaba con frecuencia; cuando
-   * fallaba (o acertaba distinto), el sistema igual mostraba texto libre del
-   * modelo junto a slots de otro día. Si el parser reconoce una expresión de
-   * fecha en el ÚLTIMO mensaje del cliente, esa fecha queda BLOQUEADA — el
-   * `day` que mande el modelo en su acción es solo un respaldo para cuando el
-   * parser no reconoce nada.
+   * Fase 1 — verdad de agenda resuelta por el BACKEND (`resolveScheduleIntent`),
+   * nunca por el modelo. Causa raíz del bug de agenda (día equivocado) y de
+   * la regresión de domingo (el agente decía "cerrado" con el domingo
+   * configurado abierto): antes esta verdad solo viajaba como INSTRUCCIÓN del
+   * prompt — un texto libre del modelo (`{"action":"reply",...}`) podía
+   * seguir contradiciéndola sin que nada lo impidiera. Ahora, si el último
+   * mensaje del cliente menciona una fecha, el pipeline usa este resultado
+   * para CONSTRUIR o REEMPLAZAR la respuesta cuando la acción del modelo es
+   * `reply` u `offer_slots` (ver más abajo) — no es una instrucción que el
+   * modelo pueda desobedecer.
    */
-  let resolvedTargetISO: string | undefined;
+  let scheduleIntent: ScheduleIntent = { kind: "none" };
   let businessFact: Parameters<typeof buildAgentSystemPrompt>[0]["businessFact"];
   if (agenda) {
     const settings = await getSettings(organizationId);
@@ -216,18 +212,21 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
       iso: todayInTz(now, settings.timezone),
       label: todayLabelInTz(now, settings.timezone),
     };
-    const match = lastInbound.text
-      ? resolveTargetDate(lastInbound.text, now, settings.timezone)
-      : null;
-    if (match) {
-      resolvedTargetISO = match.iso;
-      const fact = businessHoursFact(match.iso, settings.weeklyHours, settings.timezone);
+    scheduleIntent = lastInbound.text
+      ? resolveScheduleIntent({
+          text: lastInbound.text,
+          now,
+          weeklyHours: settings.weeklyHours,
+          timezone: settings.timezone,
+        })
+      : { kind: "none" };
+    if (scheduleIntent.kind === "date_mentioned") {
       businessFact = {
-        targetDate: fact.targetDate,
-        dayOfWeekLabel: fact.dayOfWeek ? WEEKDAY_LABEL_ES[fact.dayOfWeek] : "",
-        businessOpen: fact.businessOpen,
-        businessHours: fact.businessHours,
-        timezone: fact.timezone,
+        targetDate: scheduleIntent.targetDate,
+        dayOfWeekLabel: scheduleIntent.dateLabel,
+        businessOpen: scheduleIntent.businessOpen,
+        businessHours: scheduleIntent.businessHours,
+        timezone: scheduleIntent.timezone,
       };
     }
   }
@@ -270,6 +269,38 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
 
   let action: AgentActionType = result.data;
 
+  /**
+   * Fase 1 (fix domingo) — el guardarraíl que faltaba. Si el backend
+   * reconoció una fecha en el mensaje del cliente, la verdad de agenda para
+   * esa fecha la decide el backend — nunca el texto libre del modelo. Se
+   * activa SOLO sobre `reply` (el camino sin ningún control hasta ahora) y
+   * `offer_slots` (para que su `day` e `intro` también queden bajo el mismo
+   * control): las demás acciones (`handoff`, `move_stage`, `update_lead`,
+   * `book_slot`, `none`) expresan una intención distinta del modelo que este
+   * guardarraíl no debe pisar.
+   *
+   * Se descarta el `reply`/`intro` que haya escrito el modelo por completo —
+   * no se usa ni como introducción — porque un modelo adversarial (o
+   * simplemente equivocado) podría escribir "el domingo estamos cerrados"
+   * como intro de un `offer_slots` que igual muestra los horarios reales del
+   * domingo: el resultado sería un mensaje contradictorio. Todo lo que se
+   * envía en este camino sale de `scheduleIntent`/`offerSlots`, nunca del
+   * modelo.
+   */
+  if (
+    agenda &&
+    scheduleIntent.kind === "date_mentioned" &&
+    (action.action === "reply" || action.action === "offer_slots")
+  ) {
+    if (!scheduleIntent.requiresAvailabilityLookup) {
+      // Caso 2: solo preguntó si se trabaja ese día / el horario — sin pedir
+      // ver huecos todavía. Respuesta corta, 100% del backend.
+      await deliverReply(conversation, factualHoursReply(scheduleIntent));
+      return;
+    }
+    action = { action: "offer_slots", day: scheduleIntent.targetDate };
+  }
+
   // 015 — Agenda. Un fallo del motor degrada el turno (el agente responde sin
   // agendar), nunca lo tumba: quedarse callado es peor que no agendar.
   if (action.action === "offer_slots" || action.action === "book_slot") {
@@ -283,11 +314,22 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
                 organizationId,
                 conversationId,
                 intro: action.reply,
-                // El backend manda: si `resolveTargetDate` reconoció una
+                // El backend manda: si `resolveScheduleIntent` reconoció una
                 // fecha en el mensaje del cliente, el `day` del modelo NO
                 // puede sobrescribirla — es solo respaldo cuando el parser
                 // no reconoció nada.
-                day: resolvedTargetISO ?? action.day,
+                day:
+                  scheduleIntent.kind === "date_mentioned"
+                    ? scheduleIntent.targetDate
+                    : action.day,
+                businessFact:
+                  scheduleIntent.kind === "date_mentioned"
+                    ? {
+                        businessOpen: scheduleIntent.businessOpen,
+                        businessHours: scheduleIntent.businessHours,
+                        dateLabel: scheduleIntent.dateLabel,
+                      }
+                    : undefined,
               })
             : await bookSlot({
                 organizationId,

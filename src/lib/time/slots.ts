@@ -286,6 +286,23 @@ export function todayLabelInTz(now: Date, tz: string): string {
   }).format(now);
 }
 
+/**
+ * Etiqueta de UNA fecha (no instante) en palabras: "domingo, 20 de
+ * septiembre". Fase 1 (fix domingo) — fuente única para el nombre de día +
+ * fecha que usan tanto el HECHO DE HORARIO del prompt como las respuestas
+ * deterministas construidas por el backend (`resolveScheduleIntent`).
+ */
+export function dateLabelInTz(dayISODate: string, tz: string): string {
+  const noon = zonedWallClockToUtc(dayISODate, "12:00", tz);
+  if (!noon) return dayISODate;
+  return new Intl.DateTimeFormat("es-MX", {
+    timeZone: tz,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(noon);
+}
+
 /** Partes por separado para la tabla de Citas. */
 export function partsInTz(
   startUtc: string,
