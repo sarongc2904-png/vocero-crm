@@ -1,8 +1,22 @@
 import { computeAvailability } from "@/server/agenda/availability";
 import { getSettings } from "@/server/agenda/settings";
-import { spreadByDay } from "@/server/agenda/spread";
+import { spreadByDay, type SpreadSlot } from "@/server/agenda/spread";
 import { replaceOffers } from "@/server/agenda/offers";
 import { BookingError, createSessionBooking } from "@/server/agenda/service";
+
+const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Une dos catálogos de huecos sin repetir instante (por `startUtc`). */
+function mergeSlots(a: SpreadSlot[], b: SpreadSlot[]): SpreadSlot[] {
+  const seen = new Set<string>();
+  const out: SpreadSlot[] = [];
+  for (const s of [...a, ...b]) {
+    if (seen.has(s.startUtc)) continue;
+    seen.add(s.startUtc);
+    out.push(s);
+  }
+  return out;
+}
 
 /**
  * 015 — Lo que el agente incluido puede hacer con la agenda.
@@ -32,6 +46,12 @@ export async function offerSlots(input: {
   organizationId: string;
   conversationId: string;
   intro?: string;
+  /**
+   * Día que el modelo detectó en el mensaje del cliente (YYYY-MM-DD), si
+   * mencionó uno. Ver prompts.ts: el modelo lo calcula con la fecha de "hoy"
+   * que se le da como ancla.
+   */
+  day?: string;
 }): Promise<AgendaTurn> {
   const settings = await getSettings(input.organizationId);
   const now = new Date();
@@ -46,7 +66,33 @@ export async function offerSlots(input: {
     now,
   });
 
-  if (spread.length === 0) {
+  /**
+   * Bug de #agenda-fecha: el cliente pedía "el viernes" y el `reply` del
+   * modelo lo decía, pero el motor siempre pegaba el catálogo general (los
+   * `OFFERED` más próximos), que casi nunca llega tan lejos — resultado: el
+   * texto prometía viernes y la lista traía martes.
+   *
+   * Se consulta el día pedido APARTE, acotado a esa sola fecha: el catálogo
+   * general no tiene por qué alcanzarlo.
+   */
+  const dayAvailability =
+    input.day && DAY_ISO.test(input.day)
+      ? await computeAvailability(input.organizationId, {
+          settings,
+          now,
+          fromISO: input.day,
+          toISO: input.day,
+        })
+      : [];
+  const dayShown = spreadByDay(dayAvailability, {
+    timezone: settings.timezone,
+    limit: SHOWN,
+    perDay: SHOWN,
+    now,
+  });
+
+  const catalogo = mergeSlots(spread, dayShown);
+  if (catalogo.length === 0) {
     // Agenda llena no es un error: es una respuesta que el cliente entiende.
     return {
       ok: false,
@@ -56,13 +102,35 @@ export async function offerSlots(input: {
     };
   }
 
-  // Se REGISTRA todo el catálogo, no solo lo que se enseña: si el cliente pide
-  // otro día, el agente tiene alternativas legítimas que aceptar.
+  // Se REGISTRA todo el catálogo (general + el día pedido), no solo lo que se
+  // enseña: si el cliente pide otro día, el agente tiene alternativas
+  // legítimas que aceptar.
   await replaceOffers(
     input.organizationId,
     input.conversationId,
-    spread.map((s) => ({ startUtc: s.startUtc, label: s.label }))
+    catalogo.map((s) => ({ startUtc: s.startUtc, label: s.label }))
   );
+
+  if (input.day) {
+    if (dayShown.length > 0) {
+      const lista = dayShown
+        .map((s) => `• ${s.dayLabel} a las ${s.time}`)
+        .join("\n");
+      const intro = input.intro?.trim() || "Tengo estos horarios disponibles:";
+      return { ok: true, text: `${intro}\n${lista}` };
+    }
+    // Ese día no tiene nada: se avisa en vez de fingir que sí (ignorando el
+    // `intro` del modelo, que asumía que había — ver docstring de arriba), y
+    // se ofrecen alternativas reales.
+    const lista = spread
+      .slice(0, SHOWN)
+      .map((s) => `• ${s.dayLabel} a las ${s.time}`)
+      .join("\n");
+    return {
+      ok: true,
+      text: `Ese día no tengo horarios disponibles. Estas son mis próximas opciones:\n${lista}`,
+    };
+  }
 
   const shown = spread.slice(0, SHOWN);
   const lista = shown.map((s) => `• ${s.dayLabel} a las ${s.time}`).join("\n");

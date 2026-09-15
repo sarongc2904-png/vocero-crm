@@ -272,6 +272,20 @@ export function dayLabelInTz(startUtc: string, tz: string, now?: Date): string {
   return `${prefijo}${cuerpo}`;
 }
 
+/**
+ * El día de hoy en palabras, sin prefijo "hoy/mañana": "lunes 15 de
+ * septiembre". Ancla de fecha para el modelo: sin esto no tiene cómo resolver
+ * "mañana" o "el viernes" a una fecha concreta (ver `offer_slots.day`).
+ */
+export function todayLabelInTz(now: Date, tz: string): string {
+  return new Intl.DateTimeFormat("es-MX", {
+    timeZone: tz,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(now);
+}
+
 /** Partes por separado para la tabla de Citas. */
 export function partsInTz(
   startUtc: string,
