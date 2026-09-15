@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
+import { isEmbeddedSignupConfigured } from "@/lib/env";
 import {
   getCredentialsByOrg,
   saveCredentials,
@@ -11,7 +12,15 @@ export const dynamic = "force-dynamic";
 
 export const GET = withAuth(async (session) => {
   const creds = await getCredentialsByOrg(session.organizationId);
-  if (!creds) return Response.json({ connection: null });
+  const embeddedSignup = isEmbeddedSignupConfigured()
+    ? {
+        available: true as const,
+        appId: process.env.META_APP_ID!,
+        configId: process.env.META_EMBEDDED_SIGNUP_CONFIG_ID!,
+        graphVersion: process.env.META_GRAPH_API_VERSION ?? "v25.0",
+      }
+    : { available: false as const };
+  if (!creds) return Response.json({ connection: null, embeddedSignup });
   return Response.json({
     connection: {
       wabaId: creds.wabaId,
@@ -21,6 +30,7 @@ export const GET = withAuth(async (session) => {
       status: creds.status,
       tokenLast4: tokenLast4(creds.token),
     },
+    embeddedSignup,
   });
 });
 
