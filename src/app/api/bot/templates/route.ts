@@ -1,8 +1,14 @@
 import { asc, eq } from "drizzle-orm";
+import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
-import { apiError } from "@/lib/api";
+import { apiError, parseBody } from "@/lib/api";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
-import { serializeTemplate } from "@/server/whatsapp/templates";
+import {
+  createTemplate,
+  TemplateError,
+  templateErrorStatus,
+  serializeTemplate,
+} from "@/server/whatsapp/templates";
 
 export const dynamic = "force-dynamic";
 
@@ -36,4 +42,40 @@ export async function GET(req: Request) {
       .filter((t) => t.status === "approved")
       .map((t) => serializeTemplate(t)),
   });
+}
+
+const postBodySchema = z.object({
+  name: z.string().min(1).max(60),
+  language: z.string().min(2).max(10),
+  category: z.string().min(1),
+  body: z.string().min(1).max(1024),
+});
+
+/**
+ * Crea una plantilla y la manda a aprobación de Meta. Queda `pending` hasta
+ * que Meta resuelva — `GET` de arriba solo devuelve las ya `approved`, así
+ * que el cerebro externo sabe cuándo puede usarla sin tener que adivinar el
+ * tiempo de revisión.
+ */
+export async function POST(req: Request) {
+  const denied = requireBotKey(req);
+  if (denied) return denied;
+
+  const organizationId = await resolveInstanceOrg();
+  if (!organizationId) {
+    return apiError(409, "no_org", "La instancia aún no tiene organización");
+  }
+
+  const body = await parseBody(req, postBodySchema);
+  if (!body.ok) return body.response;
+
+  try {
+    const template = await createTemplate(organizationId, body.data);
+    return Response.json(serializeTemplate(template));
+  } catch (err) {
+    if (err instanceof TemplateError) {
+      return apiError(templateErrorStatus(err), err.code, err.message);
+    }
+    throw err;
+  }
 }
