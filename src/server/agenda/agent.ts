@@ -1,10 +1,10 @@
-import { computeAvailability } from "@/server/agenda/availability";
+import { computeAvailability, type AvailableSlot } from "@/server/agenda/availability";
 import { getSettings } from "@/server/agenda/settings";
 import { spreadByDay } from "@/server/agenda/spread";
 import { replaceOffers } from "@/server/agenda/offers";
 import { BookingError, createSessionBooking } from "@/server/agenda/service";
 import { googleAddEventUrl } from "@/lib/calendar-link";
-import { dayIsoInTz } from "@/lib/time/slots";
+import { dateLabelInTz, dayIsoInTz, dayLabelInTz, timeInTz } from "@/lib/time/slots";
 import { capitalize, formatHoursEs } from "@/server/agenda/schedule-intent";
 
 const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -36,6 +36,22 @@ export type AgendaTurn = {
   text: string;
   /** false ⇒ el motor no pudo; el turno sigue, sin agendar. */
   ok: boolean;
+  /**
+   * Fase 1 — bug de paginación en rangos: `offerRange`/`offerGeneralAvailability`
+   * la exponen para que un consumidor (o un test) sepa exactamente qué se
+   * cortó, sin tener que parsear el texto.
+   */
+  pagination?: SchedulePagination;
+};
+
+export type SchedulePagination = {
+  totalAvailableSlots: number;
+  displayedSlots: number;
+  totalAvailableDays: number;
+  displayedDays: number;
+  remainingSlots: number;
+  remainingDays: number;
+  truncated: boolean;
 };
 
 export async function offerSlots(input: {
@@ -175,15 +191,30 @@ export async function offerSlots(input: {
 }
 
 /**
- * Fase 1 — bug de rangos ("de lunes a domingo" devolvía solo lunes).
+ * Fase 1 — bug de rangos ("de lunes a domingo" devolvía solo lunes) y su
+ * segunda vuelta (el bug de paginación: con un rango de 7 días abiertos, el
+ * tope total coincidía justo con 6 días completos y el 7º —domingo— quedaba
+ * fuera SIN AVISO).
  *
- * Causa raíz (dos partes, ver reporte): 1) la clasificación colapsaba el
- * rango a una sola fecha (ya corregido en `schedule-scope.ts`); 2) INCLUSO
- * con la fecha correcta, la selección de qué mostrar usaba
- * `spread.slice(0, SHOWN)` sobre un catálogo ya limitado a `perDay` del
- * PRIMER día — la aritmética garantizaba que los primeros `SHOWN` elementos
- * fueran siempre del día más próximo. Esta función agrupa por día desde el
- * inicio: nunca corta antes de repartir entre los días del rango.
+ * Causa raíz original: la selección usaba `spread.slice(0, SHOWN)` sobre un
+ * catálogo ya limitado por `perDay` del PRIMER día — la aritmética
+ * garantizaba que los primeros elementos fueran siempre del día más próximo.
+ * Causa raíz de la segunda vuelta: repartir "hasta `RANGE_PER_DAY` por día,
+ * en orden, hasta agotar `RANGE_TOTAL`" sigue pudiendo agotar el tope ANTES
+ * de llegar al último día si los días anteriores tienen cupo de sobra — el
+ * primer día en desaparecer nunca es el primero del rango, es el que quede
+ * fuera del presupuesto, pero el efecto es el mismo: un día con disponibilidad
+ * real se vuelve invisible.
+ *
+ * Algoritmo (dos pasadas, nunca al revés):
+ *  1) UN slot por cada día con cupo, mientras alcance el presupuesto — esto
+ *     es lo que garantiza que ningún día desaparezca solo por venir "tarde"
+ *     en la lista.
+ *  2) Con lo que sobre del presupuesto, completar cada día ya representado
+ *     hasta `RANGE_PER_DAY`.
+ *  3) Lo que no alcanzó a mostrarse (slots sueltos dentro de un día ya
+ *     mostrado, o días enteros que ni con 1 slot cupieron) se cuenta y se
+ *     anuncia explícitamente — nunca se omite en silencio.
  */
 async function offerGrouped(input: {
   organizationId: string;
@@ -205,45 +236,89 @@ async function offerGrouped(input: {
     return { ok: false, text: input.vacioTexto };
   }
 
-  // Reparte por día ANTES de aplicar cualquier tope total: así un rango de
-  // varios días nunca se queda con solo el primero.
-  const spread = spreadByDay(all, {
-    timezone: settings.timezone,
-    limit: RANGE_TOTAL,
-    perDay: RANGE_PER_DAY,
-    now,
-  });
+  // Todo lo disponible, agrupado por día real — `all` ya viene ordenado
+  // ascendente (computeAvailability), así que el orden de inserción del Map
+  // ya es cronológico.
+  const porDiaTodos = new Map<string, AvailableSlot[]>();
+  for (const s of all) {
+    const d = dayIsoInTz(new Date(s.startUtc), settings.timezone);
+    const bucket = porDiaTodos.get(d);
+    if (bucket) bucket.push(s);
+    else porDiaTodos.set(d, [s]);
+  }
+  const diasOrdenados = [...porDiaTodos.keys()];
+  const totalAvailableDays = diasOrdenados.length;
+  const totalAvailableSlots = all.length;
+
+  // Pasada 1: al menos un slot por cada día, mientras alcance.
+  const mostrar = new Map<string, AvailableSlot[]>();
+  let presupuesto = RANGE_TOTAL;
+  for (const dia of diasOrdenados) {
+    if (presupuesto <= 0) break;
+    mostrar.set(dia, [porDiaTodos.get(dia)![0]!]);
+    presupuesto -= 1;
+  }
+  // Pasada 2: completar hasta RANGE_PER_DAY por día, en el mismo orden,
+  // mientras quede presupuesto.
+  for (const dia of mostrar.keys()) {
+    if (presupuesto <= 0) break;
+    const todos = porDiaTodos.get(dia)!;
+    const actual = mostrar.get(dia)!;
+    while (actual.length < RANGE_PER_DAY && actual.length < todos.length && presupuesto > 0) {
+      actual.push(todos[actual.length]!);
+      presupuesto -= 1;
+    }
+  }
+
+  const displayedDays = mostrar.size;
+  const displayedSlots = [...mostrar.values()].reduce((n, a) => n + a.length, 0);
+  const remainingDays = totalAvailableDays - displayedDays;
+  const remainingSlots = totalAvailableSlots - displayedSlots;
+  const pagination: SchedulePagination = {
+    totalAvailableSlots,
+    displayedSlots,
+    totalAvailableDays,
+    displayedDays,
+    remainingSlots,
+    remainingDays,
+    truncated: remainingDays > 0 || remainingSlots > 0,
+  };
 
   await replaceOffers(
     input.organizationId,
     input.conversationId,
-    spread.map((s) => ({ startUtc: s.startUtc, label: s.label }))
+    [...mostrar.values()].flat().map((s) => ({ startUtc: s.startUtc, label: s.label }))
   );
 
-  // Cuántos huecos había DE VERDAD por día (antes del tope de exhibición),
-  // para saber si hace falta el pie "tengo más horarios ese día".
-  const totalPorDia = new Map<string, number>();
-  for (const s of all) {
-    const d = dayIsoInTz(new Date(s.startUtc), settings.timezone);
-    totalPorDia.set(d, (totalPorDia.get(d) ?? 0) + 1);
-  }
-
-  const porDia = new Map<string, typeof spread>();
-  for (const s of spread) {
-    const bucket = porDia.get(s.dayIso);
-    if (bucket) bucket.push(s);
-    else porDia.set(s.dayIso, [s]);
-  }
-
-  const bloques = [...porDia.entries()].map(([dayIso, slots]) => {
-    const titulo = capitalize(slots[0]!.dayLabel);
-    const horas = slots.map((s) => `• ${s.time}`).join("\n");
-    const quedanMas = (totalPorDia.get(dayIso) ?? 0) > slots.length;
-    const pie = quedanMas ? "\n(tengo más horarios ese día si quieres verlos)" : "";
+  const bloques = [...mostrar.entries()].map(([dia, slots]) => {
+    const titulo = capitalize(dayLabelInTz(slots[0]!.startUtc, settings.timezone, now));
+    const horas = slots.map((s) => `• ${timeInTz(s.startUtc, settings.timezone)}`).join("\n");
+    const quedanMasEseDia = porDiaTodos.get(dia)!.length > slots.length;
+    const pie = quedanMasEseDia ? "\n(tengo más horarios ese día si quieres verlos)" : "";
     return `${titulo}\n${horas}${pie}`;
   });
 
-  return { ok: true, text: `${input.encabezado}\n\n${bloques.join("\n\n")}` };
+  // Nunca un corte silencioso: si quedaron días ENTEROS sin representar, se
+  // nombran explícitamente (con fecha real, no un "hay más" genérico); si
+  // los días ya están todos pero sobran slots sueltos, un aviso más corto.
+  let cola = "";
+  if (remainingDays > 0) {
+    const diasOmitidos = diasOrdenados.filter((d) => !mostrar.has(d));
+    const etiquetas = diasOmitidos.map((d) => dateLabelInTz(d, settings.timezone));
+    const listado =
+      etiquetas.length === 1
+        ? etiquetas[0]!
+        : `${etiquetas.slice(0, -1).join(", ")} y ${etiquetas[etiquetas.length - 1]}`;
+    cola = `\n\nTambién tengo disponibilidad ${listado}. ¿Quieres que te muestre esos horarios?`;
+  } else if (remainingSlots > 0) {
+    cola = "\n\nTengo más horarios disponibles en algunos de estos días.";
+  }
+
+  return {
+    ok: true,
+    text: `${input.encabezado}\n\n${bloques.join("\n\n")}${cola}`,
+    pagination,
+  };
 }
 
 /**
