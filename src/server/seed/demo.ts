@@ -1,7 +1,8 @@
-import { eq, inArray } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import type { getDb } from "@/lib/db";
 import { schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { scoped } from "@/lib/db/tenant";
 
 /**
  * Negocio de demostración "Ferretería El Martillo" (FR-075).
@@ -140,41 +141,81 @@ export async function seedDemo(
   const prevContacts = await db
     .select({ id: schema.contact.id })
     .from(schema.contact)
-    .where(inArray(schema.contact.phone, demoPhones));
+    .where(
+      scoped(
+        schema.contact.organizationId,
+        organizationId,
+        inArray(schema.contact.phone, demoPhones)
+      )
+    );
   const prevIds = prevContacts.map((c) => c.id);
   if (prevIds.length > 0) {
     const prevConvs = await db
       .select({ id: schema.conversation.id })
       .from(schema.conversation)
-      .where(inArray(schema.conversation.contactId, prevIds));
+      .where(
+        scoped(
+          schema.conversation.organizationId,
+          organizationId,
+          inArray(schema.conversation.contactId, prevIds)
+        )
+      );
     const convIds = prevConvs.map((c) => c.id);
     if (convIds.length > 0) {
       await db
         .delete(schema.message)
-        .where(inArray(schema.message.conversationId, convIds));
+        .where(
+          scoped(
+            schema.message.organizationId,
+            organizationId,
+            inArray(schema.message.conversationId, convIds)
+          )
+        );
       await db
         .delete(schema.conversation)
-        .where(inArray(schema.conversation.id, convIds));
+        .where(
+          scoped(
+            schema.conversation.organizationId,
+            organizationId,
+            inArray(schema.conversation.id, convIds)
+          )
+        );
     }
-    await db.delete(schema.lead).where(inArray(schema.lead.contactId, prevIds));
-    await db.delete(schema.contact).where(inArray(schema.contact.id, prevIds));
+    await db
+      .delete(schema.lead)
+      .where(
+        scoped(
+          schema.lead.organizationId,
+          organizationId,
+          inArray(schema.lead.contactId, prevIds)
+        )
+      );
+    await db
+      .delete(schema.contact)
+      .where(
+        scoped(
+          schema.contact.organizationId,
+          organizationId,
+          inArray(schema.contact.id, prevIds)
+        )
+      );
   }
   // KB y corridas demo previas
   await db
     .delete(schema.kbEntry)
-    .where(eq(schema.kbEntry.organizationId, organizationId));
+    .where(scoped(schema.kbEntry.organizationId, organizationId));
   await db
     .delete(schema.agentTestCase)
-    .where(eq(schema.agentTestCase.organizationId, organizationId));
+    .where(scoped(schema.agentTestCase.organizationId, organizationId));
   await db
     .delete(schema.agentTestRun)
-    .where(eq(schema.agentTestRun.organizationId, organizationId));
+    .where(scoped(schema.agentTestRun.organizationId, organizationId));
 
   // --- Etapas (por nombre) ---
   const stages = await db
     .select()
     .from(schema.pipelineStage)
-    .where(eq(schema.pipelineStage.organizationId, organizationId));
+    .where(scoped(schema.pipelineStage.organizationId, organizationId));
   const stageByName = new Map(stages.map((s) => [s.name, s.id]));
   const fallbackStage = stages[0]?.id;
   if (!fallbackStage) throw new Error("La organización no tiene etapas");
@@ -264,7 +305,7 @@ export async function seedDemo(
       greeting: "¡Hola! Soy Martillito, el asistente de Ferretería El Martillo 🔨",
       updatedAt: new Date(),
     })
-    .where(eq(schema.agentProfile.organizationId, organizationId));
+    .where(scoped(schema.agentProfile.organizationId, organizationId));
 
   // --- Corrida de Laboratorio de ejemplo (guardada, con el hueco encontrado) ---
   const runId = newId("testRun");
@@ -380,7 +421,7 @@ export async function isDomainEmpty(
   const rows = await db
     .select({ id: schema.contact.id })
     .from(schema.contact)
-    .where(eq(schema.contact.organizationId, organizationId))
+    .where(scoped(schema.contact.organizationId, organizationId))
     .limit(1);
   return rows.length === 0;
 }
