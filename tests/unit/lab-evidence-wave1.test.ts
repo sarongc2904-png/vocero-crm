@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  Verdict,
   validateAndAnchorVerdict,
   type VerdictType,
 } from "@/server/lab/judge";
@@ -120,18 +121,18 @@ describe("Wave 1 - evidencia anclada del juez", () => {
     });
   });
 
-  it("no existe un tipo de referencia a mensajes del cliente", () => {
-    const bad = {
-      source: "customer_message",
-      index: 0,
-    } as unknown as VerdictType["hallazgos"][number]["evidenceRefs"][number];
-
-    const result = validateAndAnchorVerdict({
-      verdict: verdict({ evidenceRefs: [bad] }),
-      transcript,
-      actionTrace: trace,
+  it("el schema no permite citar mensajes del cliente", () => {
+    const parsed = Verdict.safeParse({
+      ...verdict(),
+      hallazgos: [
+        {
+          ...verdict().hallazgos[0],
+          tipo: "alucinacion",
+          evidenceRefs: [{ source: "customer_message", index: 0 }],
+        },
+      ],
     });
 
-    expect(result.ok).toBe(false);
+    expect(parsed.success).toBe(false);
   });
 });
