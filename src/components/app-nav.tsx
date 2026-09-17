@@ -8,6 +8,7 @@ import {
   FlaskConical,
   Inbox,
   Kanban,
+  LayoutDashboard,
   LogOut,
   Settings,
   Sparkles,
@@ -32,6 +33,7 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
+  { href: "/dashboard", label: "Resumen", icon: LayoutDashboard },
   { href: "/inbox", label: "Bandeja", icon: Inbox, badge: true },
   { href: "/pipeline", label: "Pipeline", icon: Kanban },
   { href: "/contacts", label: "Contactos", icon: Users },
@@ -119,8 +121,13 @@ export function AppNav({
   const availableItems = role === "agent"
     ? NAV.filter((item) => item.href !== "/agent" && item.href !== "/lab")
     : NAV;
-  const items = agenda
-    ? [...availableItems.slice(0, 2), AGENDA_ITEM, ...availableItems.slice(2)]
+  const pipelineIndex = availableItems.findIndex((item) => item.href === "/pipeline");
+  const items = agenda && pipelineIndex >= 0
+    ? [
+        ...availableItems.slice(0, pipelineIndex + 1),
+        AGENDA_ITEM,
+        ...availableItems.slice(pipelineIndex + 1),
+      ]
     : availableItems;
 
   return (
@@ -216,14 +223,6 @@ export function AppNav({
         </button>
       </div>
 
-      {/* Qué versión está corriendo. Discreta pero siempre visible: la duda
-          "¿ya se desplegó?" aparece justo cuando algo no funciona, y mandar a
-          alguien a comparar commits en el servidor significa que no lo hará. */}
-      {/* `text-2` y no `text-3`: a 10.5px, el gris más claro no pasa AA contra
-          el fondo de la barra. Discreta sí, ilegible no. */}
-      {/* El nombre sale de la marca, no de una constante: esto es white-label,
-          y una instancia rebautizada que dice "Vocero" en el tooltip delata el
-          producto de debajo justo donde el operador la mira todos los días. */}
       <p
         className="mt-2 px-2.5 font-mono text-[10.5px] tracking-[0.06em] text-text-2"
         title={
