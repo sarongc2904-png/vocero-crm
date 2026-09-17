@@ -7,6 +7,7 @@ export type DashboardStageMetric = {
   amountCents: number;
   amountKnown: number;
   amountUnknown: number;
+  amountOtherCurrency: number;
 };
 
 export type DashboardWorkload = {
@@ -32,6 +33,7 @@ export type DashboardMetrics = {
     pipelineAmountCents: number;
     pipelineAmountKnown: number;
     pipelineAmountUnknown: number;
+    pipelineAmountOtherCurrency: number;
   };
   appointments: {
     today: number;
@@ -42,7 +44,9 @@ export type DashboardMetrics = {
 };
 
 export async function getDashboardMetrics(
-  organizationId: string
+  organizationId: string,
+  businessCurrency: string,
+  timezone: string
 ): Promise<DashboardMetrics> {
   const sql = getSql();
 
@@ -82,6 +86,7 @@ export async function getDashboardMetrics(
         pipeline_amount_cents: number;
         pipeline_amount_known: number;
         pipeline_amount_unknown: number;
+        pipeline_amount_other_currency: number;
       }[]>`
         select
           count(*)::int as total,
@@ -90,9 +95,24 @@ export async function getDashboardMetrics(
           )::int as qualified,
           count(*) filter (where ps.kind = 'won')::int as won,
           count(*) filter (where ps.kind = 'lost')::int as lost,
-          coalesce(sum(l.amount_cents) filter (where ps.kind = 'open'), 0)::bigint as pipeline_amount_cents,
-          count(*) filter (where ps.kind = 'open' and l.amount_cents is not null)::int as pipeline_amount_known,
-          count(*) filter (where ps.kind = 'open' and l.amount_cents is null)::int as pipeline_amount_unknown
+          coalesce(sum(l.amount_cents) filter (
+            where ps.kind = 'open'
+              and l.amount_cents is not null
+              and coalesce(l.currency, ${businessCurrency}) = ${businessCurrency}
+          ), 0)::bigint as pipeline_amount_cents,
+          count(*) filter (
+            where ps.kind = 'open'
+              and l.amount_cents is not null
+              and coalesce(l.currency, ${businessCurrency}) = ${businessCurrency}
+          )::int as pipeline_amount_known,
+          count(*) filter (
+            where ps.kind = 'open' and l.amount_cents is null
+          )::int as pipeline_amount_unknown,
+          count(*) filter (
+            where ps.kind = 'open'
+              and l.amount_cents is not null
+              and coalesce(l.currency, ${businessCurrency}) <> ${businessCurrency}
+          )::int as pipeline_amount_other_currency
         from lead l
         join contact c
           on c.id = l.contact_id
@@ -110,7 +130,8 @@ export async function getDashboardMetrics(
           count(*) filter (
             where b.kind = 'session'
               and b.status = 'agendada'
-              and b.scheduled_at::date = current_date
+              and (b.scheduled_at at time zone 'UTC' at time zone ${timezone})::date =
+                  (now() at time zone ${timezone})::date
           )::int as today,
           count(*) filter (
             where b.kind = 'session'
@@ -128,14 +149,25 @@ export async function getDashboardMetrics(
         amount_cents: number;
         amount_known: number;
         amount_unknown: number;
+        amount_other_currency: number;
       }[]>`
         select
           ps.name,
           ps.kind,
           count(l.id)::int as count,
-          coalesce(sum(l.amount_cents), 0)::bigint as amount_cents,
-          count(l.id) filter (where l.amount_cents is not null)::int as amount_known,
-          count(l.id) filter (where l.amount_cents is null)::int as amount_unknown
+          coalesce(sum(l.amount_cents) filter (
+            where l.amount_cents is not null
+              and coalesce(l.currency, ${businessCurrency}) = ${businessCurrency}
+          ), 0)::bigint as amount_cents,
+          count(l.id) filter (
+            where l.amount_cents is not null
+              and coalesce(l.currency, ${businessCurrency}) = ${businessCurrency}
+          )::int as amount_known,
+          count(l.id) filter (where l.amount_cents is null)::int as amount_unknown,
+          count(l.id) filter (
+            where l.amount_cents is not null
+              and coalesce(l.currency, ${businessCurrency}) <> ${businessCurrency}
+          )::int as amount_other_currency
         from pipeline_stage ps
         left join lead l
           on l.stage_id = ps.id
@@ -194,6 +226,7 @@ export async function getDashboardMetrics(
     pipeline_amount_cents: 0,
     pipeline_amount_known: 0,
     pipeline_amount_unknown: 0,
+    pipeline_amount_other_currency: 0,
   };
   const appointments = appointmentRows[0] ?? { today: 0, upcoming: 0 };
 
@@ -214,6 +247,7 @@ export async function getDashboardMetrics(
       pipelineAmountCents: Number(leads.pipeline_amount_cents),
       pipelineAmountKnown: Number(leads.pipeline_amount_known),
       pipelineAmountUnknown: Number(leads.pipeline_amount_unknown),
+      pipelineAmountOtherCurrency: Number(leads.pipeline_amount_other_currency),
     },
     appointments: {
       today: Number(appointments.today),
@@ -226,6 +260,7 @@ export async function getDashboardMetrics(
       amountCents: Number(row.amount_cents),
       amountKnown: Number(row.amount_known),
       amountUnknown: Number(row.amount_unknown),
+      amountOtherCurrency: Number(row.amount_other_currency),
     })),
     workload: workloadRows.map((row) => ({
       label: row.label,
