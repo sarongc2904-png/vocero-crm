@@ -8,16 +8,19 @@ function normalize(text: string): string {
 }
 
 const EXPLICIT_SCHEDULING_WORDS =
-  /\b(citas?|agend(?:a|ar|arme|arnos|ado|ando|emos|en)?|reserv(?:a|ar|arme|arnos|ado|ando|emos|en)?|disponib\w*|reprogram\w*|program\w*|espacios?|huecos?|cupos?)\b/;
+  /\b(citas?|horarios?|agend(?:a|ar|arme|arnos|ado|ando|emos|en)?|reserv(?:a|ar|arme|arnos|ado|ando|emos|en)?|reprogram\w*|program(?:ar|arme|arnos|ado|ando|emos|en)|huecos?|cupos?)\b/;
+
+const INFORMATIONAL_CATALOG_WORDS =
+  /\b(servicios?|tratamientos?|productos?|paquetes?|programas?|planes?|precios?|costos?|menu)\b/;
 
 /**
  * Señal determinista de que el turno actual realmente habla de agenda.
  *
- * No depende de la acción elegida por el LLM. Primero reutiliza el parser
- * temporal (día/rango/próxima/disponibilidad general) y después acepta verbos
- * explícitos de reserva. Así una pregunta informativa como "¿qué servicios
- * ofrecen?" no puede abrir la agenda, pero "quiero agendar ese servicio" sí.
- * También funciona con transcripciones sin signos de puntuación.
+ * La intención explícita de cita siempre gana. Si el mensaje habla de un
+ * catálogo informativo (servicios, tratamientos, productos, precios, etc.) y
+ * no contiene ninguna palabra inequívoca de agenda, no abrimos horarios aunque
+ * también diga "disponible" o mencione una fecha. Esto protege frases como
+ * "¿qué servicios tienen disponibles mañana?" y transcripciones equivalentes.
  */
 export function hasSchedulingSignal(input: {
   text: string;
@@ -26,6 +29,10 @@ export function hasSchedulingSignal(input: {
 }): boolean {
   const text = input.text.trim();
   if (!text) return false;
-  if (resolveScheduleScope(text, input.now, input.timezone)) return true;
-  return EXPLICIT_SCHEDULING_WORDS.test(normalize(text));
+
+  const normalized = normalize(text);
+  if (EXPLICIT_SCHEDULING_WORDS.test(normalized)) return true;
+  if (INFORMATIONAL_CATALOG_WORDS.test(normalized)) return false;
+
+  return Boolean(resolveScheduleScope(text, input.now, input.timezone));
 }
