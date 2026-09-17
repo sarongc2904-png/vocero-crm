@@ -65,7 +65,10 @@ export function agentActionSchema(agenda: boolean) {
     : z.discriminatedUnion("action", [...baseActions]);
 }
 
-export type AgentActionType = z.infer<typeof AgentAction>;
+// El pipeline manipula la forma de entrada antes de que Zod aplique transforms.
+// `z.input` mantiene `day?: string` compatible con ese flujo y evita que el tipo
+// de salida (`day?: undefined`) se mezcle con acciones aún no parseadas.
+export type AgentActionType = z.input<typeof AgentAction>;
 
 export function resolveStage(
   requested: string,
