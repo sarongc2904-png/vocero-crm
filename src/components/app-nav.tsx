@@ -8,6 +8,7 @@ import {
   FlaskConical,
   Inbox,
   Kanban,
+  LayoutDashboard,
   LogOut,
   Settings,
   Sparkles,
@@ -32,6 +33,7 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/inbox", label: "Bandeja", icon: Inbox, badge: true },
   { href: "/pipeline", label: "Pipeline", icon: Kanban },
   { href: "/contacts", label: "Contactos", icon: Users },
@@ -119,8 +121,13 @@ export function AppNav({
   const availableItems = role === "agent"
     ? NAV.filter((item) => item.href !== "/agent" && item.href !== "/lab")
     : NAV;
-  const items = agenda
-    ? [...availableItems.slice(0, 2), AGENDA_ITEM, ...availableItems.slice(2)]
+  const pipelineIndex = availableItems.findIndex((item) => item.href === "/pipeline");
+  const items = agenda && pipelineIndex >= 0
+    ? [
+        ...availableItems.slice(0, pipelineIndex + 1),
+        AGENDA_ITEM,
+        ...availableItems.slice(pipelineIndex + 1),
+      ]
     : availableItems;
 
   return (

@@ -140,3 +140,13 @@ export async function resolveActiveMembership(
     usedFallback: selected.organizationId !== activeOrganizationId,
   };
 }
+
+/** Valida un target de tenant sin revelar ni aceptar IDs inexistentes. */
+export async function organizationExists(organizationId: string): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ id: schema.organization.id })
+    .from(schema.organization)
+    .where(eq(schema.organization.id, organizationId))
+    .limit(1);
+  return Boolean(row);
+}

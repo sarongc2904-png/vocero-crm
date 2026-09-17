@@ -6,6 +6,10 @@ import {
   type SessionContext,
 } from "@/lib/auth/session";
 import {
+  hasOrganizationPermission,
+  type OrganizationPermission,
+} from "@/lib/auth/permissions";
+import {
   hasOrganizationRole,
   type OrganizationRole,
 } from "@/lib/auth/roles";
@@ -48,17 +52,42 @@ export function withAuth<Args extends unknown[]>(
   };
 }
 
-/** Gate único para autorización por rol dentro de la organización activa. */
+/** Gate heredado por rol; se conserva para rutas aún no migradas a permisos. */
 export function withOrgRoles<Args extends unknown[]>(
   roles: readonly OrganizationRole[],
   handler: (session: SessionContext, ...args: Args) => Promise<Response>
 ): (...args: Args) => Promise<Response> {
   return withAuth(async (session, ...args: Args) => {
-    if (!hasOrganizationRole(session.role, roles)) {
+    if (!session.isSuperadmin && !hasOrganizationRole(session.role, roles)) {
       return apiError(
         403,
         "forbidden",
         "Tu rol no permite realizar esta acción en la organización activa"
+      );
+    }
+    return handler(session, ...args);
+  });
+}
+
+/**
+ * Gate granular de RBAC. El superadmin puede atravesarlo, pero sólo después de
+ * que requireSession haya resuelto y validado un tenant activo explícito.
+ */
+export function withOrgPermissions<Args extends unknown[]>(
+  permissions: readonly OrganizationPermission[],
+  handler: (session: SessionContext, ...args: Args) => Promise<Response>
+): (...args: Args) => Promise<Response> {
+  return withAuth(async (session, ...args: Args) => {
+    const allowed = permissions.every((permission) =>
+      hasOrganizationPermission(session.role, permission, {
+        isSuperadmin: session.isSuperadmin,
+      })
+    );
+    if (!allowed) {
+      return apiError(
+        403,
+        "forbidden",
+        "No tienes permisos para realizar esta acción en la organización activa"
       );
     }
     return handler(session, ...args);

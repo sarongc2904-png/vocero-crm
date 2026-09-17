@@ -2,8 +2,8 @@ import { z } from "zod";
 
 /**
  * Acción tipada del agente: exactamente UNA por turno (FR-021).
- * El servidor valida cada acción contra sus allowlists (etapas de la org);
- * lo que no valida se degrada, nunca se ejecuta a ciegas.
+ * El servidor valida cada acción contra sus allowlists; lo que no valida se
+ * degrada, nunca se ejecuta a ciegas.
  */
 const baseActions = [
   z.object({ action: z.literal("none") }),
@@ -26,32 +26,35 @@ const baseActions = [
 ] as const;
 
 /**
- * 015 — Las dos acciones de agenda. Solo se registran si esta instancia tiene
- * la bandera encendida: donde no hay agenda, el modelo ni siquiera puede
- * nombrarlas.
+ * Acciones de agenda.
  *
- * `reply` es una introducción opcional, NO la lista de horarios: los horarios
- * los pega el motor con las etiquetas reales. Y `startUtc` tiene que ser
- * exactamente uno de los que el sistema ofreció — si no, el motor lo rechaza y
- * se re-ofrece.
+ * El campo `day` se acepta únicamente por compatibilidad con modelos/prompts
+ * antiguos, pero se SANITIZA a undefined: jamás puede convertirse en fuente de
+ * verdad. La fecha real se resuelve en backend con `resolveScheduleScope` /
+ * `resolveScheduleIntent` a partir del mensaje del cliente.
+ *
+ * `reply` es solo introducción opcional, nunca la lista de horarios.
+ * `book_slot.startUtc` y `reschedule_slot.startUtc` deben coincidir exactamente
+ * con un horario ofrecido previamente por el sistema. El motor de agenda lo
+ * valida antes de crear o mover una cita.
  */
 const agendaActions = [
   z.object({
     action: z.literal("offer_slots"),
-    /**
-     * Día que el cliente pidió, si mencionó uno ("mañana", "el viernes", una
-     * fecha), como YYYY-MM-DD calculado por el modelo a partir de la fecha de
-     * "hoy" que el prompt le da. Ausente si no mencionó ningún día: el motor
-     * ofrece entonces los más próximos, sin filtrar.
-     */
     day: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .optional(),
+      .optional()
+      .transform(() => undefined),
     reply: z.string().optional(),
   }),
   z.object({
     action: z.literal("book_slot"),
+    startUtc: z.string().min(1),
+    reply: z.string().optional(),
+  }),
+  z.object({
+    action: z.literal("reschedule_slot"),
     startUtc: z.string().min(1),
     reply: z.string().optional(),
   }),
@@ -62,19 +65,20 @@ export const AgentAction = z.discriminatedUnion("action", [
   ...agendaActions,
 ]);
 
-/** El esquema que se le exige al modelo en ESTE turno. */
 export function agentActionSchema(agenda: boolean) {
   return agenda
     ? AgentAction
     : z.discriminatedUnion("action", [...baseActions]);
 }
 
-export type AgentActionType = z.infer<typeof AgentAction>;
-
 /**
- * Resuelve el nombre de etapa devuelto por el modelo contra las etapas reales
- * de la organización (exacto → lower-case). Sin match: degradar a reply/none.
+ * Tipo de trabajo interno del pipeline: usamos el INPUT del schema porque
+ * `offer_slots.day` todavía puede existir en asignaciones internas/legacy.
+ * El parseo runtime sigue transformándolo a `undefined`, así que el modelo
+ * nunca recupera autoridad sobre la fecha real.
  */
+export type AgentActionType = z.input<typeof AgentAction>;
+
 export function resolveStage(
   requested: string,
   stages: { id: string; name: string }[]
@@ -85,12 +89,12 @@ export function resolveStage(
   return stages.find((s) => s.name.toLowerCase() === lower) ?? null;
 }
 
-/** Degrada una acción que no se pudo ejecutar (FR-021 / contrato ai.md). */
 export function degradeAction(action: AgentActionType): AgentActionType {
   if (
     action.action === "move_stage" ||
     action.action === "offer_slots" ||
-    action.action === "book_slot"
+    action.action === "book_slot" ||
+    action.action === "reschedule_slot"
   ) {
     return action.reply
       ? { action: "reply", text: action.reply }

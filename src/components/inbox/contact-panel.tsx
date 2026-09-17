@@ -14,6 +14,7 @@ import { ContactAvatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { FichaPanel } from "@/components/ficha-panel";
+import { AssignmentControl } from "./assignment-control";
 
 const HANDOFF_LABELS: Record<string, string> = {
   cliente: "El cliente pidió un humano",
@@ -30,7 +31,6 @@ export function ContactPanel({
   onClose,
 }: {
   conversation: ConversationDto;
-  /** Aumenta con cada evento SSE relevante: dispara un refetch en vivo. */
   refreshKey?: number;
   onPatchConversation: (patch: {
     aiEnabled?: boolean;
@@ -45,20 +45,13 @@ export function ContactPanel({
   const [stages, setStages] = useState<StageDto[]>([]);
   const [currentStageId, setCurrentStageId] = useState<string | null>(null);
   const [leadId, setLeadId] = useState<string | null>(null);
-  // Estado global del agente: sin esto, el toggle "Respondiendo" mentiría
-  // cuando el agente aún no se ha configurado/encendido.
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(false);
 
   const contactId = conversation.contact.id;
-
   const agentReady = aiConfigured && agentEnabled;
-  // El control es la FUENTE DE VERDAD de la conversación: el agente in-process
-  // y cualquier cerebro externo conectado por /api/bot/* respetan este flag,
-  // así que el toggle opera siempre — `agentReady` solo matiza el texto.
   const aiActive = conversation.aiEnabled && !conversation.handoffAt;
 
-  // Carga inicial (incluye notas): se re-ejecuta al cambiar de contacto.
   const refetch = useCallback(async () => {
     const [detail, stagesRes, agentRes] = await Promise.all([
       fetch(`/api/contacts/${contactId}`).then((r) => (r.ok ? r.json() : null)),
@@ -77,17 +70,12 @@ export function ContactPanel({
     setNotesLoaded(true);
   }, [contactId]);
 
-  // Refetch en vivo (etapa/lead + estado del agente) SIN tocar las notas, para
-  // no pisar lo que el operador esté escribiendo. Lo dispara el SSE.
   const refreshLive = useCallback(async () => {
     const [detail, agentRes] = await Promise.all([
       fetch(`/api/contacts/${contactId}`).then((r) => (r.ok ? r.json() : null)),
       fetch("/api/agent/profile").then((r) => (r.ok ? r.json() : null)),
     ]).catch(() => [null, null]);
     if (detail) {
-      // La ficha SÍ se refresca en vivo: el agente la va llenando mientras la
-      // conversación ocurre, y verla aparecer sola es justo para lo que sirve.
-      // No pisa una edición a medias — el borrador vive dentro del panel.
       setFicha(detail.contact?.ficha ?? {});
       setCurrentStageId(detail.stage?.id ?? null);
       setLeadId(detail.lead?.id ?? null);
@@ -104,13 +92,13 @@ export function ContactPanel({
   }, [refetch]);
 
   useEffect(() => {
-    if (!notesLoaded) return; // la carga inicial ya trae el estado fresco
+    if (!notesLoaded) return;
     void refreshLive();
   }, [refreshKey, notesLoaded, refreshLive]);
 
   async function moveToStage(stageId: string) {
     if (!leadId || stageId === currentStageId) return;
-    setCurrentStageId(stageId); // optimista
+    setCurrentStageId(stageId);
     await fetch(`/api/pipeline/leads/${leadId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -119,7 +107,6 @@ export function ContactPanel({
     void refreshLive();
   }
 
-  /** Manda SOLO lo que cambió: el servidor hace merge (ver `server/bot/ficha`). */
   async function saveFicha(patch: Record<string, FichaValue | null>) {
     setFicha((prev) => {
       const next = { ...prev };
@@ -127,7 +114,7 @@ export function ContactPanel({
         if (v === null) delete next[k];
         else next[k] = v;
       }
-      return next; // optimista: el refetch de abajo confirma
+      return next;
     });
     await fetch(`/api/contacts/${contactId}`, {
       method: "PATCH",
@@ -163,7 +150,6 @@ export function ContactPanel({
       </header>
 
       <div className="flex-1 overflow-y-auto">
-        {/* Contacto */}
         <section className="border-b p-4">
           <div className="flex items-center gap-3">
             <ContactAvatar
@@ -180,6 +166,8 @@ export function ContactPanel({
               </p>
             </div>
           </div>
+
+          <AssignmentControl conversationId={conversation.id} />
 
           {conversation.handoffAt && (
             <div className="mt-3 rounded-md border border-warning-soft bg-warning-tint p-3">
@@ -262,7 +250,6 @@ export function ContactPanel({
           </div>
         </section>
 
-        {/* Stepper de etapa */}
         {stages.length > 0 && leadId && (
           <section className="border-b p-4">
             <p className="kicker mb-3">Etapa del pipeline</p>
@@ -308,11 +295,8 @@ export function ContactPanel({
           </section>
         )}
 
-        {/* Ficha: lo que se SABE del lead. Va antes de Notas —lo que alguien
-            OPINA— porque es lo que se consulta a mitad de una conversación. */}
         <FichaPanel ficha={ficha} onSave={saveFicha} />
 
-        {/* Notas */}
         <section className="p-4">
           <p className="kicker mb-2">Notas</p>
           <Textarea

@@ -6,6 +6,11 @@ import { runAgentTurn } from "@/server/ai/pipeline";
 import { renderKb } from "@/server/ai/prompts";
 import { computeScore, judgeCase } from "@/server/lab/judge";
 import { PERSONAS, type Persona } from "@/server/lab/personas";
+import {
+  persistActionTrace,
+  type AgentActionTrace,
+  type AgentActionTraceEntry,
+} from "@/server/lab/action-trace";
 
 /**
  * Runner del Laboratorio (FR-030/FR-034): corrida en segundo plano DENTRO del
@@ -13,11 +18,8 @@ import { PERSONAS, type Persona } from "@/server/lab/personas";
  * global de 10 minutos, y lock de concurrencia por índice parcial UNIQUE en
  * BD (máx. 1 corrida `running` por organización).
  *
- * Sandbox (FR-031): las conversaciones se crean con is_test=true; el pipeline
- * del agente persiste las respuestas sin tocar la API, y el sender real lanza
- * si algo intenta enviarlas.
+ * Wave 1: toda lectura/actualización por id también exige organizationId.
  */
-
 const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class RunConflictError extends Error {}
@@ -32,7 +34,6 @@ export async function startRun(organizationId: string): Promise<string> {
       .returning();
     runId = inserted[0]!.id;
   } catch (err) {
-    // Violación del índice parcial UNIQUE → ya hay una corrida activa.
     if (isUniqueViolation(err)) {
       throw new RunConflictError("Ya hay una corrida en curso");
     }
@@ -49,7 +50,6 @@ export async function startRun(organizationId: string): Promise<string> {
     }))
   );
 
-  // Fire-and-forget in-process: el POST regresa ya; el progreso va por SSE.
   void executeRun(runId, organizationId).catch(async (err) => {
     console.error("[lab] corrida falló:", err);
     await failRun(runId, organizationId, String(err));
@@ -83,7 +83,12 @@ async function runAllCases(
   const cases = await db
     .select()
     .from(schema.agentTestCase)
-    .where(eq(schema.agentTestCase.runId, runId))
+    .where(
+      and(
+        eq(schema.agentTestCase.organizationId, organizationId),
+        eq(schema.agentTestCase.runId, runId)
+      )
+    )
     .orderBy(asc(schema.agentTestCase.createdAt));
 
   const kbEntries = await db
@@ -120,18 +125,31 @@ async function runAllCases(
     await db
       .update(schema.agentTestCase)
       .set({ status: "running" })
-      .where(eq(schema.agentTestCase.id, testCase.id));
+      .where(
+        and(
+          eq(schema.agentTestCase.organizationId, organizationId),
+          eq(schema.agentTestCase.runId, runId),
+          eq(schema.agentTestCase.id, testCase.id)
+        )
+      );
 
-    const { transcript, conversationId } = await runConversation(
+    const { transcript, conversationId, actionTrace } = await runConversation(
       organizationId,
       persona
     );
+
+    await persistActionTrace({
+      organizationId,
+      testCaseId: testCase.id,
+      trace: actionTrace,
+    });
 
     const outcome = await judgeCase({
       personaKey: persona.key,
       transcript,
       kbText,
       behaviorText,
+      actionTrace,
     });
 
     await db
@@ -143,7 +161,13 @@ async function runAllCases(
         veredicto: outcome.status === "done" ? outcome.verdict.veredicto : null,
         hallazgos: outcome.status === "done" ? outcome.verdict.hallazgos : null,
       })
-      .where(eq(schema.agentTestCase.id, testCase.id));
+      .where(
+        and(
+          eq(schema.agentTestCase.organizationId, organizationId),
+          eq(schema.agentTestCase.runId, runId),
+          eq(schema.agentTestCase.id, testCase.id)
+        )
+      );
 
     done += 1;
     publishProgress(organizationId, runId, "running", done, total);
@@ -155,14 +179,146 @@ async function runAllCases(
       veredicto: schema.agentTestCase.veredicto,
     })
     .from(schema.agentTestCase)
-    .where(eq(schema.agentTestCase.runId, runId));
+    .where(
+      and(
+        eq(schema.agentTestCase.organizationId, organizationId),
+        eq(schema.agentTestCase.runId, runId)
+      )
+    );
   const score = computeScore(finalCases);
 
-  await getDb()
+  await db
     .update(schema.agentTestRun)
     .set({ status: "done", score, finishedAt: new Date() })
-    .where(eq(schema.agentTestRun.id, runId));
+    .where(
+      and(
+        eq(schema.agentTestRun.organizationId, organizationId),
+        eq(schema.agentTestRun.id, runId)
+      )
+    );
   publishProgress(organizationId, runId, "done", done, total, score);
+}
+
+type TraceSnapshot = {
+  handoffReason: string | null;
+  contactNotes: string | null;
+  stageId: string | null;
+  bookingIds: string[];
+  agentMessages: string[];
+};
+
+async function captureTraceSnapshot(input: {
+  organizationId: string;
+  conversationId: string;
+  contactId: string;
+}): Promise<TraceSnapshot> {
+  const db = getDb();
+  const [convRows, contactRows, leadRows, bookingRows, outboundRows] =
+    await Promise.all([
+      db
+        .select({ handoffReason: schema.conversation.handoffReason })
+        .from(schema.conversation)
+        .where(
+          and(
+            eq(schema.conversation.organizationId, input.organizationId),
+            eq(schema.conversation.id, input.conversationId)
+          )
+        )
+        .limit(1),
+      db
+        .select({ notes: schema.contact.notes })
+        .from(schema.contact)
+        .where(
+          and(
+            eq(schema.contact.organizationId, input.organizationId),
+            eq(schema.contact.id, input.contactId)
+          )
+        )
+        .limit(1),
+      db
+        .select({ stageId: schema.lead.stageId })
+        .from(schema.lead)
+        .where(
+          and(
+            eq(schema.lead.organizationId, input.organizationId),
+            eq(schema.lead.contactId, input.contactId)
+          )
+        )
+        .limit(1),
+      db
+        .select({ id: schema.booking.id })
+        .from(schema.booking)
+        .where(
+          and(
+            eq(schema.booking.organizationId, input.organizationId),
+            eq(schema.booking.conversationId, input.conversationId)
+          )
+        ),
+      db
+        .select({ text: schema.message.text })
+        .from(schema.message)
+        .where(
+          and(
+            eq(schema.message.organizationId, input.organizationId),
+            eq(schema.message.conversationId, input.conversationId),
+            eq(schema.message.direction, "out")
+          )
+        )
+        .orderBy(asc(schema.message.createdAt)),
+    ]);
+
+  return {
+    handoffReason: convRows[0]?.handoffReason ?? null,
+    contactNotes: contactRows[0]?.notes ?? null,
+    stageId: leadRows[0]?.stageId ?? null,
+    bookingIds: bookingRows.map((row) => row.id),
+    agentMessages: outboundRows
+      .map((row) => row.text)
+      .filter((text): text is string => Boolean(text)),
+  };
+}
+
+function buildTraceEntry(input: {
+  turn: number;
+  customerMessage: string;
+  before: TraceSnapshot;
+  after: TraceSnapshot;
+}): AgentActionTraceEntry {
+  const newAgentMessages = input.after.agentMessages.slice(
+    input.before.agentMessages.length
+  );
+  const contactNotesChanged =
+    input.before.contactNotes !== input.after.contactNotes;
+  const stageChanged =
+    input.before.stageId !== input.after.stageId
+      ? { from: input.before.stageId, to: input.after.stageId }
+      : null;
+  const bookingCreated = input.after.bookingIds.some(
+    (id) => !input.before.bookingIds.includes(id)
+  );
+  const handoffChanged =
+    input.before.handoffReason !== input.after.handoffReason &&
+    input.after.handoffReason !== null;
+
+  const observedActions: AgentActionTraceEntry["observedActions"] = [];
+  if (newAgentMessages.length > 0) observedActions.push("reply");
+  if (handoffChanged) observedActions.push("handoff");
+  if (contactNotesChanged) observedActions.push("update_lead");
+  if (stageChanged) observedActions.push("move_stage");
+  if (bookingCreated) observedActions.push("book_slot");
+
+  return {
+    turn: input.turn,
+    customerMessage: input.customerMessage,
+    agentMessages: newAgentMessages,
+    observedActions,
+    result: {
+      handoffReason: input.after.handoffReason,
+      contactNotesChanged,
+      stageChanged,
+      bookingCreated,
+    },
+  };
 }
 
 /** Conversa el guion completo contra el agente real; corta al primer handoff. */
@@ -172,10 +328,9 @@ async function runConversation(
 ): Promise<{
   transcript: { role: "cliente" | "agente"; text: string }[];
   conversationId: string;
+  actionTrace: AgentActionTrace;
 }> {
   const db = getDb();
-
-  // Contacto sintético ARCHIVADO (no aparece en la lista ni genera leads).
   const contactId = await upsertTestContact(organizationId, persona);
 
   const convId = newId("conversation");
@@ -187,7 +342,11 @@ async function runConversation(
     aiEnabled: true,
   });
 
+  const actionTrace: AgentActionTrace = [];
+  let turn = 0;
+
   for (const line of persona.script) {
+    turn += 1;
     const now = new Date();
     await db.insert(schema.message).values({
       id: newId("message"),
@@ -202,27 +361,49 @@ async function runConversation(
     await db
       .update(schema.conversation)
       .set({ lastInboundAt: now, lastMessageAt: now, updatedAt: now })
-      .where(eq(schema.conversation.id, convId));
+      .where(
+        and(
+          eq(schema.conversation.organizationId, organizationId),
+          eq(schema.conversation.id, convId)
+        )
+      );
 
-    // Turno REAL del agente, secuencial y sin debounce (FR-030).
-    await runAgentTurn(convId);
+    const before = await captureTraceSnapshot({
+      organizationId,
+      conversationId: convId,
+      contactId,
+    });
 
-    const convRows = await db
-      .select({ handoffAt: schema.conversation.handoffAt })
-      .from(schema.conversation)
-      .where(eq(schema.conversation.id, convId))
-      .limit(1);
-    if (convRows[0]?.handoffAt) break; // primer handoff → fin del guion
+    // Expected organization is passed explicitly so a leaked conversation id
+    // can never make the Lab operate on a different tenant.
+    await runAgentTurn(convId, organizationId);
+
+    const after = await captureTraceSnapshot({
+      organizationId,
+      conversationId: convId,
+      contactId,
+    });
+    actionTrace.push(
+      buildTraceEntry({ turn, customerMessage: line, before, after })
+    );
+
+    if (after.handoffReason) break;
   }
 
   const messages = await db
     .select()
     .from(schema.message)
-    .where(eq(schema.message.conversationId, convId))
+    .where(
+      and(
+        eq(schema.message.organizationId, organizationId),
+        eq(schema.message.conversationId, convId)
+      )
+    )
     .orderBy(asc(schema.message.createdAt));
 
   return {
     conversationId: convId,
+    actionTrace,
     transcript: messages
       .filter((m) => m.text)
       .map((m) => ({
@@ -247,9 +428,6 @@ async function upsertTestContact(
       name: persona.contactName,
       archivedAt: new Date(),
     })
-    // Ídem que en el alta manual: desde 014 el índice único incluye `channel`,
-    // y un ON CONFLICT que no lo nombra no corresponde a ningún índice. Sin
-    // esto, TODA corrida del Laboratorio muere antes de la primera persona.
     .onConflictDoNothing({
       target: [
         schema.contact.organizationId,
@@ -269,7 +447,8 @@ async function upsertTestContact(
       )
     )
     .limit(1);
-  return rows[0]!.id;
+  if (!rows[0]) throw new Error("No se pudo resolver el contacto de prueba");
+  return rows[0].id;
 }
 
 async function failRun(
@@ -281,7 +460,12 @@ async function failRun(
   await db
     .update(schema.agentTestRun)
     .set({ status: "failed", error, finishedAt: new Date() })
-    .where(eq(schema.agentTestRun.id, runId));
+    .where(
+      and(
+        eq(schema.agentTestRun.organizationId, organizationId),
+        eq(schema.agentTestRun.id, runId)
+      )
+    );
   publishProgress(organizationId, runId, "failed", 0, PERSONAS.length);
 }
 

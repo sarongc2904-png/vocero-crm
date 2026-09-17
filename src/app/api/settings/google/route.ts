@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withOrgRoles } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { googleConnector } from "@/server/agenda/connectors/google";
 import {
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 /** 015 — Conexión de Google Calendar. Los secretos entran y no vuelven a salir. */
 
-export const GET = withOrgRoles(["owner", "admin"], async (session) => {
+export const GET = withOrgPermissions(["settings.read"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   const creds = await getGoogleCredentials(session.organizationId);
   if (!creds) return Response.json({ connection: null });
@@ -33,7 +33,7 @@ const credsSchema = z.object({
   calendarId: z.string().trim().optional(),
 });
 
-export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
+export const PUT = withOrgPermissions(["settings.update"], async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   const body = await parseBody(req, credsSchema);
   if (!body.ok) return body.response;
@@ -61,7 +61,7 @@ export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request
   });
 });
 
-export const DELETE = withOrgRoles(["owner", "admin"], async (session) => {
+export const DELETE = withOrgPermissions(["settings.update"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   await deleteGoogleCredentials(session.organizationId);
   return Response.json({ ok: true });

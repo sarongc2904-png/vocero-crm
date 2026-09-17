@@ -24,6 +24,7 @@ import {
   offerRange,
   offerSlots,
 } from "@/server/agenda/agent";
+import { BookingError, rescheduleForConversation } from "@/server/agenda/service";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
 import { getSettings } from "@/server/agenda/settings";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
@@ -32,16 +33,11 @@ import {
   resolveScheduleIntent,
   type ScheduleIntent,
 } from "@/server/agenda/schedule-intent";
-import { resolveScheduleScope, type ScheduleScope } from "@/server/agenda/schedule-scope";
-
-/**
- * Turno del agente (FR-021..FR-025).
- *
- * Coalesce + lock in-process por conversación: ráfagas de mensajes → UNA
- * respuesta; nunca dos turnos simultáneos; lo que llega durante un turno
- * re-encola exactamente un turno más. Suficiente para el monolito de una
- * instancia (sin colas externas — Constitución II).
- */
+import {
+  resolveScheduleScope,
+  type ScheduleScope,
+} from "@/server/agenda/schedule-scope";
+import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 
 type CoalesceEntry = {
   timer: ReturnType<typeof setTimeout> | null;
@@ -71,7 +67,7 @@ export function scheduleAgentTurn(conversationId: string): void {
   map.set(conversationId, entry);
 
   if (entry.running) {
-    entry.pending = true; // se re-encola al terminar el turno actual
+    entry.pending = true;
     return;
   }
   if (entry.timer) clearTimeout(entry.timer);
@@ -102,24 +98,30 @@ async function executeTurn(conversationId: string): Promise<void> {
   }
 }
 
-/**
- * Ejecuta UN turno del agente ahora (el Laboratorio lo llama directo, con
- * debounce 0 y sin pasar por el coalesce).
- */
-export async function runAgentTurn(conversationId: string): Promise<void> {
+export async function runAgentTurn(
+  conversationId: string,
+  expectedOrganizationId?: string
+): Promise<void> {
   if (!isAiConfigured()) return;
 
   const db = getDb();
   const convRows = await db
     .select()
     .from(schema.conversation)
-    .where(eq(schema.conversation.id, conversationId))
+    .where(
+      expectedOrganizationId
+        ? scoped(
+            schema.conversation.organizationId,
+            expectedOrganizationId,
+            eq(schema.conversation.id, conversationId)
+          )
+        : eq(schema.conversation.id, conversationId)
+    )
     .limit(1);
   const conversation = convRows[0];
   if (!conversation) return;
   const organizationId = conversation.organizationId;
 
-  // Condiciones de silencio: handoff activo o IA apagada en la conversación.
   if (conversation.handoffAt || !conversation.aiEnabled) return;
 
   const profileRows = await db
@@ -129,27 +131,29 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
     .limit(1);
   const profile = profileRows[0];
   if (!profile) return;
-  // El toggle global aplica a conversaciones reales; el Laboratorio evalúa el
-  // comportamiento configurado aunque el agente aún no esté encendido.
   if (!conversation.isTest && !profile.enabled) return;
 
   const history = await db
     .select()
     .from(schema.message)
-    .where(eq(schema.message.conversationId, conversationId))
+    .where(
+      scoped(
+        schema.message.organizationId,
+        organizationId,
+        eq(schema.message.conversationId, conversationId)
+      )
+    )
     .orderBy(desc(schema.message.createdAt))
     .limit(20);
   history.reverse();
   const lastInbound = [...history].reverse().find((m) => m.direction === "in");
   if (!lastInbound) return;
 
-  // Ventana cerrada: el agente JAMÁS envía texto libre → handoff 'ventana'.
   if (!conversation.isTest && !isWindowOpen(conversation.lastInboundAt)) {
     await applyHandoff(conversationId, organizationId, "ventana");
     return;
   }
 
-  // Patrón de respaldo ANTES del LLM (FR-022).
   if (lastInbound.text && matchesHandoffIntent(lastInbound.text)) {
     await applyHandoff(conversationId, organizationId, "cliente");
     return;
@@ -167,59 +171,13 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
     .orderBy(asc(schema.pipelineStage.position));
 
   const agenda = agendaEnabled();
-
-  /**
-   * 015 — Los huecos vigentes, con su instante exacto.
-   *
-   * `book_slot` exige el `startUtc` y `findOffered` compara por epoch, sin
-   * tolerancia. Pero al modelo solo le llegaban el prompt y el historial de
-   * TEXTO, donde están las etiquetas que leyó el cliente —«lun 7 sep, 11:00»—
-   * sin año, sin zona y sin la fecha de hoy. Con eso, acertar el instante era
-   * cuestión de suerte: el rechazo caía siempre en `slot_not_offered`, cuyo
-   * texto es fijo, y la conversación se quedaba en bucle repitiendo la lista.
-   *
-   * Es un agujero de INTEGRACIÓN: las pruebas de contrato pasan porque
-   * inyectan el ISO correcto, que es justo lo que el modelo no tenía.
-   *
-   * Sin oferta vigente no se añade nada, así que el modelo sigue obligado a
-   * ofrecer antes de reservar. Se entrega el catálogo COMPLETO, no solo los
-   * tres que se enseñaron: si el cliente pide otro día, ese hueco ya estaba
-   * registrado como ofrecido y ahora el modelo también lo conoce.
-   *
-   * Reportado por @Diony7004 en #50, con el diagnóstico ya hecho.
-   */
   const ofertas = agenda ? await getOffers(organizationId, conversationId) : [];
   const mapaDeHuecos = mapaDeHuecosParaModelo(ofertas);
 
-  /**
-   * Ancla de fecha para `offer_slots.day` (ver prompts.ts / #agenda-fecha):
-   * sin decirle al modelo qué día es hoy, no tiene forma de calcular "mañana"
-   * o "el viernes" — solo cuando hay agenda, para no pagar la consulta si la
-   * instancia no la usa.
-   */
   let todayInfo: { iso: string; label: string } | undefined;
-  /**
-   * Fase 1 — verdad de agenda resuelta por el BACKEND (`resolveScheduleIntent`),
-   * nunca por el modelo. Causa raíz del bug de agenda (día equivocado) y de
-   * la regresión de domingo (el agente decía "cerrado" con el domingo
-   * configurado abierto): antes esta verdad solo viajaba como INSTRUCCIÓN del
-   * prompt — un texto libre del modelo (`{"action":"reply",...}`) podía
-   * seguir contradiciéndola sin que nada lo impidiera. Ahora, si el último
-   * mensaje del cliente menciona una fecha, el pipeline usa este resultado
-   * para CONSTRUIR o REEMPLAZAR la respuesta cuando la acción del modelo es
-   * `reply` u `offer_slots` (ver más abajo) — no es una instrucción que el
-   * modelo pueda desobedecer.
-   */
   let scheduleIntent: ScheduleIntent = { kind: "none" };
-  /**
-   * Fase 1 — bug de rangos: `scheduleScope` es el clasificador AMPLIO
-   * (`schedule-scope.ts`) que corre antes que nada — decide si el turno pide
-   * una fecha única, un rango ("de lunes a domingo", "esta semana"),
-   * disponibilidad general sin día, o "la próxima cita disponible". Antes
-   * solo existía el camino de fecha única, y un rango terminaba
-   * colapsándose a la primera palabra de día que el texto mencionara.
-   */
   let scheduleScope: ScheduleScope | null = null;
+  let schedulingSignal = false;
   let businessFact: Parameters<typeof buildAgentSystemPrompt>[0]["businessFact"];
   if (agenda) {
     const settings = await getSettings(organizationId);
@@ -228,6 +186,9 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
       iso: todayInTz(now, settings.timezone),
       label: todayLabelInTz(now, settings.timezone),
     };
+    schedulingSignal = lastInbound.text
+      ? hasSchedulingSignal({ text: lastInbound.text, now, timezone: settings.timezone })
+      : false;
     scheduleScope = lastInbound.text
       ? resolveScheduleScope(lastInbound.text, now, settings.timezone)
       : null;
@@ -268,10 +229,6 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
         role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
         content: m.text!,
       })),
-    /**
-     * Va AL FINAL, después del historial: es el estado de AHORA, y ponerlo
-     * antes lo dejaría enterrado bajo la conversación en cuanto esta crezca.
-     */
     ...(mapaDeHuecos
       ? [{ role: "system" as const, content: mapaDeHuecos }]
       : []),
@@ -280,7 +237,6 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
   const result = await chatJson(agentActionSchema(agenda), messages);
   if (!result.ok) {
     if (result.error === "not_configured") return;
-    // Fallo persistente del proveedor o salida imposible → escalar (FR-022).
     console.error(`[agente] fallo del proveedor (raw): ${result.detail}`);
     await applyHandoff(conversationId, organizationId, "error");
     return;
@@ -288,15 +244,13 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
 
   let action: AgentActionType = result.data;
 
-  /**
-   * Fase 1 — bug de rangos. Igual que el guardarraíl de fecha única de abajo,
-   * pero para los otros tres alcances (`date_range`, `general_availability`,
-   * `next_available`): si `resolveScheduleScope` reconoció uno de estos en el
-   * mensaje del cliente, el backend construye la respuesta completa desde el
-   * motor de disponibilidad — nunca deja que el modelo pregunte "¿qué día
-   * específico?" cuando SÍ hay información útil que mostrar, ni que reduzca
-   * un rango a un solo día.
-   */
+  // El modelo no puede abrir la agenda por una pregunta informativa. El gate
+  // usa el inbound real ya cargado por el pipeline, sin hacer una segunda
+  // consulta a BD y sin afectar las re-ofertas internas de book/reschedule.
+  if (agenda && action.action === "offer_slots" && !schedulingSignal) {
+    action = degradeAction(action);
+  }
+
   if (
     agenda &&
     scheduleScope &&
@@ -329,59 +283,75 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
     }
   }
 
-  /**
-   * Fase 1 (fix domingo) — el guardarraíl que faltaba. Si el backend
-   * reconoció una fecha en el mensaje del cliente, la verdad de agenda para
-   * esa fecha la decide el backend — nunca el texto libre del modelo. Se
-   * activa SOLO sobre `reply` (el camino sin ningún control hasta ahora) y
-   * `offer_slots` (para que su `day` e `intro` también queden bajo el mismo
-   * control): las demás acciones (`handoff`, `move_stage`, `update_lead`,
-   * `book_slot`, `none`) expresan una intención distinta del modelo que este
-   * guardarraíl no debe pisar.
-   *
-   * Se descarta el `reply`/`intro` que haya escrito el modelo por completo —
-   * no se usa ni como introducción — porque un modelo adversarial (o
-   * simplemente equivocado) podría escribir "el domingo estamos cerrados"
-   * como intro de un `offer_slots` que igual muestra los horarios reales del
-   * domingo: el resultado sería un mensaje contradictorio. Todo lo que se
-   * envía en este camino sale de `scheduleIntent`/`offerSlots`, nunca del
-   * modelo.
-   */
   if (
     agenda &&
     scheduleIntent.kind === "date_mentioned" &&
     (action.action === "reply" || action.action === "offer_slots")
   ) {
     if (!scheduleIntent.requiresAvailabilityLookup) {
-      // Caso 2: solo preguntó si se trabaja ese día / el horario — sin pedir
-      // ver huecos todavía. Respuesta corta, 100% del backend.
       await deliverReply(conversation, factualHoursReply(scheduleIntent));
       return;
     }
     action = { action: "offer_slots", day: scheduleIntent.targetDate };
   }
 
-  // 015 — Agenda. Un fallo del motor degrada el turno (el agente responde sin
-  // agendar), nunca lo tumba: quedarse callado es peor que no agendar.
-  if (action.action === "offer_slots" || action.action === "book_slot") {
+  if (
+    action.action === "offer_slots" ||
+    action.action === "book_slot" ||
+    action.action === "reschedule_slot"
+  ) {
     if (!agenda) {
       action = degradeAction(action);
     } else {
       try {
-        const turn =
-          action.action === "offer_slots"
-            ? await offerSlots({
+        let turn;
+        if (action.action === "offer_slots") {
+          turn = await offerSlots({
+            organizationId,
+            conversationId,
+            intro: action.reply,
+            day:
+              scheduleIntent.kind === "date_mentioned"
+                ? scheduleIntent.targetDate
+                : action.day,
+            businessFact:
+              scheduleIntent.kind === "date_mentioned"
+                ? {
+                    businessOpen: scheduleIntent.businessOpen,
+                    businessHours: scheduleIntent.businessHours,
+                    dateLabel: scheduleIntent.dateLabel,
+                  }
+                : undefined,
+          });
+        } else if (action.action === "book_slot") {
+          turn = await bookSlot({
+            organizationId,
+            conversationId,
+            startUtc: action.startUtc,
+          });
+        } else {
+          try {
+            const moved = await rescheduleForConversation({
+              organizationId,
+              conversationId,
+              startUtc: action.startUtc,
+            });
+            turn = {
+              ok: true,
+              text: moved.meetingLink
+                ? `¡Listo! Reprogramé tu cita para ${moved.label}.\nEnlace: ${moved.meetingLink}`
+                : `¡Listo! Reprogramé tu cita para ${moved.label}.`,
+            };
+          } catch (err) {
+            if (err instanceof BookingError && err.code === "slot_not_offered") {
+              turn = await offerSlots({
                 organizationId,
                 conversationId,
-                intro: action.reply,
-                // El backend manda: si `resolveScheduleIntent` reconoció una
-                // fecha en el mensaje del cliente, el `day` del modelo NO
-                // puede sobrescribirla — es solo respaldo cuando el parser
-                // no reconoció nada.
+                intro: "Para cambiar tu cita, elige uno de estos horarios disponibles:",
                 day:
                   scheduleIntent.kind === "date_mentioned"
                     ? scheduleIntent.targetDate
-                    : action.day,
+                    : undefined,
                 businessFact:
                   scheduleIntent.kind === "date_mentioned"
                     ? {
@@ -390,12 +360,24 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
                         dateLabel: scheduleIntent.dateLabel,
                       }
                     : undefined,
-              })
-            : await bookSlot({
+              });
+            } else if (err instanceof BookingError && err.code === "not_found") {
+              turn = {
+                ok: false,
+                text: "No encontré una cita activa para reprogramar. Si quieres, puedo mostrarte horarios disponibles para una nueva cita.",
+              };
+            } else if (err instanceof BookingError && err.code === "slot_taken") {
+              turn = await offerSlots({
                 organizationId,
                 conversationId,
-                startUtc: action.startUtc,
+                intro: "Ese horario ya no está disponible. Estas son las opciones actuales:",
               });
+            } else {
+              throw err;
+            }
+          }
+        }
+
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
           publish(organizationId, {
@@ -446,12 +428,15 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
       await applyHandoff(conversationId, organizationId, "modelo");
       return;
     }
+    case "offer_slots":
+    case "book_slot":
+    case "reschedule_slot":
+      return;
   }
 }
 
 type Conversation = typeof schema.conversation.$inferSelect;
 
-/** Entrega la respuesta: envío real o persistencia sandbox (is_test). */
 async function deliverReply(
   conversation: Conversation,
   text: string
@@ -469,14 +454,17 @@ async function deliverReply(
     });
   } catch (err) {
     if (err instanceof SendError && err.code === "window_closed") {
-      await applyHandoff(conversation.id, conversation.organizationId, "ventana");
+      await applyHandoff(
+        conversation.id,
+        conversation.organizationId,
+        "ventana"
+      );
       return;
     }
     throw err;
   }
 }
 
-/** Mensaje saliente del sandbox: se persiste, JAMÁS toca la API (FR-031). */
 async function persistTestOutbound(
   conversation: Conversation,
   text: string
@@ -496,7 +484,13 @@ async function persistTestOutbound(
   await db
     .update(schema.conversation)
     .set({ lastMessageAt: new Date(), updatedAt: new Date() })
-    .where(eq(schema.conversation.id, conversation.id));
+    .where(
+      scoped(
+        schema.conversation.organizationId,
+        conversation.organizationId,
+        eq(schema.conversation.id, conversation.id)
+      )
+    );
 }
 
 export async function applyHandoff(
@@ -508,7 +502,13 @@ export async function applyHandoff(
   const updated = await db
     .update(schema.conversation)
     .set({ handoffAt: new Date(), handoffReason: reason, updatedAt: new Date() })
-    .where(eq(schema.conversation.id, conversationId))
+    .where(
+      scoped(
+        schema.conversation.organizationId,
+        organizationId,
+        eq(schema.conversation.id, conversationId)
+      )
+    )
     .returning();
   if (!updated[0]) return;
   publish(organizationId, {
@@ -539,18 +539,12 @@ async function moveLeadToStage(
   const leadId = rows[0]?.id;
   if (!leadId) return;
 
-  // Por la puerta única: el agente mueve tarjetas igual que el dueño, y su
-  // movimiento tiene que quedar en la bitácora o el embudo mentirá sobre
-  // quién hizo avanzar cada lead.
   await moveLeadThroughHistory({
     organizationId,
     leadId,
     toStageId: stageId,
     source: "bot",
     extra: { lastActivityAt: new Date() },
-    // El agente no clasifica pérdidas: si su etapa destino resultara ser la
-    // perdida, la puerta lo rechaza y el lead se queda donde está — mejor eso
-    // que un motivo inventado.
   });
 }
 
@@ -563,7 +557,13 @@ async function appendLeadNote(
   const rows = await db
     .select({ id: schema.contact.id, notes: schema.contact.notes })
     .from(schema.contact)
-    .where(eq(schema.contact.id, contactId))
+    .where(
+      scoped(
+        schema.contact.organizationId,
+        organizationId,
+        eq(schema.contact.id, contactId)
+      )
+    )
     .limit(1);
   const contact = rows[0];
   if (!contact) return;
@@ -574,5 +574,11 @@ async function appendLeadNote(
       notes: contact.notes ? `${contact.notes}\n${stamped}` : stamped,
       updatedAt: new Date(),
     })
-    .where(eq(schema.contact.id, contact.id));
+    .where(
+      scoped(
+        schema.contact.organizationId,
+        organizationId,
+        eq(schema.contact.id, contact.id)
+      )
+    );
 }
