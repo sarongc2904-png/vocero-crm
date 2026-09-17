@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
+import { hasOrganizationPermission } from "@/lib/auth/permissions";
 import { publish } from "@/server/events/bus";
 import { serializeConversation, getConversation, updateConversation } from "@/server/inbox/queries";
 
@@ -20,7 +21,9 @@ export const PATCH = withOrgPermissions(["conversations.read"], async (session, 
 
   if (
     (body.data.aiEnabled !== undefined || body.data.reactivate) &&
-    !session.permissions.has("ai.use")
+    !hasOrganizationPermission(session.role, "ai.use", {
+      isSuperadmin: session.isSuperadmin,
+    })
   ) {
     return apiError(403, "forbidden", "No tienes permiso para controlar la IA de esta conversación");
   }
