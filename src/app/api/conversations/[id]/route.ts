@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
+import { hasOrganizationPermission } from "@/lib/auth/permissions";
 import { publish } from "@/server/events/bus";
 import { serializeConversation, getConversation, updateConversation } from "@/server/inbox/queries";
 
@@ -13,10 +14,19 @@ const patchSchema = z.object({
 
 type Params = { params: Promise<{ id: string }> };
 
-export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
+export const PATCH = withOrgPermissions(["conversations.read"], async (session, req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const body = await parseBody(req, patchSchema);
   if (!body.ok) return body.response;
+
+  if (
+    (body.data.aiEnabled !== undefined || body.data.reactivate) &&
+    !hasOrganizationPermission(session.role, "ai.use", {
+      isSuperadmin: session.isSuperadmin,
+    })
+  ) {
+    return apiError(403, "forbidden", "No tienes permiso para controlar la IA de esta conversación");
+  }
 
   const updated = await updateConversation(session.organizationId, id, body.data);
   if (!updated) return apiError(404, "not_found", "Conversación no encontrada");
