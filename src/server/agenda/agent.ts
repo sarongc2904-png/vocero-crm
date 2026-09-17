@@ -36,6 +36,32 @@ function enrichAll(slots: AvailableSlot[], timezone: string, now: Date) {
 }
 
 /**
+ * WhatsApp: muestra el día una sola vez y cada hora en su propia línea.
+ * Conserva TODOS los slots recibidos; solo cambia la presentación.
+ */
+function formatSlotBlocks(
+  slots: ReturnType<typeof enrichAll>,
+  timezone: string,
+  now: Date
+): string {
+  const byDay = new Map<string, typeof slots>();
+  for (const slot of slots) {
+    const day = dayIsoInTz(new Date(slot.startUtc), timezone);
+    const bucket = byDay.get(day);
+    if (bucket) bucket.push(slot);
+    else byDay.set(day, [slot]);
+  }
+
+  return [...byDay.values()]
+    .map((daySlots) => {
+      const title = capitalize(dayLabelInTz(daySlots[0]!.startUtc, timezone, now));
+      const times = daySlots.map((slot) => `• ${slot.time}`).join("\n");
+      return `${title}\n${times}`;
+    })
+    .join("\n\n");
+}
+
+/**
  * `intro` puede venir del modelo. Solo se acepta si es una frase breve: nunca
  * dejamos que un horario, una lista o varias líneas generadas por el LLM se
  * mezclen con los slots factuales del backend.
@@ -94,12 +120,12 @@ export async function offerSlots(input: {
 
   if (input.day) {
     if (requestedDayHasAvailability) {
-      const list = dayShown.map((slot) => `• ${slot.dayLabel} a las ${slot.time}`).join("\n");
+      const list = formatSlotBlocks(dayShown, settings.timezone, now);
       const intro = safeOfferIntro(input.intro) || "Tengo estos horarios disponibles:";
       return { ok: true, text: `${intro}\n${list}` };
     }
 
-    const list = spread.map((slot) => `• ${slot.dayLabel} a las ${slot.time}`).join("\n");
+    const list = formatSlotBlocks(spread, settings.timezone, now);
     const heading = input.businessFact
       ? input.businessFact.businessOpen
         ? `Sí abrimos ${input.businessFact.dateLabel} de ${formatHoursEs(input.businessFact.businessHours)}, pero ya no tengo horarios disponibles ese día.`
@@ -111,7 +137,7 @@ export async function offerSlots(input: {
     };
   }
 
-  const list = spread.map((slot) => `• ${slot.dayLabel} a las ${slot.time}`).join("\n");
+  const list = formatSlotBlocks(spread, settings.timezone, now);
   const intro = safeOfferIntro(input.intro) || "Tengo estos horarios disponibles:";
   return { ok: true, text: `${intro}\n${list}` };
 }
