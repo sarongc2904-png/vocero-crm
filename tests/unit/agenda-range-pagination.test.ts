@@ -147,7 +147,9 @@ describe("offerGrouped — disponibilidad completa", () => {
       remainingDays: 0,
       truncated: false,
     });
+    // 15:00Z..22:00Z se presenta en America/Mexico_City como 09:00..16:00.
+    expect(turno.text).toContain("09:00");
     expect(turno.text).toContain("16:00");
-    expect(turno.text).toContain("22:00");
+    expect(turno.text).toContain("Martes, 22 de septiembre");
   });
 });
