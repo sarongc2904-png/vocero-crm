@@ -23,6 +23,10 @@ function money(cents: number | null, currency: string) {
   }).format(cents / 100);
 }
 
+function percent(value: number | null) {
+  return value === null ? "Sin datos" : `${Math.round(value * 100)}%`;
+}
+
 function MetricCard({
   label,
   value,
@@ -181,7 +185,7 @@ export default async function DashboardPage() {
                 })
               )}
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3 border-t pt-4">
+            <div className="mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
               <div>
                 <p className="kicker">Ganados</p>
                 <p className="mt-1 text-2xl font-bold">{data.pipeline.wonLeads}</p>
@@ -189,6 +193,14 @@ export default async function DashboardPage() {
               <div>
                 <p className="kicker">Perdidos</p>
                 <p className="mt-1 text-2xl font-bold">{data.pipeline.lostLeads}</p>
+              </div>
+              <div>
+                <p className="kicker">Conversión actual</p>
+                <p className="mt-1 text-2xl font-bold">{percent(data.pipeline.currentWinRate)}</p>
+              </div>
+              <div>
+                <p className="kicker">Con cita</p>
+                <p className="mt-1 text-2xl font-bold">{percent(data.pipeline.appointmentCoverage)}</p>
               </div>
             </div>
           </div>
@@ -214,6 +226,38 @@ export default async function DashboardPage() {
                       <p className="text-xs text-text-3">{booking.date}</p>
                     </div>
                     <span className="font-mono text-sm font-semibold">{booking.time}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-4 grid gap-4 md:grid-cols-3">
+          <div className="rounded-xl border bg-background p-4 shadow-sm">
+            <p className="kicker">Valor ganado actual</p>
+            <p className="mt-2 text-2xl font-bold">{money(data.pipeline.wonValueCents, data.currency)}</p>
+            <p className="mt-1 text-xs text-text-3">
+              {data.pipeline.wonKnownAmounts} oportunidades ganadas con monto conocido.
+            </p>
+          </div>
+          <div className="rounded-xl border bg-background p-4 shadow-sm">
+            <p className="kicker">Valor perdido actual</p>
+            <p className="mt-2 text-2xl font-bold">{money(data.pipeline.lostValueCents, data.currency)}</p>
+            <p className="mt-1 text-xs text-text-3">
+              {data.pipeline.lostKnownAmounts} oportunidades perdidas con monto conocido.
+            </p>
+          </div>
+          <div className="rounded-xl border bg-background p-4 shadow-sm">
+            <p className="kicker mb-3">Fuente de prospectos</p>
+            {data.sources.length === 0 ? (
+              <p className="text-sm text-text-3">Sin fuentes registradas.</p>
+            ) : (
+              <div className="space-y-2">
+                {data.sources.slice(0, 6).map((item) => (
+                  <div key={item.source} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="capitalize">{item.source.replaceAll("_", " ")}</span>
+                    <span className="font-semibold">{item.count}</span>
                   </div>
                 ))}
               </div>
