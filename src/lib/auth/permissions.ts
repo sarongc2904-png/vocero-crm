@@ -25,6 +25,7 @@ export const ORGANIZATION_PERMISSIONS = [
   "teams.manage",
   "audit.read",
   "bot_api.manage",
+  "branding.manage",
   "settings.read",
   "settings.update",
 ] as const;
