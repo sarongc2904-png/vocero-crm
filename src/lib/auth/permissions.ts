@@ -21,6 +21,9 @@ export const ORGANIZATION_PERMISSIONS = [
   "users.update",
   "users.suspend",
   "users.delete",
+  "teams.read",
+  "teams.manage",
+  "audit.read",
   "settings.read",
   "settings.update",
 ] as const;
@@ -49,6 +52,8 @@ const ADMIN_PERMISSIONS = new Set<OrganizationPermission>([
   "users.create",
   "users.update",
   "users.suspend",
+  "teams.read",
+  "teams.manage",
   "settings.read",
   "settings.update",
 ]);
@@ -66,6 +71,7 @@ const AGENT_PERMISSIONS = new Set<OrganizationPermission>([
   "appointments.reschedule",
   "appointments.cancel",
   "ai.use",
+  "teams.read",
 ]);
 
 const ROLE_PERMISSIONS: Record<OrganizationRole, ReadonlySet<OrganizationPermission>> = {
