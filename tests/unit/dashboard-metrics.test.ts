@@ -46,12 +46,12 @@ describe("dashboard metrics contract", () => {
     expect(result.knownAmounts).toBe(1);
   });
 
-  it("usa la primera etapa abierta como leads nuevos y separa won/lost", () => {
+  it("separa pipeline, ganado y perdido sin mezclar montos", () => {
     const result = summarizeStages([
       stage("nuevo", 0, "open", 7, 10000, 1),
       stage("seguimiento", 1, "open", 3, 20000, 2),
       stage("cliente", 2, "won", 2, 50000, 2),
-      stage("perdido", 3, "lost", 4, 0, 0),
+      stage("perdido", 3, "lost", 4, 12000, 1),
     ]);
 
     expect(result.totalLeads).toBe(16);
@@ -59,6 +59,11 @@ describe("dashboard metrics contract", () => {
     expect(result.wonLeads).toBe(2);
     expect(result.lostLeads).toBe(4);
     expect(result.pipelineValueCents).toBe(30000);
+    expect(result.wonValueCents).toBe(50000);
+    expect(result.lostValueCents).toBe(12000);
+    expect(result.wonKnownAmounts).toBe(2);
+    expect(result.lostKnownAmounts).toBe(1);
+    expect(result.currentWinRate).toBe(2 / 16);
   });
 
   it("mantiene organizationId en todas las consultas del dashboard", () => {
@@ -68,7 +73,7 @@ describe("dashboard metrics contract", () => {
     );
     const scopes = source.match(/organization_id = \$\{organizationId\}/g) ?? [];
 
-    expect(scopes.length).toBeGreaterThanOrEqual(7);
+    expect(scopes.length).toBeGreaterThanOrEqual(9);
     expect(source).toContain("where id = ${organizationId}");
     expect(source).not.toContain("where organization_id is not null");
   });
