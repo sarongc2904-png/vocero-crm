@@ -24,6 +24,7 @@ import {
   offerRange,
   offerSlots,
 } from "@/server/agenda/agent";
+import { BookingError, rescheduleForConversation } from "@/server/agenda/service";
 import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
 import { getSettings } from "@/server/agenda/settings";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
@@ -36,6 +37,7 @@ import {
   resolveScheduleScope,
   type ScheduleScope,
 } from "@/server/agenda/schedule-scope";
+import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 
 type CoalesceEntry = {
   timer: ReturnType<typeof setTimeout> | null;
@@ -96,14 +98,6 @@ async function executeTurn(conversationId: string): Promise<void> {
   }
 }
 
-/**
- * Ejecuta UN turno del agente ahora.
- *
- * `expectedOrganizationId` es obligatorio para callers que ya conocen el
- * tenant (el Laboratorio). Si se provee, incluso el lookup inicial exige el
- * par organizationId + conversationId; un id filtrado de otro tenant queda
- * convertido en "no encontrado".
- */
 export async function runAgentTurn(
   conversationId: string,
   expectedOrganizationId?: string
@@ -183,6 +177,7 @@ export async function runAgentTurn(
   let todayInfo: { iso: string; label: string } | undefined;
   let scheduleIntent: ScheduleIntent = { kind: "none" };
   let scheduleScope: ScheduleScope | null = null;
+  let schedulingSignal = false;
   let businessFact: Parameters<typeof buildAgentSystemPrompt>[0]["businessFact"];
   if (agenda) {
     const settings = await getSettings(organizationId);
@@ -191,6 +186,9 @@ export async function runAgentTurn(
       iso: todayInTz(now, settings.timezone),
       label: todayLabelInTz(now, settings.timezone),
     };
+    schedulingSignal = lastInbound.text
+      ? hasSchedulingSignal({ text: lastInbound.text, now, timezone: settings.timezone })
+      : false;
     scheduleScope = lastInbound.text
       ? resolveScheduleScope(lastInbound.text, now, settings.timezone)
       : null;
@@ -246,6 +244,13 @@ export async function runAgentTurn(
 
   let action: AgentActionType = result.data;
 
+  // El modelo no puede abrir la agenda por una pregunta informativa. El gate
+  // usa el inbound real ya cargado por el pipeline, sin hacer una segunda
+  // consulta a BD y sin afectar las re-ofertas internas de book/reschedule.
+  if (agenda && action.action === "offer_slots" && !schedulingSignal) {
+    action = degradeAction(action);
+  }
+
   if (
     agenda &&
     scheduleScope &&
@@ -290,21 +295,63 @@ export async function runAgentTurn(
     action = { action: "offer_slots", day: scheduleIntent.targetDate };
   }
 
-  if (action.action === "offer_slots" || action.action === "book_slot") {
+  if (
+    action.action === "offer_slots" ||
+    action.action === "book_slot" ||
+    action.action === "reschedule_slot"
+  ) {
     if (!agenda) {
       action = degradeAction(action);
     } else {
       try {
-        const turn =
-          action.action === "offer_slots"
-            ? await offerSlots({
+        let turn;
+        if (action.action === "offer_slots") {
+          turn = await offerSlots({
+            organizationId,
+            conversationId,
+            intro: action.reply,
+            day:
+              scheduleIntent.kind === "date_mentioned"
+                ? scheduleIntent.targetDate
+                : action.day,
+            businessFact:
+              scheduleIntent.kind === "date_mentioned"
+                ? {
+                    businessOpen: scheduleIntent.businessOpen,
+                    businessHours: scheduleIntent.businessHours,
+                    dateLabel: scheduleIntent.dateLabel,
+                  }
+                : undefined,
+          });
+        } else if (action.action === "book_slot") {
+          turn = await bookSlot({
+            organizationId,
+            conversationId,
+            startUtc: action.startUtc,
+          });
+        } else {
+          try {
+            const moved = await rescheduleForConversation({
+              organizationId,
+              conversationId,
+              startUtc: action.startUtc,
+            });
+            turn = {
+              ok: true,
+              text: moved.meetingLink
+                ? `¡Listo! Reprogramé tu cita para ${moved.label}.\nEnlace: ${moved.meetingLink}`
+                : `¡Listo! Reprogramé tu cita para ${moved.label}.`,
+            };
+          } catch (err) {
+            if (err instanceof BookingError && err.code === "slot_not_offered") {
+              turn = await offerSlots({
                 organizationId,
                 conversationId,
-                intro: action.reply,
+                intro: "Para cambiar tu cita, elige uno de estos horarios disponibles:",
                 day:
                   scheduleIntent.kind === "date_mentioned"
                     ? scheduleIntent.targetDate
-                    : action.day,
+                    : undefined,
                 businessFact:
                   scheduleIntent.kind === "date_mentioned"
                     ? {
@@ -313,12 +360,24 @@ export async function runAgentTurn(
                         dateLabel: scheduleIntent.dateLabel,
                       }
                     : undefined,
-              })
-            : await bookSlot({
+              });
+            } else if (err instanceof BookingError && err.code === "not_found") {
+              turn = {
+                ok: false,
+                text: "No encontré una cita activa para reprogramar. Si quieres, puedo mostrarte horarios disponibles para una nueva cita.",
+              };
+            } else if (err instanceof BookingError && err.code === "slot_taken") {
+              turn = await offerSlots({
                 organizationId,
                 conversationId,
-                startUtc: action.startUtc,
+                intro: "Ese horario ya no está disponible. Estas son las opciones actuales:",
               });
+            } else {
+              throw err;
+            }
+          }
+        }
+
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
           publish(organizationId, {
@@ -369,6 +428,10 @@ export async function runAgentTurn(
       await applyHandoff(conversationId, organizationId, "modelo");
       return;
     }
+    case "offer_slots":
+    case "book_slot":
+    case "reschedule_slot":
+      return;
   }
 }
 
