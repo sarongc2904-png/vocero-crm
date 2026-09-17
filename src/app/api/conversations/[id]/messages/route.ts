@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { getConversation, listMessages } from "@/server/inbox/queries";
 import { serializeMessage } from "@/server/inbox/ingest";
 import { SendError, sendStructured, sendText } from "@/server/inbox/send";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
-export const GET = withAuth(async (session, req: Request, ctx: Params) => {
+export const GET = withOrgPermissions(["conversations.read"], async (session, req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const row = await getConversation(session.organizationId, id);
   if (!row) return apiError(404, "not_found", "Conversación no encontrada");
@@ -26,8 +26,6 @@ export const GET = withAuth(async (session, req: Request, ctx: Params) => {
   });
 });
 
-// 008: además de texto, el body acepta ubicación y contactos (discriminado
-// por `type`; sin `type` sigue siendo texto — compat con clientes previos).
 const sendSchema = z.union([
   z.object({
     type: z.literal("text").optional(),
@@ -66,10 +64,13 @@ const SEND_ERROR_STATUS: Record<SendError["code"], number> = {
   upload_failed: 502,
 };
 
-export const POST = withAuth(async (session, req: Request, ctx: Params) => {
+export const POST = withOrgPermissions(["conversations.reply"], async (session, req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const body = await parseBody(req, sendSchema);
   if (!body.ok) return body.response;
+
+  const row = await getConversation(session.organizationId, id);
+  if (!row) return apiError(404, "not_found", "Conversación no encontrada");
 
   try {
     const data = body.data;
