@@ -32,11 +32,12 @@ describe("RBAC governance gate", () => {
     expect(route).toContain('"user.permanent_delete"');
   });
 
-  it("equipos y asignaciones conservan organization_id en todas las mutaciones", () => {
+  it("equipos y asignaciones conservan organization_id en lecturas y mutaciones", () => {
     const teams = source("src/server/auth/teams.ts");
     expect(teams).toContain("where organization_id = ${organizationId}");
+    expect(teams).toContain("where tm.organization_id = ${organizationId}");
     expect(teams).toContain("t.organization_id = ${input.organizationId}");
-    expect(teams).toContain("tm.organization_id = ${input.organizationId}");
+    expect(teams).toContain("and organization_id = ${input.organizationId}");
     expect(teams).toContain("m.organization_id = t.organization_id");
   });
 
