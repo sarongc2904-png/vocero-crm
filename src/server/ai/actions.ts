@@ -28,11 +28,10 @@ const baseActions = [
 /**
  * Acciones de agenda.
  *
- * IMPORTANTE: `offer_slots` NO acepta una fecha calculada por el modelo.
- * La fecha/alcance se resuelve de forma determinista en backend a partir del
- * último mensaje del cliente. Así el LLM puede decidir "mostrar horarios",
- * pero nunca puede inventar qué día es mañana, qué fecha cae en domingo ni
- * sustituir la fecha pedida por otra.
+ * El campo `day` se acepta únicamente por compatibilidad con modelos/prompts
+ * antiguos, pero se SANITIZA a undefined: jamás puede convertirse en fuente de
+ * verdad. La fecha real se resuelve en backend con `resolveScheduleScope` /
+ * `resolveScheduleIntent` a partir del mensaje del cliente.
  *
  * `reply` es solo introducción opcional, nunca la lista de horarios.
  * `book_slot.startUtc` debe coincidir exactamente con un horario ofrecido
@@ -41,6 +40,11 @@ const baseActions = [
 const agendaActions = [
   z.object({
     action: z.literal("offer_slots"),
+    day: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional()
+      .transform(() => undefined),
     reply: z.string().optional(),
   }),
   z.object({
