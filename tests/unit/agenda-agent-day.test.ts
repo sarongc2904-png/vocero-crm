@@ -15,8 +15,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * catálogo general.
  */
 
-const DIA_PEDIDO = "2026-09-18"; // el "jueves" del ejemplo
-const DIA_GENERAL = "2026-09-15"; // el "martes" que el catálogo general trae
+const DIA_PEDIDO = "2026-09-18";
+const DIA_GENERAL = "2026-09-15";
 
 const settings = {
   weeklyHours: {},
@@ -130,7 +130,7 @@ describe("offerSlots con día pedido (#agenda-fecha)", () => {
     expect(turn.text).toContain("08:00");
   });
 
-  it("sin día pedido: se comporta como antes (el catálogo general, sin filtrar)", async () => {
+  it("sin día pedido: agrupa por día y conserva todos los horarios", async () => {
     const { offerSlots } = await import("@/server/agenda/agent");
 
     const turn = await offerSlots({
@@ -141,6 +141,10 @@ describe("offerSlots con día pedido (#agenda-fecha)", () => {
 
     expect(turn.ok).toBe(true);
     expect(turn.text).toContain("08:00");
+    expect(turn.text).toContain("08:15");
+    expect(turn.text).toContain("08:30");
+    expect(turn.text.match(/^• /gm)).toHaveLength(3);
+    expect(turn.text).not.toContain("a las 08:00");
     expect(computeAvailability).toHaveBeenCalledTimes(1);
   });
 
