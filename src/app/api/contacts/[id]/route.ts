@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import {
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
-export const GET = withAuth(async (session, _req: Request, ctx: Params) => {
+export const GET = withOrgPermissions(["contacts.read"], async (session, _req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const contact = await getContactById(session.organizationId, id);
   if (!contact) return apiError(404, "not_found", "Contacto no encontrado");
@@ -37,23 +37,14 @@ const patchSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   notes: z.string().max(4000).nullable().optional(),
   archived: z.boolean().optional(),
-  /**
-   * Parche de la ficha: solo las claves que cambian. `null` borra una clave.
-   * No es un reemplazo — el agente sigue escribiendo mientras el dueño
-   * corrige, y mandar la ficha entera haría que el último en guardar le
-   * borrara lo recién descubierto al otro.
-   */
   ficha: z.record(z.unknown()).optional(),
 });
 
-export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
+export const PATCH = withOrgPermissions(["contacts.update"], async (session, req: Request, ctx: Params) => {
   const { id } = await ctx.params;
   const body = await parseBody(req, patchSchema);
   if (!body.ok) return body.response;
 
-  // La ficha va por su propia puerta —la MISMA que usa el cerebro externo en
-  // `PUT /api/bot/ficha`— para heredar el merge y las cotas. Escribirla aquí
-  // con un `set` plano sería un segundo camino con otras reglas.
   if (body.data.ficha !== undefined) {
     const res = await upsertFicha({
       organizationId: session.organizationId,
@@ -66,7 +57,6 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (body.data.name !== undefined) {
     set.name = body.data.name;
-    // Lo escribio una persona: a partir de aqui WhatsApp ya no lo pisa (#51).
     set.nameSource = "manual";
   }
   if (body.data.notes !== undefined) set.notes = body.data.notes;
