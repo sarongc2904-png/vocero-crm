@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { requireSession } from "@/lib/auth/session";
 import { formatMoneyCents } from "@/lib/money";
+import { getSettings } from "@/server/agenda/settings";
 import { getBranding } from "@/server/branding";
 import { getDashboardMetrics } from "@/server/dashboard/metrics";
 
@@ -46,13 +47,29 @@ function MetricCard({ label, value, detail, href, icon: Icon }: MetricCardProps)
 
 export default async function DashboardPage() {
   const session = await requireSession();
-  const [metrics, branding] = await Promise.all([
-    getDashboardMetrics(session.organizationId),
+  const [branding, calendar] = await Promise.all([
     getBranding(session.organizationId),
+    getSettings(session.organizationId),
   ]);
+  const metrics = await getDashboardMetrics(
+    session.organizationId,
+    branding.currency,
+    calendar.timezone
+  );
 
   const pipelineValue =
     formatMoneyCents(metrics.leads.pipelineAmountCents, branding.currency) ?? "—";
+  const pipelineDetail = [
+    `${metrics.leads.pipelineAmountKnown} con monto`,
+    metrics.leads.pipelineAmountUnknown > 0
+      ? `${metrics.leads.pipelineAmountUnknown} sin monto`
+      : null,
+    metrics.leads.pipelineAmountOtherCurrency > 0
+      ? `${metrics.leads.pipelineAmountOtherCurrency} en otra moneda`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div className="h-full overflow-y-auto bg-subtle">
@@ -105,20 +122,16 @@ export default async function DashboardPage() {
             icon={Users}
           />
           <MetricCard
-            label="Pipeline conocido"
+            label={`Pipeline conocido · ${branding.currency}`}
             value={pipelineValue}
-            detail={
-              metrics.leads.pipelineAmountUnknown > 0
-                ? `${metrics.leads.pipelineAmountUnknown} oportunidades sin monto`
-                : `${metrics.leads.pipelineAmountKnown} oportunidades con monto`
-            }
+            detail={pipelineDetail}
             href="/pipeline"
             icon={CircleDollarSign}
           />
           <MetricCard
             label="Citas de hoy"
             value={metrics.appointments.today}
-            detail={`${metrics.appointments.upcoming} próximas agendadas`}
+            detail={`${metrics.appointments.upcoming} próximas agendadas · ${calendar.timezone}`}
             href="/bookings"
             icon={CalendarDays}
           />
@@ -171,13 +184,14 @@ export default async function DashboardPage() {
               <p className="py-6 text-sm text-text-3">Todavía no hay etapas configuradas.</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] text-sm">
+                <table className="w-full min-w-[600px] text-sm">
                   <thead className="text-left text-xs uppercase tracking-[0.06em] text-text-3">
                     <tr>
                       <th className="pb-2 font-semibold">Etapa</th>
                       <th className="pb-2 text-right font-semibold">Leads</th>
-                      <th className="pb-2 text-right font-semibold">Valor conocido</th>
+                      <th className="pb-2 text-right font-semibold">Valor {branding.currency}</th>
                       <th className="pb-2 text-right font-semibold">Sin monto</th>
+                      <th className="pb-2 text-right font-semibold">Otra moneda</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -190,6 +204,9 @@ export default async function DashboardPage() {
                         </td>
                         <td className="py-3 text-right tabular-nums text-text-3">
                           {stage.amountUnknown}
+                        </td>
+                        <td className="py-3 text-right tabular-nums text-text-3">
+                          {stage.amountOtherCurrency}
                         </td>
                       </tr>
                     ))}
