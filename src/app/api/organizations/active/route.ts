@@ -4,10 +4,12 @@ import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getAuth } from "@/lib/auth";
 import { getDb, schema } from "@/lib/db";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
   organizationExists,
   resolveActiveMembership,
 } from "@/server/auth/organizations";
+import { isMemberSuspended } from "@/server/auth/suspension";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +34,16 @@ const setActive = withAuth(async (session, req: Request) => {
       .set({ activeOrganizationId: body.data.organizationId })
       .where(eq(schema.session.id, session.sessionId));
 
+    await auditPrivilegedAction(
+      { ...session, organizationId: body.data.organizationId },
+      {
+        action: "tenant.switch",
+        targetType: "organization",
+        targetId: body.data.organizationId,
+        metadata: { previousOrganizationId: session.organizationId },
+      }
+    );
+
     return Response.json({
       activeOrganizationId: body.data.organizationId,
       role: "owner",
@@ -48,6 +60,13 @@ const setActive = withAuth(async (session, req: Request) => {
       403,
       "organization_forbidden",
       "No perteneces a la organización solicitada"
+    );
+  }
+  if (await isMemberSuspended(body.data.organizationId, session.userId)) {
+    return apiError(
+      403,
+      "organization_suspended",
+      "Tu acceso a la organización solicitada está suspendido"
     );
   }
 
