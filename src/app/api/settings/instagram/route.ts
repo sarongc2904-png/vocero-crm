@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withOrgRoles } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import {
   getInstagramCredentialsByOrg,
   saveInstagramCredentials,
@@ -13,7 +13,7 @@ import {
 export const dynamic = "force-dynamic";
 
 /** 014 — Estado de la conexión de Instagram (el token nunca sale entero). */
-export const GET = withOrgRoles(["owner", "admin"], async (session) => {
+export const GET = withOrgPermissions(["settings.read"], async (session) => {
   if (!isChannelEnabled("instagram")) return channelDisabledResponse();
   const creds = await getInstagramCredentialsByOrg(session.organizationId);
   if (!creds) return Response.json({ connection: null });
@@ -38,11 +38,7 @@ const putSchema = z.object({
   webhookSecret: z.string().trim().min(1).nullish(),
 });
 
-/**
- * Guarda la conexión validando ANTES contra la plataforma, igual que el
- * wizard de WhatsApp: un token que no sirve no llega a la base.
- */
-export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
+export const PUT = withOrgPermissions(["settings.update"], async (session, req: Request) => {
   if (!isChannelEnabled("instagram")) return channelDisabledResponse();
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
@@ -57,9 +53,7 @@ export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request
   }
 
   const check = await verify(data);
-  if (!check.ok) {
-    return apiError(check.status, check.code, check.message);
-  }
+  if (!check.ok) return apiError(check.status, check.code, check.message);
 
   await saveInstagramCredentials({
     organizationId: session.organizationId,
