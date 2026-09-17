@@ -7,6 +7,7 @@ export const ORGANIZATION_PERMISSIONS = [
   "contacts.delete",
   "conversations.read",
   "conversations.reply",
+  "conversations.assign",
   "conversations.delete",
   "leads.qualify",
   "pipeline.move",
@@ -41,6 +42,7 @@ const ADMIN_PERMISSIONS = new Set<OrganizationPermission>([
   "contacts.delete",
   "conversations.read",
   "conversations.reply",
+  "conversations.assign",
   "conversations.delete",
   "leads.qualify",
   "pipeline.move",
@@ -66,6 +68,7 @@ const AGENT_PERMISSIONS = new Set<OrganizationPermission>([
   "contacts.update",
   "conversations.read",
   "conversations.reply",
+  "conversations.assign",
   "leads.qualify",
   "pipeline.move",
   "appointments.read",
@@ -100,11 +103,6 @@ function configuredValues(name: string): Set<string> {
   );
 }
 
-/**
- * El superadmin es una capacidad de plataforma, no un rol de membership.
- * Debe habilitarse de forma explícita en el despliegue. No existe fallback que
- * convierta automáticamente al primer owner en administrador global.
- */
 export function isConfiguredSuperadmin(input: { id: string; email?: string | null }): boolean {
   const ids = configuredValues("SUPERADMIN_USER_IDS");
   const emails = configuredValues("SUPERADMIN_EMAILS");
