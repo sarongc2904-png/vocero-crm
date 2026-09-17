@@ -12,6 +12,11 @@ export async function auditPrivilegedAction(
   }
 ): Promise<void> {
   const sql = getSql();
+  // El metadata lo construye exclusivamente el servidor con objetos JSON-safe.
+  // postgres-js exige un JSONValue nominal más estrecho que Record<string, unknown>,
+  // por eso el cast queda confinado justo en la frontera de serialización.
+  const metadata = input.metadata ? sql.json(input.metadata as never) : null;
+
   await sql`
     insert into privileged_audit_log (
       id,
@@ -30,7 +35,7 @@ export async function auditPrivilegedAction(
       ${input.action},
       ${input.targetType ?? null},
       ${input.targetId ?? null},
-      ${input.metadata ? sql.json(input.metadata) : null}
+      ${metadata}
     )
   `;
 }
