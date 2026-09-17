@@ -35,8 +35,6 @@ const computeAvailability = vi.fn(
       opts?.fromISO !== undefined && opts.fromISO === opts.toISO;
 
     if (esConsultaDeUnSoloDia) {
-      // Igual que el motor real (acotado a `eachDateInRange(fromISO,toISO)`):
-      // una consulta de un solo día JAMÁS devuelve slots de otro día.
       if (opts.fromISO === DIA_PEDIDO) {
         return [
           {
@@ -48,8 +46,6 @@ const computeAvailability = vi.fn(
       return [];
     }
 
-    // Catálogo general (sin acotar a un día): lo más próximo, que NO es el
-    // día pedido.
     return [
       {
         startUtc: `${DIA_GENERAL}T08:00:00.000Z`,
@@ -97,14 +93,10 @@ describe("offerSlots con día pedido (#agenda-fecha)", () => {
 
     expect(turn.ok).toBe(true);
     expect(turn.text).toContain("Para el jueves");
-    expect(turn.text).toContain("20:00"); // el slot del día pedido
-    expect(turn.text).not.toContain("08:00"); // NUNCA el catálogo general
+    expect(turn.text).toContain("20:00");
+    expect(turn.text).not.toContain("08:00");
     expect(turn.text).not.toContain("08:15");
 
-    // Bug #agenda-fecha-2: las ofertas VIGENTES de la conversación deben ser
-    // SOLO el día pedido — si quedara también el catálogo general (otro día)
-    // registrado como "ofrecido", el modelo podría confirmar por error un
-    // slot de ese otro día al reservar.
     expect(replaceOffers).toHaveBeenCalledTimes(1);
     const llamada = replaceOffers.mock.calls[0] as unknown as [
       string,
@@ -115,7 +107,6 @@ describe("offerSlots con día pedido (#agenda-fecha)", () => {
     expect(ofertasRegistradas).toHaveLength(1);
     expect(ofertasRegistradas[0]!.startUtc).toBe(`${DIA_PEDIDO}T20:00:00.000Z`);
 
-    // Se consultó el día puntual, acotado — no solo el catálogo general.
     expect(computeAvailability).toHaveBeenCalledWith(
       "org_1",
       expect.objectContaining({ fromISO: DIA_PEDIDO, toISO: DIA_PEDIDO })
@@ -134,10 +125,9 @@ describe("offerSlots con día pedido (#agenda-fecha)", () => {
     });
 
     expect(turn.ok).toBe(true);
-    // NUNCA se usa el intro que prometía ese día: no hay nada que ofrecer ahí.
     expect(turn.text).not.toContain("Para el domingo");
     expect(turn.text).toContain("Ese día no tengo horarios disponibles");
-    expect(turn.text).toContain("08:00"); // sí las alternativas reales
+    expect(turn.text).toContain("08:00");
   });
 
   it("sin día pedido: se comporta como antes (el catálogo general, sin filtrar)", async () => {
@@ -151,7 +141,26 @@ describe("offerSlots con día pedido (#agenda-fecha)", () => {
 
     expect(turn.ok).toBe(true);
     expect(turn.text).toContain("08:00");
-    // No se hizo ninguna consulta acotada a un solo día.
     expect(computeAvailability).toHaveBeenCalledTimes(1);
+  });
+
+  it("descarta horarios inventados por el modelo dentro del intro", async () => {
+    const { offerSlots } = await import("@/server/agenda/agent");
+
+    const turn = await offerSlots({
+      organizationId: "org_1",
+      conversationId: "cv_1",
+      intro:
+        "Estos son los horarios disponibles:\n• hoy a las 10:20\n• hoy a las 11:00\n• hoy a las 11:40",
+    });
+
+    expect(turn.ok).toBe(true);
+    expect(turn.text).toMatch(/^Tengo estos horarios disponibles:/);
+    expect(turn.text).not.toContain("10:20");
+    expect(turn.text).not.toContain("11:00");
+    expect(turn.text).not.toContain("11:40");
+    expect(turn.text).toContain("08:00");
+    expect(turn.text).toContain("08:15");
+    expect(turn.text).toContain("08:30");
   });
 });
