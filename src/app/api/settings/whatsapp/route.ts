@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withOrgRoles } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { isEmbeddedSignupConfigured } from "@/lib/env";
 import {
   getCredentialsByOrg,
@@ -10,7 +10,7 @@ import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
 
 export const dynamic = "force-dynamic";
 
-export const GET = withOrgRoles(["owner", "admin"], async (session) => {
+export const GET = withOrgPermissions(["settings.read"], async (session) => {
   const creds = await getCredentialsByOrg(session.organizationId);
   const embeddedSignup = isEmbeddedSignupConfigured()
     ? {
@@ -41,7 +41,7 @@ const putSchema = z.object({
 });
 
 /** Guarda la conexión: re-valida contra Meta, cifra y suscribe (FR-040). */
-export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
+export const PUT = withOrgPermissions(["settings.update"], async (session, req: Request) => {
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
 
@@ -60,7 +60,6 @@ export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request
     verifiedName: check.verifiedName,
   });
 
-  // Best-effort: necesaria en modo directo; el modo agencia usa su override.
   await subscribeAppToWaba(body.data.wabaId, body.data.token);
 
   return Response.json({

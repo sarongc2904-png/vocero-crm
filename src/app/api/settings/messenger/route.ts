@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withOrgRoles } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { graphRequest, MetaApiError } from "@/lib/meta/client";
 import {
   getMessengerCredentialsByOrg,
@@ -15,7 +15,7 @@ import { verifyZernioToken } from "@/server/zernio";
 export const dynamic = "force-dynamic";
 
 /** 017 — Estado de la conexión de Messenger (el token nunca sale entero). */
-export const GET = withOrgRoles(["owner", "admin"], async (session) => {
+export const GET = withOrgPermissions(["settings.read"], async (session) => {
   if (!isChannelEnabled("messenger")) return channelDisabledResponse();
   const creds = await getMessengerCredentialsByOrg(session.organizationId);
   if (!creds) return Response.json({ connection: null });
@@ -39,25 +39,14 @@ const putSchema = z.object({
   webhookSecret: z.string().trim().min(1).nullish(),
 });
 
-/**
- * Guarda la conexión validando ANTES contra la plataforma, igual que el wizard
- * de WhatsApp: un token que no sirve no llega a la base. Solo el propietario
- * de la organización puede hacerlo.
- */
-export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
+export const PUT = withOrgPermissions(["settings.update"], async (session, req: Request) => {
   if (!isChannelEnabled("messenger")) return channelDisabledResponse();
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
-  // `.default()` deja el tipo opcional aunque Zod siempre lo rellene: se fija
-  // aquí para que el resto del handler trabaje con un valor cerrado.
   const data = { ...body.data, source: body.data.source ?? "meta" };
 
   if (data.source === "meta" && !data.pageId) {
-    return apiError(
-      422,
-      "invalid_body",
-      "En modo Meta hace falta el ID de la página"
-    );
+    return apiError(422, "invalid_body", "En modo Meta hace falta el ID de la página");
   }
   if (data.source === "zernio" && !data.accountRef) {
     return apiError(
@@ -101,8 +90,6 @@ async function verify(data: VerifyInput): Promise<Check> {
     }
   }
 
-  // Meta: el token debe ser de ESA página. Un token de otra guardaría
-  // credenciales que reciben webhooks de una y contestan por otra.
   try {
     const res = await graphRequest<{ id?: string; name?: string }>(
       `${data.pageId}?fields=id,name`,

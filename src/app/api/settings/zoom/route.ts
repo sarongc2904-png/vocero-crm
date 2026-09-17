@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withOrgRoles } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { zoomConnector } from "@/server/agenda/connectors/zoom";
 import {
@@ -11,12 +11,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/**
- * 015 — Conexión de Zoom. El secreto entra, pero nunca vuelve a salir: hacia
- * el navegador solo van sus últimos 4 y el estado.
- */
-
-export const GET = withOrgRoles(["owner", "admin"], async (session) => {
+export const GET = withOrgPermissions(["settings.read"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   const creds = await getZoomCredentials(session.organizationId);
   if (!creds) return Response.json({ connection: null });
@@ -35,8 +30,7 @@ const credsSchema = z.object({
   clientSecret: z.string().trim().min(1),
 });
 
-/** Guarda validando ANTES contra Zoom: unas credenciales que no sirven no llegan a la base. */
-export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
+export const PUT = withOrgPermissions(["settings.update"], async (session, req: Request) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   const body = await parseBody(req, credsSchema);
   if (!body.ok) return body.response;
@@ -61,7 +55,7 @@ export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request
   });
 });
 
-export const DELETE = withOrgRoles(["owner", "admin"], async (session) => {
+export const DELETE = withOrgPermissions(["settings.update"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   await deleteZoomCredentials(session.organizationId);
   return Response.json({ ok: true });

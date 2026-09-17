@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseBody, withOrgRoles } from "@/lib/api";
+import { parseBody, withOrgPermissions } from "@/lib/api";
 import { getSessionOrNull } from "@/lib/auth/session";
 import { isValidHex, resolveAccentSet } from "@/lib/branding";
 import { CURRENCIES } from "@/lib/money";
@@ -21,12 +21,9 @@ const putSchema = z.object({
   currency: z.enum(CURRENCIES),
 });
 
-export const PUT = withOrgRoles(["owner"], async (session, req: Request) => {
+export const PUT = withOrgPermissions(["branding.manage"], async (session, req: Request) => {
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
-  // El icono se conserva: este formulario es de nombre, color y moneda, y se
-  // sube y se quita por su propia ruta. Sin esto, guardar el nombre borraría
-  // el logo sin que nadie lo pidiera.
   const actual = await getBranding(session.organizationId);
   await saveBranding(session.organizationId, {
     ...body.data,
