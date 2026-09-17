@@ -35,6 +35,20 @@ function enrichAll(slots: AvailableSlot[], timezone: string, now: Date) {
   });
 }
 
+/**
+ * `intro` puede venir del modelo. Solo se acepta si es una frase breve: nunca
+ * dejamos que un horario, una lista o varias líneas generadas por el LLM se
+ * mezclen con los slots factuales del backend.
+ */
+function safeOfferIntro(intro?: string): string | undefined {
+  const value = intro?.trim();
+  if (!value) return undefined;
+  if (value.includes("\n") || /[•▪◦]/.test(value)) return undefined;
+  if (/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/.test(value)) return undefined;
+  if (/\b\d{1,2}\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)\b/i.test(value)) return undefined;
+  return value;
+}
+
 export async function offerSlots(input: {
   organizationId: string;
   conversationId: string;
@@ -68,9 +82,7 @@ export async function offerSlots(input: {
   if (catalog.length === 0) {
     return {
       ok: false,
-      text:
-        input.intro?.trim() ||
-        "Por ahora no me quedan horarios libres. Déjame confirmarlo con el equipo y te aviso.",
+      text: "Por ahora no me quedan horarios libres. Déjame confirmarlo con el equipo y te aviso.",
     };
   }
 
@@ -83,7 +95,7 @@ export async function offerSlots(input: {
   if (input.day) {
     if (requestedDayHasAvailability) {
       const list = dayShown.map((slot) => `• ${slot.dayLabel} a las ${slot.time}`).join("\n");
-      const intro = input.intro?.trim() || "Tengo estos horarios disponibles:";
+      const intro = safeOfferIntro(input.intro) || "Tengo estos horarios disponibles:";
       return { ok: true, text: `${intro}\n${list}` };
     }
 
@@ -100,7 +112,7 @@ export async function offerSlots(input: {
   }
 
   const list = spread.map((slot) => `• ${slot.dayLabel} a las ${slot.time}`).join("\n");
-  const intro = input.intro?.trim() || "Tengo estos horarios disponibles:";
+  const intro = safeOfferIntro(input.intro) || "Tengo estos horarios disponibles:";
   return { ok: true, text: `${intro}\n${list}` };
 }
 
