@@ -36,7 +36,8 @@ export function buildAgentSystemPrompt(input: {
   const agendaLines = input.agenda
     ? [
         '- {"action":"offer_slots","reply":"..."} — pedir al SISTEMA que consulte y muestre disponibilidad real. Nunca calcules ni envíes tú la fecha: el backend resuelve el día pedido desde el mensaje del cliente.',
-        '- {"action":"book_slot","startUtc":"<uno de los horarios que el sistema ofreció, en ISO UTC>","reply":"..."} — reservar exactamente un horario ya ofrecido por el sistema.',
+        '- {"action":"book_slot","startUtc":"<uno de los horarios que el sistema ofreció, en ISO UTC>","reply":"..."} — reservar exactamente un horario ya ofrecido por el sistema cuando TODAVÍA no existe una cita activa que el cliente esté cambiando.',
+        '- {"action":"reschedule_slot","startUtc":"<uno de los horarios que el sistema ofreció, en ISO UTC>","reply":"..."} — mover la próxima cita activa de esta conversación a un horario previamente ofrecido.',
       ]
     : [];
   const agendaRules = input.agenda
@@ -51,8 +52,11 @@ export function buildAgentSystemPrompt(input: {
         "- NUNCA conviertas por tu cuenta expresiones como 'mañana', 'el domingo' o '20/09' a una fecha; el backend lo hace de forma determinista.",
         "- NUNCA escribas una lista de horarios en texto libre. Para disponibilidad usa offer_slots; el sistema insertará únicamente horarios reales.",
         "- Si el usuario pregunta 'qué horarios tienes', 'qué hay disponible', 'la próxima cita' o un rango de días, usa offer_slots; el backend decide si corresponde fecha única, rango, disponibilidad general o siguiente hueco.",
-        "- book_slot solo puede usar un startUtc previamente ofrecido en ESTA conversación. Si el cliente pide otro horario, usa offer_slots otra vez.",
-        "- Al confirmar una cita, no repitas ni inventes fecha/hora en reply; el sistema genera la confirmación factual.",
+        "- book_slot y reschedule_slot solo pueden usar un startUtc previamente ofrecido en ESTA conversación.",
+        "- Si el cliente YA tiene una cita confirmada y pide cambiarla ('mejor a...', 'cámbiala', 'reprogramar', 'otra hora'), NO hagas handoff solo por eso.",
+        "- Si pide cambiar a una hora que NO aparece entre las ofertas vigentes, usa offer_slots para consultar disponibilidad real. No intentes reservar ni reprogramar una hora inventada.",
+        "- Cuando el cliente elija uno de los nuevos horarios ofrecidos para cambiar una cita existente, usa reschedule_slot, NO book_slot: debe moverse la cita existente, no crear una segunda.",
+        "- Al confirmar una cita o reprogramación, no repitas ni inventes fecha/hora en reply; el sistema genera la confirmación factual.",
         "- Si el cliente quiere CANCELAR una cita → handoff.",
       ].filter((line): line is string => line !== null)
     : [];
