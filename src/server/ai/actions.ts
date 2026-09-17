@@ -34,8 +34,9 @@ const baseActions = [
  * `resolveScheduleIntent` a partir del mensaje del cliente.
  *
  * `reply` es solo introducción opcional, nunca la lista de horarios.
- * `book_slot.startUtc` debe coincidir exactamente con un horario ofrecido
- * previamente por el sistema; el motor de agenda lo valida antes de reservar.
+ * `book_slot.startUtc` y `reschedule_slot.startUtc` deben coincidir exactamente
+ * con un horario ofrecido previamente por el sistema. El motor de agenda lo
+ * valida antes de crear o mover una cita.
  */
 const agendaActions = [
   z.object({
@@ -52,6 +53,11 @@ const agendaActions = [
     startUtc: z.string().min(1),
     reply: z.string().optional(),
   }),
+  z.object({
+    action: z.literal("reschedule_slot"),
+    startUtc: z.string().min(1),
+    reply: z.string().optional(),
+  }),
 ] as const;
 
 export const AgentAction = z.discriminatedUnion("action", [
@@ -65,7 +71,13 @@ export function agentActionSchema(agenda: boolean) {
     : z.discriminatedUnion("action", [...baseActions]);
 }
 
-export type AgentActionType = z.infer<typeof AgentAction>;
+/**
+ * Tipo de trabajo interno del pipeline: usamos el INPUT del schema porque
+ * `offer_slots.day` todavía puede existir en asignaciones internas/legacy.
+ * El parseo runtime sigue transformándolo a `undefined`, así que el modelo
+ * nunca recupera autoridad sobre la fecha real.
+ */
+export type AgentActionType = z.input<typeof AgentAction>;
 
 export function resolveStage(
   requested: string,
@@ -81,7 +93,8 @@ export function degradeAction(action: AgentActionType): AgentActionType {
   if (
     action.action === "move_stage" ||
     action.action === "offer_slots" ||
-    action.action === "book_slot"
+    action.action === "book_slot" ||
+    action.action === "reschedule_slot"
   ) {
     return action.reply
       ? { action: "reply", text: action.reply }

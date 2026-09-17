@@ -18,6 +18,7 @@ const prefixes = {
   template: "tpl",
   testRun: "run",
   testCase: "case",
+  testTrace: "trace",
   mediaAsset: "ma",
   // 015 — motor de agenda
   calendarSettings: "cal",
