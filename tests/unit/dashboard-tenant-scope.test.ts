@@ -28,14 +28,22 @@ describe("dashboard operativo por tenant", () => {
     }
   });
 
-  it("no mezcla monto desconocido con cero ni con valor conocido", () => {
+  it("no mezcla monto desconocido ni moneda ajena con el total del tenant", () => {
     expect(metricsSource).toContain("pipeline_amount_known");
     expect(metricsSource).toContain("pipeline_amount_unknown");
-    expect(pageSource).toContain("oportunidades sin monto");
+    expect(metricsSource).toContain("pipeline_amount_other_currency");
+    expect(metricsSource).toContain("coalesce(l.currency, ${businessCurrency}) = ${businessCurrency}");
+    expect(pageSource).toContain("sin monto");
+    expect(pageSource).toContain("en otra moneda");
+  });
+
+  it("calcula hoy con la zona horaria configurada", () => {
+    expect(metricsSource).toContain("at time zone ${timezone}");
+    expect(pageSource).toContain("calendar.timezone");
   });
 
   it("el modo superadmin conserva el organizationId activo", () => {
-    expect(pageSource).toContain("getDashboardMetrics(session.organizationId)");
+    expect(pageSource).toContain("session.organizationId,");
     expect(pageSource).toContain("session.isSuperadmin");
     expect(pageSource).toContain("Estás administrando:");
   });
