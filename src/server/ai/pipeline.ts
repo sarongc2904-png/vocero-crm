@@ -37,6 +37,7 @@ import {
   resolveScheduleScope,
   type ScheduleScope,
 } from "@/server/agenda/schedule-scope";
+import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 
 type CoalesceEntry = {
   timer: ReturnType<typeof setTimeout> | null;
@@ -97,14 +98,6 @@ async function executeTurn(conversationId: string): Promise<void> {
   }
 }
 
-/**
- * Ejecuta UN turno del agente ahora.
- *
- * `expectedOrganizationId` es obligatorio para callers que ya conocen el
- * tenant (el Laboratorio). Si se provee, incluso el lookup inicial exige el
- * par organizationId + conversationId; un id filtrado de otro tenant queda
- * convertido en "no encontrado".
- */
 export async function runAgentTurn(
   conversationId: string,
   expectedOrganizationId?: string
@@ -184,6 +177,7 @@ export async function runAgentTurn(
   let todayInfo: { iso: string; label: string } | undefined;
   let scheduleIntent: ScheduleIntent = { kind: "none" };
   let scheduleScope: ScheduleScope | null = null;
+  let schedulingSignal = false;
   let businessFact: Parameters<typeof buildAgentSystemPrompt>[0]["businessFact"];
   if (agenda) {
     const settings = await getSettings(organizationId);
@@ -192,6 +186,9 @@ export async function runAgentTurn(
       iso: todayInTz(now, settings.timezone),
       label: todayLabelInTz(now, settings.timezone),
     };
+    schedulingSignal = lastInbound.text
+      ? hasSchedulingSignal({ text: lastInbound.text, now, timezone: settings.timezone })
+      : false;
     scheduleScope = lastInbound.text
       ? resolveScheduleScope(lastInbound.text, now, settings.timezone)
       : null;
@@ -246,6 +243,13 @@ export async function runAgentTurn(
   }
 
   let action: AgentActionType = result.data;
+
+  // El modelo no puede abrir la agenda por una pregunta informativa. El gate
+  // usa el inbound real ya cargado por el pipeline, sin hacer una segunda
+  // consulta a BD y sin afectar las re-ofertas internas de book/reschedule.
+  if (agenda && action.action === "offer_slots" && !schedulingSignal) {
+    action = degradeAction(action);
+  }
 
   if (
     agenda &&

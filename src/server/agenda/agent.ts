@@ -1,6 +1,3 @@
-import { desc, eq } from "drizzle-orm";
-import { getDb, schema } from "@/lib/db";
-import { scoped } from "@/lib/db/tenant";
 import { computeAvailability, type AvailableSlot } from "@/server/agenda/availability";
 import { getSettings } from "@/server/agenda/settings";
 import { spreadByDay } from "@/server/agenda/spread";
@@ -9,7 +6,6 @@ import { BookingError, createSessionBooking } from "@/server/agenda/service";
 import { googleAddEventUrl } from "@/lib/calendar-link";
 import { dayIsoInTz, dayLabelInTz, timeInTz } from "@/lib/time/slots";
 import { capitalize, formatHoursEs } from "@/server/agenda/schedule-intent";
-import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 
 const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -39,39 +35,6 @@ function enrichAll(slots: AvailableSlot[], timezone: string, now: Date) {
   });
 }
 
-async function latestInboundText(
-  organizationId: string,
-  conversationId: string
-): Promise<string | null> {
-  const rows = await getDb()
-    .select({ text: schema.message.text, direction: schema.message.direction })
-    .from(schema.message)
-    .where(
-      scoped(
-        schema.message.organizationId,
-        organizationId,
-        eq(schema.message.conversationId, conversationId)
-      )
-    )
-    .orderBy(desc(schema.message.createdAt))
-    .limit(20);
-
-  return rows.find((row) => row.direction === "in" && row.text?.trim())?.text?.trim() ?? null;
-}
-
-function isInternalReoffer(intro?: string): boolean {
-  const text = intro?.trim() ?? "";
-  return (
-    text.startsWith("Para cambiar tu cita, elige uno de estos horarios disponibles:") ||
-    text.startsWith("Ese horario ya no está disponible. Estas son las opciones actuales:")
-  );
-}
-
-/**
- * Oferta inicial de agenda. La acción del modelo no basta: antes de consultar
- * horarios se valida el último inbound real. Las re-ofertas internas de una
- * reprogramación fallida conservan su flujo aunque el turno sea "sí, ese".
- */
 export async function offerSlots(input: {
   organizationId: string;
   conversationId: string;
@@ -81,19 +44,6 @@ export async function offerSlots(input: {
 }): Promise<AgendaTurn> {
   const settings = await getSettings(input.organizationId);
   const now = new Date();
-
-  if (!isInternalReoffer(input.intro)) {
-    const inbound = await latestInboundText(input.organizationId, input.conversationId);
-    if (!inbound || !hasSchedulingSignal({ text: inbound, now, timezone: settings.timezone })) {
-      return {
-        ok: false,
-        text:
-          input.intro?.trim() ||
-          "Claro. Dime qué información necesitas y te ayudo sin abrir la agenda.",
-      };
-    }
-  }
-
   const all = await computeAvailability(input.organizationId, { settings, now });
   const spread = enrichAll(all, settings.timezone, now);
 

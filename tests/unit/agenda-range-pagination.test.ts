@@ -1,15 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 /**
- * Fase 1 — segunda vuelta del bug de rangos: con `RANGE_TOTAL=24` y
- * `RANGE_PER_DAY=4`, un rango lunes→domingo (7 días) con ≥4 slots/día
- * consumía exactamente `6 × 4 = 24` y el domingo desaparecía SIN AVISO.
- *
- * `offerGrouped` (agent.ts) ahora garantiza al menos 1 slot por día ANTES de
- * repartir los adicionales, y siempre anuncia explícitamente lo que no
- * alcanzó a mostrarse — nunca un corte silencioso. Estos tests llaman
- * directamente a `offerRange`/`offerGeneralAvailability` (no todo el
- * pipeline) para poder inspeccionar la metadata de paginación exacta.
+ * Contrato actual: la disponibilidad que devuelve computeAvailability se
+ * muestra completa. Ya no existe presupuesto artificial de 24 slots ni tope
+ * por día; la metadata de paginación debe reflejar que no quedó nada oculto.
  */
 
 const settings = {
@@ -40,7 +34,6 @@ vi.mock("@/server/agenda/availability", () => ({
     computeAvailabilityImpl(org, opts),
 }));
 
-/** 7 días, lunes 21-sep a domingo 27-sep, `count` slots cada uno (15:00Z = 09:00 local, cada 45min). */
 function semanaCompleta(countPorDia: number) {
   const dias = ["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-26", "2026-09-27"];
   const out: { startUtc: string; endUtc: string }[] = [];
@@ -55,9 +48,9 @@ function semanaCompleta(countPorDia: number) {
   return out;
 }
 
-describe("offerGrouped — nunca un día completo desaparece sin aviso", () => {
-  it("Test 1 — lunes→domingo, todos abiertos, 4 slots/día, RANGE_TOTAL=24: los 7 días quedan representados", async () => {
-    computeAvailabilityImpl = async () => semanaCompleta(4); // 7×4 = 28 > 24: justo el caso que fallaba
+describe("offerGrouped — disponibilidad completa", () => {
+  it("muestra los 28 slots de lunes a domingo sin truncar", async () => {
+    computeAvailabilityImpl = async () => semanaCompleta(4);
     const { offerRange } = await import("@/server/agenda/agent");
     const turno = await offerRange({
       organizationId: "org_1",
@@ -67,22 +60,25 @@ describe("offerGrouped — nunca un día completo desaparece sin aviso", () => {
     });
 
     expect(turno.ok).toBe(true);
-    expect(turno.pagination?.totalAvailableDays).toBe(7);
-    expect(turno.pagination?.displayedDays).toBe(7); // RANGE_DAY_COVERAGE
-    // Domingo, el que antes desaparecía, tiene que estar en el texto.
+    expect(turno.pagination).toEqual({
+      totalAvailableSlots: 28,
+      displayedSlots: 28,
+      totalAvailableDays: 7,
+      displayedDays: 7,
+      remainingSlots: 0,
+      remainingDays: 0,
+      truncated: false,
+    });
     expect(turno.text).toMatch(/domingo/i);
     expect(turno.text).toContain("27 de septiembre");
-    // No caben los 28 completos en 24 de presupuesto: debe avisar que faltan.
-    expect(turno.pagination?.truncated).toBe(true);
-    expect(turno.pagination?.remainingSlots).toBeGreaterThan(0);
-    expect(turno.text).toMatch(/más horarios/i); // RANGE_TRUNCATION_DISCLOSURE
+    expect(replaceOffers).toHaveBeenLastCalledWith(
+      "org_1",
+      "cv_1",
+      expect.arrayContaining([expect.objectContaining({ startUtc: "2026-09-27T17:15:00.000Z" })])
+    );
   });
 
-  it("Test 2 — presupuesto menor que el número de días con cupo: no trunca en silencio, remainingDays > 0 y se nombran los días", async () => {
-    // 10 días con 1 slot cada uno, pero RANGE_TOTAL fijo en 24 en el código —
-    // para forzar remainingDays>0 con un presupuesto ya ajustado, se simulan
-    // más días de los que el tope permite representar ni con 1 slot cada uno
-    // (24 días > presupuesto de 24... en realidad basta con más de 24 días).
+  it("muestra todos los días disponibles aunque sean más de 24", async () => {
     const dias = Array.from({ length: 30 }, (_, i) => {
       const d = new Date(Date.UTC(2026, 8, 21 + i));
       return d.toISOString().slice(0, 10);
@@ -99,20 +95,18 @@ describe("offerGrouped — nunca un día completo desaparece sin aviso", () => {
     });
 
     expect(turno.pagination?.totalAvailableDays).toBe(30);
-    expect(turno.pagination?.displayedDays).toBeLessThan(30);
-    expect(turno.pagination?.remainingDays).toBeGreaterThan(0); // nunca se trunca en silencio
-    expect(turno.pagination?.truncated).toBe(true);
-    // Los días omitidos se nombran explícitamente, no un "hay más" vago.
-    expect(turno.text).toMatch(/también tengo disponibilidad/i);
+    expect(turno.pagination?.displayedDays).toBe(30);
+    expect(turno.pagination?.remainingDays).toBe(0);
+    expect(turno.pagination?.remainingSlots).toBe(0);
+    expect(turno.pagination?.truncated).toBe(false);
   });
 
-  it("Test 3 — rango con días sin disponibilidad: no se inventan, solo cuentan los días con slots reales", async () => {
-    // Miércoles y viernes SIN disponibilidad — solo lunes/martes/jueves/domingo.
+  it("no inventa días sin disponibilidad", async () => {
     computeAvailabilityImpl = async () => [
-      { startUtc: "2026-09-21T15:00:00.000Z", endUtc: "2026-09-21T15:00:00.000Z" }, // lunes
-      { startUtc: "2026-09-22T15:00:00.000Z", endUtc: "2026-09-22T15:00:00.000Z" }, // martes
-      { startUtc: "2026-09-24T15:00:00.000Z", endUtc: "2026-09-24T15:00:00.000Z" }, // jueves
-      { startUtc: "2026-09-27T15:00:00.000Z", endUtc: "2026-09-27T15:00:00.000Z" }, // domingo
+      { startUtc: "2026-09-21T15:00:00.000Z", endUtc: "2026-09-21T15:00:00.000Z" },
+      { startUtc: "2026-09-22T15:00:00.000Z", endUtc: "2026-09-22T15:00:00.000Z" },
+      { startUtc: "2026-09-24T15:00:00.000Z", endUtc: "2026-09-24T15:00:00.000Z" },
+      { startUtc: "2026-09-27T15:00:00.000Z", endUtc: "2026-09-27T15:00:00.000Z" },
     ];
     const { offerRange } = await import("@/server/agenda/agent");
     const turno = await offerRange({
@@ -122,19 +116,19 @@ describe("offerGrouped — nunca un día completo desaparece sin aviso", () => {
       endDate: "2026-09-27",
     });
 
-    expect(turno.pagination?.totalAvailableDays).toBe(4); // no 7 — miércoles/viernes no cuentan
+    expect(turno.pagination?.totalAvailableDays).toBe(4);
     expect(turno.pagination?.displayedDays).toBe(4);
     expect(turno.pagination?.truncated).toBe(false);
     expect(turno.text).not.toMatch(/miércoles|viernes/i);
   });
 
-  it("Test 4 — todos los días representados pero sobran slots sueltos: remainingSlots > 0 y mensaje de continuación (no de días)", async () => {
+  it("muestra todos los slots de un día sin tope por día", async () => {
     computeAvailabilityImpl = async () => [
       ...Array.from({ length: 8 }, (_, i) => ({
         startUtc: `2026-09-21T${String(15 + i).padStart(2, "0")}:00:00.000Z`,
         endUtc: `2026-09-21T${String(15 + i).padStart(2, "0")}:00:00.000Z`,
-      })), // lunes con 8 slots — más de RANGE_PER_DAY(4)
-      { startUtc: "2026-09-22T15:00:00.000Z", endUtc: "2026-09-22T15:00:00.000Z" }, // martes, 1 solo
+      })),
+      { startUtc: "2026-09-22T15:00:00.000Z", endUtc: "2026-09-22T15:00:00.000Z" },
     ];
     const { offerRange } = await import("@/server/agenda/agent");
     const turno = await offerRange({
@@ -144,12 +138,16 @@ describe("offerGrouped — nunca un día completo desaparece sin aviso", () => {
       endDate: "2026-09-22",
     });
 
-    expect(turno.pagination?.totalAvailableDays).toBe(2);
-    expect(turno.pagination?.displayedDays).toBe(2); // ambos días SÍ quedaron representados
-    expect(turno.pagination?.remainingSlots).toBeGreaterThan(0); // pero sobran horarios del lunes
-    expect(turno.pagination?.remainingDays).toBe(0);
-    expect(turno.pagination?.truncated).toBe(true);
-    expect(turno.text).toMatch(/tengo más horarios disponibles en algunos de estos días/i);
-    expect(turno.text).not.toMatch(/también tengo disponibilidad/i); // ese mensaje es solo para días omitidos
+    expect(turno.pagination).toEqual({
+      totalAvailableSlots: 9,
+      displayedSlots: 9,
+      totalAvailableDays: 2,
+      displayedDays: 2,
+      remainingSlots: 0,
+      remainingDays: 0,
+      truncated: false,
+    });
+    expect(turno.text).toContain("16:00");
+    expect(turno.text).toContain("22:00");
   });
 });
