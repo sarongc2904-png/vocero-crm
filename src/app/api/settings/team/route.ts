@@ -55,10 +55,11 @@ const deleteSchema = z.object({
 export const POST = withOrgPermissions(["users.create"], async (session, req: Request) => {
   const body = await parseBody(req, createSchema);
   if (!body.ok) return body.response;
+  const requestedRole = body.data.role ?? "agent";
   if (
     !canAssignRole({
       actorRole: session.role,
-      nextRole: body.data.role,
+      nextRole: requestedRole,
       isSuperadmin: session.isSuperadmin,
     })
   ) {
@@ -95,7 +96,7 @@ export const POST = withOrgPermissions(["users.create"], async (session, req: Re
       id: memberId,
       organizationId: session.organizationId,
       userId: newUserId,
-      role: body.data.role,
+      role: requestedRole,
     })
     .onConflictDoNothing();
 
@@ -103,7 +104,7 @@ export const POST = withOrgPermissions(["users.create"], async (session, req: Re
     action: "member.create",
     targetType: "member",
     targetId: memberId,
-    metadata: { role: body.data.role },
+    metadata: { role: requestedRole },
   });
 
   return Response.json({ ok: true, memberId }, { status: 201 });
