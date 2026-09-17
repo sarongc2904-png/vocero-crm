@@ -71,7 +71,13 @@ export function agentActionSchema(agenda: boolean) {
     : z.discriminatedUnion("action", [...baseActions]);
 }
 
-export type AgentActionType = z.infer<typeof AgentAction>;
+/**
+ * Tipo de trabajo interno del pipeline: usamos el INPUT del schema porque
+ * `offer_slots.day` todavía puede existir en asignaciones internas/legacy.
+ * El parseo runtime sigue transformándolo a `undefined`, así que el modelo
+ * nunca recupera autoridad sobre la fecha real.
+ */
+export type AgentActionType = z.input<typeof AgentAction>;
 
 export function resolveStage(
   requested: string,
