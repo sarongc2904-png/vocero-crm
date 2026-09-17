@@ -110,7 +110,7 @@ describe("Fase 2A: roles y RBAC centralizado", () => {
     expect(hasOrganizationRole("member", ["agent"])).toBe(true);
   });
 
-  it("todas las superficies sensibles usan el gate reutilizable", () => {
+  it("todas las superficies sensibles usan un gate reutilizable de autorización", () => {
     const sensitive = [
       "src/app/api/settings/team/route.ts",
       "src/app/api/settings/bot-api-key/route.ts",
@@ -123,7 +123,9 @@ describe("Fase 2A: roles y RBAC centralizado", () => {
       "src/app/api/settings/capi/route.ts",
       "src/app/api/settings/zoom/route.ts",
     ];
-    for (const path of sensitive) expect(source(path), path).toContain("withOrgRoles");
+    for (const path of sensitive) {
+      expect(source(path), path).toMatch(/withOrg(?:Roles|Permissions)/);
+    }
   });
 
   it("Better Auth no deja una ruta alterna para crear orgs o gestionar equipo", () => {
