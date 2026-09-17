@@ -2,9 +2,11 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { getAuth, runInternalSignup } from "@/lib/auth";
+import { canAssignRole, canManageMember } from "@/lib/auth/member-policy";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +55,15 @@ const deleteSchema = z.object({
 export const POST = withOrgPermissions(["users.create"], async (session, req: Request) => {
   const body = await parseBody(req, createSchema);
   if (!body.ok) return body.response;
+  if (
+    !canAssignRole({
+      actorRole: session.role,
+      nextRole: body.data.role,
+      isSuperadmin: session.isSuperadmin,
+    })
+  ) {
+    return apiError(403, "forbidden_role", "No puedes asignar ese rol");
+  }
 
   const auth = getAuth();
   let newUserId: string;
@@ -77,27 +88,35 @@ export const POST = withOrgPermissions(["users.create"], async (session, req: Re
   }
 
   const db = getDb();
+  const memberId = newId("member");
   await db
     .insert(schema.member)
     .values({
-      id: newId("member"),
+      id: memberId,
       organizationId: session.organizationId,
       userId: newUserId,
       role: body.data.role,
     })
     .onConflictDoNothing();
 
-  return Response.json({ ok: true }, { status: 201 });
+  await auditPrivilegedAction(session, {
+    action: "member.create",
+    targetType: "member",
+    targetId: memberId,
+    metadata: { role: body.data.role },
+  });
+
+  return Response.json({ ok: true, memberId }, { status: 201 });
 });
 
-/** Cambia el rol operativo sin permitir degradar ni sustituir al owner. */
+/** Cambia el rol operativo respetando la jerarquía owner > admin > agent. */
 export const PATCH = withOrgPermissions(["users.update"], async (session, req: Request) => {
   const body = await parseBody(req, updateSchema);
   if (!body.ok) return body.response;
 
   const db = getDb();
   const [target] = await db
-    .select({ role: schema.member.role })
+    .select({ role: schema.member.role, userId: schema.member.userId })
     .from(schema.member)
     .where(
       and(
@@ -108,8 +127,22 @@ export const PATCH = withOrgPermissions(["users.update"], async (session, req: R
     .limit(1);
 
   if (!target) return apiError(404, "not_found", "Usuario no encontrado en este tenant");
-  if (target.role === "owner") {
-    return apiError(409, "owner_protected", "No se puede modificar al propietario");
+  if (target.userId === session.userId) {
+    return apiError(409, "self_protected", "No puedes cambiar tu propio rol");
+  }
+  if (
+    !canManageMember({
+      actorRole: session.role,
+      targetRole: target.role,
+      isSuperadmin: session.isSuperadmin,
+    }) ||
+    !canAssignRole({
+      actorRole: session.role,
+      nextRole: body.data.role,
+      isSuperadmin: session.isSuperadmin,
+    })
+  ) {
+    return apiError(403, "forbidden_role", "No puedes modificar ese rol");
   }
 
   await db
@@ -122,20 +155,24 @@ export const PATCH = withOrgPermissions(["users.update"], async (session, req: R
       )
     );
 
+  await auditPrivilegedAction(session, {
+    action: "member.role.update",
+    targetType: "member",
+    targetId: body.data.memberId,
+    metadata: { from: target.role, to: body.data.role },
+  });
+
   return Response.json({ ok: true, role: body.data.role });
 });
 
-/** Borrado de acceso: owner o superadmin; nunca elimina al propietario. */
+/** Quita el acceso al tenant. El borrado global de cuenta tiene una ruta aparte. */
 export const DELETE = withOrgPermissions(["users.delete"], async (session, req: Request) => {
   const body = await parseBody(req, deleteSchema);
   if (!body.ok) return body.response;
 
   const db = getDb();
   const [target] = await db
-    .select({
-      userId: schema.member.userId,
-      role: schema.member.role,
-    })
+    .select({ userId: schema.member.userId, role: schema.member.role })
     .from(schema.member)
     .where(
       and(
@@ -148,30 +185,33 @@ export const DELETE = withOrgPermissions(["users.delete"], async (session, req: 
   if (!target) {
     return apiError(404, "not_found", "La cuenta ya no pertenece a este equipo");
   }
-  if (target.role === "owner" || target.userId === session.userId) {
-    return apiError(409, "owner_protected", "No se puede eliminar al propietario");
+  if (target.userId === session.userId) {
+    return apiError(409, "self_protected", "No puedes quitar tu propio acceso");
+  }
+  if (
+    !canManageMember({
+      actorRole: session.role,
+      targetRole: target.role,
+      isSuperadmin: session.isSuperadmin,
+    })
+  ) {
+    return apiError(403, "forbidden_role", "No puedes quitar el acceso a ese usuario");
   }
 
-  await db.transaction(async (tx) => {
-    await tx
-      .delete(schema.member)
-      .where(
-        and(
-          eq(schema.member.id, body.data.memberId),
-          eq(schema.member.organizationId, session.organizationId)
-        )
-      );
+  await db
+    .delete(schema.member)
+    .where(
+      and(
+        eq(schema.member.id, body.data.memberId),
+        eq(schema.member.organizationId, session.organizationId)
+      )
+    );
 
-    // Si la cuenta pertenece a otra organización, conserva su acceso allí.
-    const [remainingMembership] = await tx
-      .select({ id: schema.member.id })
-      .from(schema.member)
-      .where(eq(schema.member.userId, target.userId))
-      .limit(1);
-
-    if (!remainingMembership) {
-      await tx.delete(schema.user).where(eq(schema.user.id, target.userId));
-    }
+  await auditPrivilegedAction(session, {
+    action: "member.access.remove",
+    targetType: "member",
+    targetId: body.data.memberId,
+    metadata: { userId: target.userId, role: target.role },
   });
 
   return Response.json({ ok: true });
