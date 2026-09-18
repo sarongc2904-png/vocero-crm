@@ -105,7 +105,7 @@ export async function claimNextJob(
       limit 1
     )
     update durable_job as j
-    set lease_until = now() + (${LEASE_MINUTES} || ' minutes')::interval,
+    set lease_until = now() + make_interval(mins => ${LEASE_MINUTES}),
         claimed_request_at = j.requested_at,
         attempts = j.attempts + 1,
         updated_at = now()
