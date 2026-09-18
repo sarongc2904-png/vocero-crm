@@ -44,9 +44,12 @@ import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
  * Postgres. El import dinámico evita un ciclo estático con el worker que, a su
  * vez, ejecuta runAgentTurn.
  */
-export async function scheduleAgentTurn(conversationId: string): Promise<void> {
+export async function scheduleAgentTurn(
+  organizationId: string,
+  conversationId: string
+): Promise<void> {
   const { enqueueAgentTurn } = await import("@/server/jobs/queue");
-  await enqueueAgentTurn(conversationId);
+  await enqueueAgentTurn(organizationId, conversationId);
 }
 
 export async function runAgentTurn(
