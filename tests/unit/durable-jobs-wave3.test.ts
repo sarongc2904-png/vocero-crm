@@ -51,7 +51,7 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     const ingest = source("src/server/inbox/ingest.ts");
     const worker = source("src/server/jobs/worker.ts");
 
-    expect(queue).toContain("organizationId: string,\\n  conversationId: string");
+    expect(queue).toContain("organizationId: string,\n  conversationId: string");
     expect(queue).toContain("schema.conversation.organizationId");
     expect(queue).toContain("schema.agentTestRun.organizationId");
     expect(queue).toContain("and organization_id = ${job.organizationId}");
@@ -63,6 +63,7 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     );
     expect(worker).toContain("await completeLabJob(job)");
   });
+
   it("aplica backoff acotado al reintentar jobs", () => {
     expect(retryDelayMs(1)).toBe(5_000);
     expect(retryDelayMs(3)).toBe(15_000);
