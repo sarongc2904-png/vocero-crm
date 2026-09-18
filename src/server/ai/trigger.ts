@@ -2,13 +2,12 @@ import { scheduleAgentTurn } from "@/server/ai/pipeline";
 import { isAiConfigured } from "@/lib/env";
 
 /**
- * Punto de enganche del turno del agente tras la ingesta de un mensaje
- * entrante REAL (las conversaciones del Laboratorio invocan el pipeline
- * directamente, sin debounce).
+ * Punto de enganche tras ingestar un inbound REAL. Wave 3: scheduleAgentTurn
+ * persiste el trabajo en Postgres; ya no depende de timers/Map en memoria.
  */
 export async function maybeRunAgentTurn(
   conversationId: string
 ): Promise<void> {
   if (!isAiConfigured()) return;
-  scheduleAgentTurn(conversationId);
+  await scheduleAgentTurn(conversationId);
 }
