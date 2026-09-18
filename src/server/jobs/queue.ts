@@ -1,4 +1,5 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { scoped } from "@/lib/db/tenant";
 import { getDb, getSql, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { getEnv } from "@/lib/env";
@@ -18,15 +19,23 @@ export type DurableJob = {
 
 const LEASE_MINUTES = 15;
 
-export async function enqueueAgentTurn(conversationId: string): Promise<void> {
+export async function enqueueAgentTurn(
+  organizationId: string,
+  conversationId: string
+): Promise<void> {
   const db = getDb();
   const rows = await db
-    .select({ organizationId: schema.conversation.organizationId })
+    .select({ id: schema.conversation.id })
     .from(schema.conversation)
-    .where(eq(schema.conversation.id, conversationId))
+    .where(
+      scoped(
+        schema.conversation.organizationId,
+        organizationId,
+        eq(schema.conversation.id, conversationId)
+      )
+    )
     .limit(1);
-  const organizationId = rows[0]?.organizationId;
-  if (!organizationId) return;
+  if (!rows[0]) return;
 
   const delay = Math.max(0, getEnv().AGENT_COALESCE_MS);
   const dueAt = new Date(Date.now() + delay);
@@ -54,6 +63,20 @@ export async function enqueueLabRun(
   organizationId: string,
   runId: string
 ): Promise<void> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: schema.agentTestRun.id })
+    .from(schema.agentTestRun)
+    .where(
+      scoped(
+        schema.agentTestRun.organizationId,
+        organizationId,
+        eq(schema.agentTestRun.id, runId)
+      )
+    )
+    .limit(1);
+  if (!rows[0]) return;
+
   const sql = getSql();
   await sql`
     insert into durable_job (
@@ -154,6 +177,7 @@ export async function completeAgentJob(job: DurableJob): Promise<void> {
   const deleted = await sql`
     delete from durable_job
     where id = ${job.id}
+      and organization_id = ${job.organizationId}
       and requested_at <= ${job.claimedRequestAt}
     returning id
   `;
@@ -169,12 +193,17 @@ export async function completeAgentJob(job: DurableJob): Promise<void> {
         due_at = least(due_at, now()),
         updated_at = now()
     where id = ${job.id}
+      and organization_id = ${job.organizationId}
   `;
 }
 
-export async function completeLabJob(jobId: string): Promise<void> {
+export async function completeLabJob(job: DurableJob): Promise<void> {
   const sql = getSql();
-  await sql`delete from durable_job where id = ${jobId}`;
+  await sql`
+    delete from durable_job
+    where id = ${job.id}
+      and organization_id = ${job.organizationId}
+  `;
 }
 
 export function retryDelayMs(attempts: number): number {
@@ -196,5 +225,6 @@ export async function releaseFailedJob(
         last_error = ${detail},
         updated_at = now()
     where id = ${job.id}
+      and organization_id = ${job.organizationId}
   `;
 }
