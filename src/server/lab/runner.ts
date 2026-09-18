@@ -6,6 +6,7 @@ import { runAgentTurn } from "@/server/ai/pipeline";
 import { renderKb } from "@/server/ai/prompts";
 import { computeScore, judgeCase } from "@/server/lab/judge";
 import { PERSONAS, type Persona } from "@/server/lab/personas";
+import { enqueueLabRun } from "@/server/jobs/queue";
 import {
   persistActionTrace,
   type AgentActionTrace,
@@ -13,12 +14,11 @@ import {
 } from "@/server/lab/action-trace";
 
 /**
- * Runner del Laboratorio (FR-030/FR-034): corrida en segundo plano DENTRO del
- * proceso (sin cola externa), turnos secuenciales con debounce 0, timeout
- * global de 10 minutos, y lock de concurrencia por índice parcial UNIQUE en
- * BD (máx. 1 corrida `running` por organización).
+ * Runner del Laboratorio (FR-030/FR-034).
  *
- * Wave 1: toda lectura/actualización por id también exige organizationId.
+ * Wave 3: startRun solo crea el run/casos y encola un job durable en Postgres.
+ * Un reinicio ya no convierte automáticamente la corrida en fallida: el worker
+ * puede reclamarla de nuevo y continuar los casos aún no terminados.
  */
 const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -50,26 +50,17 @@ export async function startRun(organizationId: string): Promise<string> {
     }))
   );
 
-  void executeRun(runId, organizationId).catch(async (err) => {
-    console.error("[lab] corrida falló:", err);
-    await failRun(runId, organizationId, String(err));
-  });
-
+  await enqueueLabRun(organizationId, runId);
   return runId;
 }
 
-async function executeRun(
+export async function executeLabRun(
   runId: string,
   organizationId: string
 ): Promise<void> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(
-      () => reject(new Error("timeout de 10 minutos superado")),
-      RUN_TIMEOUT_MS
-    )
-  );
+  const deadline = Date.now() + RUN_TIMEOUT_MS;
   try {
-    await Promise.race([runAllCases(runId, organizationId), timeout]);
+    await runAllCases(runId, organizationId, deadline);
   } catch (err) {
     await failRun(runId, organizationId, String(err));
   }
@@ -77,7 +68,8 @@ async function executeRun(
 
 async function runAllCases(
   runId: string,
-  organizationId: string
+  organizationId: string,
+  deadline: number
 ): Promise<void> {
   const db = getDb();
   const cases = await db
@@ -114,13 +106,26 @@ async function runAllCases(
         .join("\n")
     : "";
 
-  let done = 0;
+  let done = cases.filter(
+    (testCase) =>
+      testCase.status === "done" || testCase.status === "judge_failed"
+  ).length;
   const total = cases.length;
   publishProgress(organizationId, runId, "running", done, total);
 
   for (const testCase of cases) {
+    if (Date.now() > deadline) {
+      throw new Error("timeout de 10 minutos superado");
+    }
+    if (testCase.status === "done" || testCase.status === "judge_failed") {
+      continue;
+    }
+
     const persona = PERSONAS.find((p) => p.key === testCase.persona);
-    if (!persona) continue;
+    if (!persona) {
+      done += 1;
+      continue;
+    }
 
     await db
       .update(schema.agentTestCase)
