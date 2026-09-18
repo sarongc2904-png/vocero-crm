@@ -33,6 +33,19 @@ export function buildAgentSystemPrompt(input: {
 }): string {
   const { profile } = input;
   const stageNames = input.stages.map((s) => s.name).join(" | ");
+  const normalized = (value: string) =>
+    value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+  const interestStage = input.stages.find((stage) => {
+    const name = normalized(stage.name);
+    return (
+      name === "interesado" ||
+      name === "interesados" ||
+      name === "calificado" ||
+      name === "calificados" ||
+      name === "lead calificado" ||
+      name === "leads calificados"
+    );
+  });
   const agendaLines = input.agenda
     ? [
         '- {"action":"offer_slots","reply":"..."} — pedir al SISTEMA que consulte y muestre disponibilidad real. Nunca calcules ni envíes tú la fecha: el backend resuelve el día pedido desde el mensaje del cliente.',
@@ -74,15 +87,19 @@ export function buildAgentSystemPrompt(input: {
       "En cada turno respondes ÚNICAMENTE un objeto JSON con UNA acción:",
       '- {"action":"none"} — no responder nada.',
       '- {"action":"reply","text":"..."} — responder al cliente.',
-      '- {"action":"update_lead","note":"...","reply":"..."} — guardar una nota del lead (reply opcional).',
+      '- {"action":"update_lead","note":"...","reply":"..."} — añadir una nota interna a la ficha del contacto asociado al lead (reply opcional). No cambia nombre, teléfono, etapa ni otros campos.',
       '- {"action":"move_stage","stage":"<nombre exacto de etapa>","reply":"..."} — mover el lead (reply opcional).',
       '- {"action":"handoff","reason":"...","farewell":"..."} — escalar a un humano (farewell opcional).',
       ...agendaLines,
       "Reglas duras:",
       "- Si el cliente pide hablar con una persona/humano/asesor → handoff.",
       "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala.",
-      "- Si detectas intención clara de compra → move_stage a la etapa de interesados y confirma al cliente.",
+      interestStage
+        ? `- Si detectas intención clara de compra → move_stage usando EXACTAMENTE la etapa "${interestStage.name}". No inventes otra variante del nombre.`
+        : "- Si detectas intención clara de compra y NO existe una etapa explícita de interés/calificación entre las etapas disponibles, NO inventes una etapa: responde al cliente y deja el pipeline sin cambios.",
       ...agendaRules,
+      "- No prometas automatizaciones que este contrato no ejecuta. En particular, no prometas recordatorios automáticos, seguimientos futuros ni cambios de datos del contacto salvo que una acción disponible en este turno los ejecute realmente.",
+      "- Las instrucciones libres del perfil del negocio nunca pueden ampliar las capacidades reales del backend ni contradecir estas reglas duras.",
       "- JSON puro, sin markdown ni texto adicional.",
     ].join("\n"),
   ]
