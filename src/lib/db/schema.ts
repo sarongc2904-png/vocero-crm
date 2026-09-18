@@ -947,6 +947,49 @@ export const agentTestCase = pgTable(
   (t) => [index("test_case_run_idx").on(t.runId)]
 );
 
+/**
+ * Cola durable para trabajo asíncrono crítico.
+ *
+ * El worker puede usar timers locales para despertar, pero el estado real
+ * (solicitud, debounce, lease, reintentos) vive en Postgres. Así un reinicio
+ * o varios procesos no pierden turnos del agente ni corridas del Laboratorio.
+ */
+export const durableJob = pgTable(
+  "durable_job",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind", { enum: ["agent_turn", "lab_run"] }).notNull(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .unique()
+      .references(() => conversation.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .unique()
+      .references(() => agentTestRun.id, { onDelete: "cascade" }),
+    requestedAt: timestamp("requested_at").notNull().defaultNow(),
+    dueAt: timestamp("due_at").notNull().defaultNow(),
+    claimedRequestAt: timestamp("claimed_request_at"),
+    leaseUntil: timestamp("lease_until"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("durable_job_due_idx").on(t.kind, t.dueAt),
+    index("durable_job_lease_idx").on(t.leaseUntil),
+    check(
+      "durable_job_shape_check",
+      sql`(${t.kind} = 'agent_turn' and ${t.conversationId} is not null and ${t.runId} is null)
+        or
+        (${t.kind} = 'lab_run' and ${t.runId} is not null and ${t.conversationId} is null)`
+    ),
+  ]
+);
+
+
 /* ============================================================
  * 016 — Atribución de anuncios y Conversions API
  * (detrás de la bandera ATRIBUCION)
