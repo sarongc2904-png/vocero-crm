@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { scoped } from "@/lib/db/tenant";
 import { getDb, getSql, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
