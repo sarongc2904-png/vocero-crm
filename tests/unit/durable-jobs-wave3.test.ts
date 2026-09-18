@@ -45,6 +45,24 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     expect(queue).toContain("on conflict (run_id)");
   });
 
+  it("propaga organizationId y mantiene mutaciones de jobs tenant-scoped", () => {
+    const queue = source("src/server/jobs/queue.ts");
+    const trigger = source("src/server/ai/trigger.ts");
+    const ingest = source("src/server/inbox/ingest.ts");
+    const worker = source("src/server/jobs/worker.ts");
+
+    expect(queue).toContain("organizationId: string,\\n  conversationId: string");
+    expect(queue).toContain("schema.conversation.organizationId");
+    expect(queue).toContain("schema.agentTestRun.organizationId");
+    expect(queue).toContain("and organization_id = ${job.organizationId}");
+    expect(trigger).toContain(
+      "await scheduleAgentTurn(organizationId, conversationId)"
+    );
+    expect(ingest).toContain(
+      "await maybeRunAgentTurn(organizationId, conversation.id)"
+    );
+    expect(worker).toContain("await completeLabJob(job)");
+  });
   it("aplica backoff acotado al reintentar jobs", () => {
     expect(retryDelayMs(1)).toBe(5_000);
     expect(retryDelayMs(3)).toBe(15_000);
