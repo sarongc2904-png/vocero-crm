@@ -6,8 +6,9 @@ import { isAiConfigured } from "@/lib/env";
  * persiste el trabajo en Postgres; ya no depende de timers/Map en memoria.
  */
 export async function maybeRunAgentTurn(
+  organizationId: string,
   conversationId: string
 ): Promise<void> {
   if (!isAiConfigured()) return;
-  await scheduleAgentTurn(conversationId);
+  await scheduleAgentTurn(organizationId, conversationId);
 }
