@@ -398,11 +398,25 @@ export async function runAgentTurn(
     if (!stage) {
       action = degradeAction(action);
     } else {
-      await moveLeadToStage(organizationId, conversation.contactId, stage.id);
-      publish(organizationId, {
-        type: "conversation.updated",
-        data: { conversation: { id: conversationId } },
-      });
+      const moveResult = await moveLeadToStage(
+        organizationId,
+        conversation.contactId,
+        stage.id
+      );
+      if (moveResult === "lead_missing" || moveResult === "rejected") {
+        await deliverReply(
+          conversation,
+          "Voy a pasar tu solicitud a un asesor para continuar."
+        );
+        await applyHandoff(conversationId, organizationId, "error");
+        return;
+      }
+      if (moveResult === "moved") {
+        publish(organizationId, {
+          type: "conversation.updated",
+          data: { conversation: { id: conversationId } },
+        });
+      }
       if (action.reply) {
         await deliverReply(conversation, action.reply);
       }
@@ -417,7 +431,19 @@ export async function runAgentTurn(
       await deliverReply(conversation, action.text);
       return;
     case "update_lead": {
-      await appendLeadNote(organizationId, conversation.contactId, action.note);
+      const updated = await appendLeadNote(
+        organizationId,
+        conversation.contactId,
+        action.note
+      );
+      if (!updated) {
+        await deliverReply(
+          conversation,
+          "Voy a pasar tu solicitud a un asesor para continuar."
+        );
+        await applyHandoff(conversationId, organizationId, "error");
+        return;
+      }
       if (action.reply) await deliverReply(conversation, action.reply);
       return;
     }
@@ -519,11 +545,17 @@ export async function applyHandoff(
   });
 }
 
+type AgentStageMoveResult =
+  | "moved"
+  | "already"
+  | "lead_missing"
+  | "rejected";
+
 async function moveLeadToStage(
   organizationId: string,
   contactId: string,
   stageId: string
-): Promise<void> {
+): Promise<AgentStageMoveResult> {
   const db = getDb();
   const rows = await db
     .select({ id: schema.lead.id })
@@ -537,22 +569,24 @@ async function moveLeadToStage(
     )
     .limit(1);
   const leadId = rows[0]?.id;
-  if (!leadId) return;
+  if (!leadId) return "lead_missing";
 
-  await moveLeadThroughHistory({
+  const result = await moveLeadThroughHistory({
     organizationId,
     leadId,
     toStageId: stageId,
     source: "bot",
     extra: { lastActivityAt: new Date() },
   });
+  if (!result.ok) return "rejected";
+  return result.changed ? "moved" : "already";
 }
 
 async function appendLeadNote(
   organizationId: string,
   contactId: string,
   note: string
-): Promise<void> {
+): Promise<boolean> {
   const db = getDb();
   const rows = await db
     .select({ id: schema.contact.id, notes: schema.contact.notes })
@@ -566,7 +600,7 @@ async function appendLeadNote(
     )
     .limit(1);
   const contact = rows[0];
-  if (!contact) return;
+  if (!contact) return false;
   const stamped = `[IA] ${note}`;
   await db
     .update(schema.contact)
@@ -581,4 +615,5 @@ async function appendLeadNote(
         eq(schema.contact.id, contact.id)
       )
     );
+  return true;
 }
