@@ -37,7 +37,7 @@ async function processJob(job: DurableJob): Promise<void> {
 
     if (!job.runId) throw new Error("lab_run sin runId");
     await executeLabRun(job.runId, job.organizationId);
-    await completeLabJob(job.id);
+    await completeLabJob(job);
   } catch (err) {
     console.error(`[jobs] ${job.kind} falló:`, err);
     await releaseFailedJob(job, err);
