@@ -3,7 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { moveLeadToStage as moveLeadThroughHistory } from "@/server/leads/stage-history";
-import { getEnv, isAiConfigured } from "@/lib/env";
+import { isAiConfigured } from "@/lib/env";
 import { chatJson, type ChatMessage } from "@/lib/ai";
 import { publish } from "@/server/events/bus";
 import { isWindowOpen } from "@/server/inbox/window";
@@ -39,63 +39,14 @@ import {
 } from "@/server/agenda/schedule-scope";
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 
-type CoalesceEntry = {
-  timer: ReturnType<typeof setTimeout> | null;
-  running: boolean;
-  pending: boolean;
-};
-
-const globalForAgent = globalThis as unknown as {
-  __agentCoalesce?: Map<string, CoalesceEntry>;
-};
-
-function coalesceMap(): Map<string, CoalesceEntry> {
-  if (!globalForAgent.__agentCoalesce) {
-    globalForAgent.__agentCoalesce = new Map();
-  }
-  return globalForAgent.__agentCoalesce;
-}
-
-/** Punto de entrada con debounce (mensajes entrantes reales). */
-export function scheduleAgentTurn(conversationId: string): void {
-  const map = coalesceMap();
-  const entry = map.get(conversationId) ?? {
-    timer: null,
-    running: false,
-    pending: false,
-  };
-  map.set(conversationId, entry);
-
-  if (entry.running) {
-    entry.pending = true;
-    return;
-  }
-  if (entry.timer) clearTimeout(entry.timer);
-  const delay = getEnv().AGENT_COALESCE_MS;
-  entry.timer = setTimeout(() => {
-    entry.timer = null;
-    void executeTurn(conversationId);
-  }, delay);
-}
-
-async function executeTurn(conversationId: string): Promise<void> {
-  const map = coalesceMap();
-  const entry = map.get(conversationId);
-  if (!entry || entry.running) return;
-  entry.running = true;
-  try {
-    await runAgentTurn(conversationId);
-  } catch (err) {
-    console.error("[agente] turno falló:", err);
-  } finally {
-    entry.running = false;
-    if (entry.pending) {
-      entry.pending = false;
-      void executeTurn(conversationId);
-    } else {
-      map.delete(conversationId);
-    }
-  }
+/**
+ * Compatibilidad para callers existentes: el scheduling ahora se persiste en
+ * Postgres. El import dinámico evita un ciclo estático con el worker que, a su
+ * vez, ejecuta runAgentTurn.
+ */
+export async function scheduleAgentTurn(conversationId: string): Promise<void> {
+  const { enqueueAgentTurn } = await import("@/server/jobs/queue");
+  await enqueueAgentTurn(conversationId);
 }
 
 export async function runAgentTurn(
