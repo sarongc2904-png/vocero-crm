@@ -89,3 +89,92 @@ jobs:
       - name: build
         if: ${{ !cancelled() }}
         run: pnpm build
+
+  postgres-e2e:
+    name: PostgreSQL 16 · migrations · E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vocero
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vocero"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      APP_BASE_URL: http://127.0.0.1:3000
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/vocero
+      BETTER_AUTH_SECRET: release-gate-ci-session-secret
+      ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      META_WEBHOOK_VERIFY_TOKEN: release-gate-ci-verify
+      META_APP_SECRET: release-gate-ci-meta-secret
+      META_GRAPH_BASE_URL: http://127.0.0.1:3000/api/dev/wa-mock/graph
+      OPENROUTER_API_TOKEN: release-gate-ci-ai-token
+      OPENROUTER_BASE_URL: http://127.0.0.1:3000/api/dev/ai-mock/v1
+      OPENROUTER_MODEL: mock
+      BOT_API_KEY: release-gate-ci-bot-key-1234567890
+      WA_MOCK_ENABLED: "true"
+      ALLOW_SIGNUP: "true"
+      AGENT_COALESCE_MS: "0"
+      CHANNELS: whatsapp,instagram,messenger
+      AGENDA: "on"
+      ATRIBUCION: "on"
+      GOOGLE_CAL_BASE_URL: http://127.0.0.1:3000/api/dev/google-mock
+      GOOGLE_OAUTH_BASE_URL: http://127.0.0.1:3000/api/dev/google-mock
+      ZOOM_BASE_URL: http://127.0.0.1:3000/api/dev/zoom-mock
+      ZOOM_OAUTH_BASE_URL: http://127.0.0.1:3000/api/dev/zoom-mock
+      MEDIA_DIR: /tmp/conecta-media
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: migrate empty PostgreSQL
+        run: pnpm db:migrate
+
+      - name: start application
+        run: |
+          mkdir -p "$MEDIA_DIR"
+          pnpm dev > /tmp/conecta-next.log 2>&1 &
+          echo $! > /tmp/conecta-next.pid
+
+      - name: wait for database-backed health
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "$APP_BASE_URL/api/health" > /tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/conecta-next.log
+          exit 1
+
+      - name: run CRM E2E
+        run: pnpm test:e2e:ci
+
+      - name: application log
+        if: ${{ always() }}
+        run: |
+          tail -n 400 /tmp/conecta-next.log || true
+
+      - name: stop application
+        if: ${{ always() }}
+        run: |
+          test ! -f /tmp/conecta-next.pid || kill "$(cat /tmp/conecta-next.pid)" || true
