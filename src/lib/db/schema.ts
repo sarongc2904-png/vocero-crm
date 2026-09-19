@@ -102,6 +102,62 @@ export const organization = pgTable("organization", {
   metadata: text("metadata"),
 });
 
+/** Configuración comercial centralizada; no pertenece a un tenant. */
+export const commercialPlan = pgTable("commercial_plan", {
+  id: text("id").primaryKey(),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  monthlyPriceCents: integer("monthly_price_cents").notNull(),
+  currency: text("currency").notNull().default("MXN"),
+  trialDays: integer("trial_days").notNull().default(3),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const organizationEntitlement = pgTable(
+  "organization_entitlement",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => commercialPlan.id),
+    status: text("status", {
+      enum: ["trial", "active", "past_due", "suspended", "cancelled"],
+    }).notNull(),
+    trialStartedAt: timestamp("trial_started_at"),
+    trialEndsAt: timestamp("trial_ends_at"),
+    currentPeriodEndsAt: timestamp("current_period_ends_at"),
+    suspendedAt: timestamp("suspended_at"),
+    cancelledAt: timestamp("cancelled_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("organization_entitlement_org_uq").on(t.organizationId),
+    index("organization_entitlement_status_idx").on(t.status),
+  ]
+);
+
+export const onboardingProgress = pgTable(
+  "onboarding_progress",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    currentStep: integer("current_step").notNull().default(1),
+    completedSteps: jsonb("completed_steps").$type<string[]>().notNull().default([]),
+    activatedAt: timestamp("activated_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("onboarding_progress_org_uq").on(t.organizationId)]
+);
+
 export const member = pgTable(
   "member",
   {

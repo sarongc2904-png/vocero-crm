@@ -55,6 +55,22 @@ export async function initializeOrganization(
     id: newId("agentProfile"),
     organizationId: input.organizationId,
   });
+  const trialStartedAt = new Date();
+  const trialEndsAt = new Date(trialStartedAt.getTime() + 3 * 86_400_000);
+  await tx.insert(schema.organizationEntitlement).values({
+    id: newId("entitlement"),
+    organizationId: input.organizationId,
+    planId: "plan_conecta_mx",
+    status: "trial",
+    trialStartedAt,
+    trialEndsAt,
+  });
+  await tx.insert(schema.onboardingProgress).values({
+    id: newId("onboardingProgress"),
+    organizationId: input.organizationId,
+    currentStep: 1,
+    completedSteps: ["business"],
+  });
 }
 
 function slugBase(name: string): string {

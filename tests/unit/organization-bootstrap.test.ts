@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type Table = "organization" | "member" | "pipelineStage" | "agentProfile";
+type Table =
+  | "organization"
+  | "member"
+  | "pipelineStage"
+  | "agentProfile"
+  | "organizationEntitlement"
+  | "onboardingProgress";
 type Row = Record<string, unknown>;
 
 const fake = vi.hoisted(() => ({
@@ -9,6 +15,8 @@ const fake = vi.hoisted(() => ({
     member: [] as Row[],
     pipelineStage: [] as Row[],
     agentProfile: [] as Row[],
+    organizationEntitlement: [] as Row[],
+    onboardingProgress: [] as Row[],
   } satisfies Record<Table, Row[]>,
   schema: {
     organization: { table: "organization" as const, id: "id", slug: "slug" },
@@ -22,6 +30,8 @@ const fake = vi.hoisted(() => ({
     },
     pipelineStage: { table: "pipelineStage" as const },
     agentProfile: { table: "agentProfile" as const },
+    organizationEntitlement: { table: "organizationEntitlement" as const },
+    onboardingProgress: { table: "onboardingProgress" as const },
   },
 }));
 
@@ -81,6 +91,13 @@ describe("bootstrap multi-organización", () => {
     );
     expect(fake.stored.pipelineStage).toHaveLength(10);
     expect(fake.stored.agentProfile).toHaveLength(2);
+    expect(fake.stored.organizationEntitlement).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ organizationId: first.id, status: "trial" }),
+        expect.objectContaining({ organizationId: second.id, status: "trial" }),
+      ])
+    );
+    expect(fake.stored.onboardingProgress).toHaveLength(2);
   });
 
   it("produce un slug seguro aun con un nombre sin caracteres ASCII", async () => {

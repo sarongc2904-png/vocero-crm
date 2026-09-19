@@ -40,6 +40,8 @@ const prefixes = {
   capiSettings: "capi",
   // Fase 1 — clave del bot API por organización
   botApiKey: "bak",
+  entitlement: "ent",
+  onboardingProgress: "obp",
 } as const;
 
 export type IdKind = keyof typeof prefixes;
