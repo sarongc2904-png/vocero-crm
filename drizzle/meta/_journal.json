@@ -155,6 +155,13 @@
       "when": 1789927855493,
       "tag": "0021_beauty_services_professionals",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790014255493,
+      "tag": "0022_durable_job_dead_letter",
+      "breakpoints": true
     }
   ]
 }

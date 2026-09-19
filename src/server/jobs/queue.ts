@@ -18,6 +18,7 @@ export type DurableJob = {
 };
 
 const LEASE_MINUTES = 15;
+export const MAX_JOB_ATTEMPTS = 8;
 
 export async function enqueueAgentTurn(
   organizationId: string,
@@ -54,6 +55,8 @@ export async function enqueueAgentTurn(
       set organization_id = excluded.organization_id,
           requested_at = now(),
           due_at = excluded.due_at,
+          attempts = 0,
+          dead_letter_at = null,
           last_error = null,
           updated_at = now()
   `;
@@ -93,6 +96,7 @@ export async function enqueueLabRun(
           due_at = now(),
           last_error = null,
           updated_at = now()
+      where durable_job.dead_letter_at is null
   `;
 }
 
@@ -122,6 +126,8 @@ export async function claimNextJob(
       from durable_job
       where kind = ${kind}
         and due_at <= now()
+        and dead_letter_at is null
+        and attempts < ${MAX_JOB_ATTEMPTS}
         and (lease_until is null or lease_until < now())
       order by due_at asc, created_at asc
       for update skip locked
@@ -210,13 +216,30 @@ export function retryDelayMs(attempts: number): number {
   return Math.min(60_000, Math.max(5_000, attempts * 5_000));
 }
 
+export function shouldDeadLetter(attempts: number): boolean {
+  return attempts >= MAX_JOB_ATTEMPTS;
+}
+
 export async function releaseFailedJob(
   job: DurableJob,
   error: unknown
-): Promise<void> {
+): Promise<"retry" | "dead_letter"> {
   const sql = getSql();
   const dueAt = new Date(Date.now() + retryDelayMs(job.attempts));
   const detail = String(error).slice(0, 2000);
+  if (shouldDeadLetter(job.attempts)) {
+    await sql`
+      update durable_job
+      set lease_until = null,
+          claimed_request_at = null,
+          last_error = ${detail},
+          dead_letter_at = now(),
+          updated_at = now()
+      where id = ${job.id}
+        and organization_id = ${job.organizationId}
+    `;
+    return "dead_letter";
+  }
   await sql`
     update durable_job
     set lease_until = null,
@@ -227,4 +250,27 @@ export async function releaseFailedJob(
     where id = ${job.id}
       and organization_id = ${job.organizationId}
   `;
+  return "retry";
+}
+
+export async function getDurableJobMetrics(): Promise<{
+  pending: number;
+  leased: number;
+  deadLetter: number;
+}> {
+  const rows = await getSql()`
+    select
+      count(*) filter (where dead_letter_at is null)::int as pending,
+      count(*) filter (where dead_letter_at is null and lease_until > now())::int as leased,
+      count(*) filter (where dead_letter_at is not null)::int as dead_letter
+    from durable_job
+  `;
+  const row = rows[0] as
+    | { pending: number; leased: number; dead_letter: number }
+    | undefined;
+  return {
+    pending: row?.pending ?? 0,
+    leased: row?.leased ?? 0,
+    deadLetter: row?.dead_letter ?? 0,
+  };
 }

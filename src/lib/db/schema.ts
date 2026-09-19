@@ -1182,12 +1182,14 @@ export const durableJob = pgTable(
     leaseUntil: timestamp("lease_until"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
+    deadLetterAt: timestamp("dead_letter_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [
     index("durable_job_due_idx").on(t.kind, t.dueAt),
     index("durable_job_lease_idx").on(t.leaseUntil),
+    index("durable_job_dead_letter_idx").on(t.deadLetterAt),
     check(
       "durable_job_shape_check",
       sql`(${t.kind} = 'agent_turn' and ${t.conversationId} is not null and ${t.runId} is null)

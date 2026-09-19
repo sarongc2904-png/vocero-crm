@@ -39,8 +39,17 @@ async function processJob(job: DurableJob): Promise<void> {
     await executeLabRun(job.runId, job.organizationId);
     await completeLabJob(job);
   } catch (err) {
-    console.error(`[jobs] ${job.kind} falló:`, err);
-    await releaseFailedJob(job, err);
+    const outcome = await releaseFailedJob(job, err);
+    console.error(
+      JSON.stringify({
+        event: outcome === "dead_letter" ? "job.dead_letter" : "job.retry",
+        jobId: job.id,
+        organizationId: job.organizationId,
+        kind: job.kind,
+        attempts: job.attempts,
+        error: String(err).slice(0, 500),
+      })
+    );
   }
 }
 

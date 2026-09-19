@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { retryDelayMs } from "@/server/jobs/queue";
+import {
+  MAX_JOB_ATTEMPTS,
+  retryDelayMs,
+  shouldDeadLetter,
+} from "@/server/jobs/queue";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n");
@@ -68,5 +72,13 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     expect(retryDelayMs(1)).toBe(5_000);
     expect(retryDelayMs(3)).toBe(15_000);
     expect(retryDelayMs(20)).toBe(60_000);
+  });
+
+  it("detiene poison jobs al alcanzar el límite", () => {
+    expect(shouldDeadLetter(MAX_JOB_ATTEMPTS - 1)).toBe(false);
+    expect(shouldDeadLetter(MAX_JOB_ATTEMPTS)).toBe(true);
+    const queue = source("src/server/jobs/queue.ts");
+    expect(queue).toContain("dead_letter_at is null");
+    expect(queue).toContain('return "dead_letter"');
   });
 });
