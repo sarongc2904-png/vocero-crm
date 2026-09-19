@@ -760,6 +760,175 @@ export const calendarSettings = pgTable(
   (t) => [uniqueIndex("calendar_settings_org_uq").on(t.organizationId)]
 );
 
+/** Catálogo comercial: precio y duración son verdad del backend, no del LLM. */
+export const service = pgTable(
+  "service",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    category: text("category"),
+    durationMinutes: integer("duration_minutes").notNull(),
+    priceCents: integer("price_cents").notNull(),
+    currency: text("currency").notNull().default("MXN"),
+    active: boolean("active").notNull().default(true),
+    bufferBeforeMinutes: integer("buffer_before_minutes").notNull().default(0),
+    bufferAfterMinutes: integer("buffer_after_minutes").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("service_org_name_uq").on(t.organizationId, t.name),
+    index("service_org_active_idx").on(t.organizationId, t.active),
+    check("service_duration_ck", sql`${t.durationMinutes} between 5 and 1440`),
+    check("service_price_ck", sql`${t.priceCents} >= 0`),
+    check(
+      "service_buffers_ck",
+      sql`${t.bufferBeforeMinutes} >= 0 and ${t.bufferAfterMinutes} >= 0`
+    ),
+  ]
+);
+
+/** Personal que presta servicios; puede vincularse opcionalmente a un usuario. */
+export const professional = pgTable(
+  "professional",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    status: text("status", { enum: ["active", "inactive"] })
+      .notNull()
+      .default("active"),
+    phone: text("phone"),
+    email: text("email"),
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    timezone: text("timezone").notNull().default("America/Mexico_City"),
+    color: text("color"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("professional_org_name_uq").on(t.organizationId, t.name),
+    index("professional_org_status_idx").on(t.organizationId, t.status),
+  ]
+);
+
+export const professionalService = pgTable(
+  "professional_service",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    serviceId: text("service_id")
+      .notNull()
+      .references(() => service.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("professional_service_org_uq").on(
+      t.organizationId,
+      t.professionalId,
+      t.serviceId
+    ),
+    index("professional_service_service_idx").on(t.organizationId, t.serviceId),
+  ]
+);
+
+/** Horario semanal normalizado como minutos desde medianoche. */
+export const professionalAvailability = pgTable(
+  "professional_availability",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    dayOfWeek: integer("day_of_week").notNull(),
+    startMinute: integer("start_minute").notNull(),
+    endMinute: integer("end_minute").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("professional_availability_org_prof_idx").on(
+      t.organizationId,
+      t.professionalId,
+      t.dayOfWeek
+    ),
+    check("professional_availability_day_ck", sql`${t.dayOfWeek} between 0 and 6`),
+    check(
+      "professional_availability_time_ck",
+      sql`${t.startMinute} >= 0 and ${t.endMinute} <= 1440 and ${t.startMinute} < ${t.endMinute}`
+    ),
+  ]
+);
+
+export const professionalBreak = pgTable(
+  "professional_break",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    dayOfWeek: integer("day_of_week").notNull(),
+    startMinute: integer("start_minute").notNull(),
+    endMinute: integer("end_minute").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("professional_break_org_prof_idx").on(
+      t.organizationId,
+      t.professionalId,
+      t.dayOfWeek
+    ),
+    check("professional_break_day_ck", sql`${t.dayOfWeek} between 0 and 6`),
+    check(
+      "professional_break_time_ck",
+      sql`${t.startMinute} >= 0 and ${t.endMinute} <= 1440 and ${t.startMinute} < ${t.endMinute}`
+    ),
+  ]
+);
+
+/** Ausencias, vacaciones y excepciones fechadas como intervalos reales. */
+export const professionalTimeOff = pgTable(
+  "professional_time_off",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    professionalId: text("professional_id")
+      .notNull()
+      .references(() => professional.id, { onDelete: "cascade" }),
+    startsAt: timestamp("starts_at").notNull(),
+    endsAt: timestamp("ends_at").notNull(),
+    reason: text("reason"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("professional_time_off_org_prof_idx").on(
+      t.organizationId,
+      t.professionalId,
+      t.startsAt
+    ),
+    check("professional_time_off_range_ck", sql`${t.startsAt} < ${t.endsAt}`),
+  ]
+);
+
 /**
  * La cita. Una sola tabla para sesiones y bloqueos manuales: un bloqueo es
  * una cita sin contacto que ocupa agenda igual.
@@ -789,10 +958,17 @@ export const booking = pgTable(
       onDelete: "set null",
     }),
     leadId: text("lead_id").references(() => lead.id, { onDelete: "set null" }),
+    serviceId: text("service_id").references(() => service.id, {
+      onDelete: "set null",
+    }),
+    professionalId: text("professional_id").references(() => professional.id, {
+      onDelete: "set null",
+    }),
     /** Instante UTC. El horario semanal es de pared; esto ya está resuelto. */
     scheduledAt: timestamp("scheduled_at").notNull(),
     /** Capturada al crear: cambiar la configuración no reescribe el pasado. */
     durationMinutes: integer("duration_minutes").notNull(),
+    timezone: text("timezone").notNull().default("America/Mexico_City"),
     /**
      * Con qué conector nació la ENTREGA. Reprogramar y cancelar hablan con
      * ESTE, no con el activo: si el negocio cambia de proveedor, las citas ya
@@ -820,19 +996,45 @@ export const booking = pgTable(
   (t) => [
     index("booking_org_when_idx").on(t.organizationId, t.scheduledAt),
     index("booking_org_status_idx").on(t.organizationId, t.status),
-    /**
-     * Anti doble-booking ATÓMICO. La re-validación al confirmar deja una
-     * ventana entre leer y escribir; esto la cierra en la BASE: dos
-     * confirmaciones simultáneas del mismo instante no pueden ganar las dos, y
-     * la perdedora recibe un 23505 que el servicio traduce a `slot_taken` con
-     * alternativas frescas. Las citas de prueba quedan fuera: no consumen la
-     * agenda real.
-     */
-    uniqueIndex("booking_org_active_slot_uq")
-      .on(t.organizationId, t.scheduledAt)
-      .where(
-        sql`${t.status} in ('agendada','realizada') and ${t.isTest} = false`
-      ),
+    index("booking_org_prof_when_idx").on(
+      t.organizationId,
+      t.professionalId,
+      t.scheduledAt
+    ),
+  ]
+);
+
+/** Historial append-only de reprogramaciones, cancelaciones y estados. */
+export const bookingEvent = pgTable(
+  "booking_event",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    bookingId: text("booking_id")
+      .notNull()
+      .references(() => booking.id, { onDelete: "cascade" }),
+    type: text("type", {
+      enum: ["created", "rescheduled", "cancelled", "status_changed", "sync_failed"],
+    }).notNull(),
+    fromStart: timestamp("from_start"),
+    toStart: timestamp("to_start"),
+    fromStatus: text("from_status"),
+    toStatus: text("to_status"),
+    actorUserId: text("actor_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    idempotencyKey: text("idempotency_key"),
+    detail: jsonb("detail"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("booking_event_org_booking_idx").on(t.organizationId, t.bookingId),
+    uniqueIndex("booking_event_org_idempotency_uq").on(
+      t.organizationId,
+      t.idempotencyKey
+    ),
   ]
 );
 
@@ -855,6 +1057,12 @@ export const offeredSlot = pgTable(
     conversationId: text("conversation_id")
       .notNull()
       .references(() => conversation.id, { onDelete: "cascade" }),
+    serviceId: text("service_id").references(() => service.id, {
+      onDelete: "cascade",
+    }),
+    professionalId: text("professional_id").references(() => professional.id, {
+      onDelete: "cascade",
+    }),
     startUtc: timestamp("start_utc").notNull(),
     /** La etiqueta EXACTA que se le mostró al cliente. */
     label: text("label").notNull(),
