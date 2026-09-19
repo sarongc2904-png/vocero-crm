@@ -20,6 +20,8 @@ type Booking = {
   time: string;
   weekday: string;
   contact: { id: string; name: string } | null;
+  service: { id: string; name: string } | null;
+  professional: { id: string; name: string } | null;
   conversationId: string | null;
   connector: string | null;
   meetingLink: string | null;
@@ -199,6 +201,8 @@ export function BookingsClient() {
 
               <div className="flex flex-wrap items-center gap-3 text-sm text-text-3">
                 {b.contact && <span>{b.contact.name}</span>}
+                {b.service && <span>{b.service.name}</span>}
+                {b.professional && <span>con {b.professional.name}</span>}
                 {b.meetingLink && (
                   <a
                     href={b.meetingLink}

@@ -10,6 +10,7 @@ const TABS: Tab[] = [
   { href: "/settings/whatsapp", label: "WhatsApp" },
   { href: "/settings/branding", label: "Marca" },
   { href: "/settings/templates", label: "Plantillas" },
+  { href: "/settings/beauty", label: "Servicios y personal" },
   { href: "/settings/team", label: "Equipo" },
 ];
 
