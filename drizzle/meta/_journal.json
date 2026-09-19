@@ -169,6 +169,13 @@
       "when": 1790100655493,
       "tag": "0023_commercial_entitlements",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790187055493,
+      "tag": "0024_durable_automations",
+      "breakpoints": true
     }
   ]
 }

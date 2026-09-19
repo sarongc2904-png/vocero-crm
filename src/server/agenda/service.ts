@@ -28,6 +28,11 @@ import {
   findProfessionalSlot,
   getSchedulingContext,
 } from "@/server/agenda/professional-availability";
+import {
+  cancelBookingAutomations,
+  scheduleBookingAutomations,
+  scheduleReviewRequests,
+} from "@/server/automations/queue";
 
 /**
  * 015 — Ciclo de vida de la cita y las dos reglas INNEGOCIABLES:
@@ -271,6 +276,21 @@ export async function createSessionBooking(input: {
 
   // Efectos secundarios: ninguno puede revertir la cita.
   const delivered = await deliverMeeting(booking, settings, contactName);
+  await scheduleBookingAutomations({
+    organizationId: input.organizationId,
+    bookingId: delivered.id,
+    conversationId: delivered.conversationId,
+    scheduledAt: delivered.scheduledAt,
+  }).catch((error) => {
+    console.error(
+      JSON.stringify({
+        event: "booking.reminders_schedule_failed",
+        organizationId: input.organizationId,
+        appointmentId: delivered.id,
+        error: String(error).slice(0, 500),
+      })
+    );
+  });
   await advanceLeadStage(
     input.organizationId,
     contactId,
@@ -401,6 +421,13 @@ export async function rescheduleBooking(input: {
       timezone: settings.timezone,
     });
   });
+  await cancelBookingAutomations(input.organizationId, next.id);
+  await scheduleBookingAutomations({
+    organizationId: input.organizationId,
+    bookingId: next.id,
+    conversationId: next.conversationId,
+    scheduledAt: next.scheduledAt,
+  });
 
   publish(input.organizationId, {
     type: "booking.updated",
@@ -511,6 +538,7 @@ export async function cancelBooking(input: {
     fromStatus: booking.status,
     toStatus: "cancelada",
   });
+  await cancelBookingAutomations(input.organizationId, booking.id);
 
   const settings = await getSettings(input.organizationId);
   await withConnector(booking, settings, async (conn, externalRef) => {
@@ -548,6 +576,15 @@ export async function markBookingStatus(input: {
       fromStatus: booking.status,
       toStatus: input.status,
     });
+    if (input.status === "realizada") {
+      await scheduleReviewRequests({
+        organizationId: input.organizationId,
+        bookingId: booking.id,
+        conversationId: booking.conversationId,
+      });
+    } else {
+      await cancelBookingAutomations(input.organizationId, booking.id);
+    }
   } catch (err) {
     // Reactivar a `realizada` un instante que otra cita ya ocupa.
     if (isUniqueViolation(err)) {

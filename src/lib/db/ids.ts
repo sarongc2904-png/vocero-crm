@@ -42,6 +42,8 @@ const prefixes = {
   botApiKey: "bak",
   entitlement: "ent",
   onboardingProgress: "obp",
+  automationRule: "aur",
+  scheduledAutomation: "sau",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

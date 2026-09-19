@@ -9,6 +9,7 @@ import {
   type DurableJob,
   type DurableJobKind,
 } from "@/server/jobs/queue";
+import { startAutomationWorker } from "@/server/automations/worker";
 
 type WorkerState = {
   timers?: Partial<Record<DurableJobKind, ReturnType<typeof setInterval>>>;
@@ -103,4 +104,5 @@ export async function startDurableWorkers(): Promise<void> {
   // no competir por CPU/LLM con la bandeja; SKIP LOCKED permite varios procesos.
   startLoop("agent_turn", 1_000, 10);
   startLoop("lab_run", 2_000, 1);
+  startAutomationWorker();
 }

@@ -1255,6 +1255,89 @@ export const durableJob = pgTable(
   ]
 );
 
+/** Reglas configurables; nunca envían por sí solas. */
+export const automationRule = pgTable(
+  "automation_rule",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    kind: text("kind", {
+      enum: ["follow_up", "appointment_reminder", "review_request", "reactivation"],
+    }).notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    delayMinutes: integer("delay_minutes").notNull(),
+    messageText: text("message_text"),
+    templateId: text("template_id").references(() => template.id, {
+      onDelete: "set null",
+    }),
+    config: jsonb("config").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("automation_rule_org_kind_idx").on(t.organizationId, t.kind),
+    check("automation_rule_delay_ck", sql`${t.delayMinutes} >= 0`),
+  ]
+);
+
+/** Cola durable de seguimientos, recordatorios, reseñas y reactivación. */
+export const scheduledAutomation = pgTable(
+  "scheduled_automation",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    ruleId: text("rule_id").references(() => automationRule.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind", {
+      enum: ["follow_up", "appointment_reminder", "review_request", "reactivation"],
+    }).notNull(),
+    status: text("status", {
+      enum: ["scheduled", "pending", "processing", "completed", "cancelled", "failed"],
+    })
+      .notNull()
+      .default("scheduled"),
+    conversationId: text("conversation_id").references(() => conversation.id, {
+      onDelete: "cascade",
+    }),
+    contactId: text("contact_id").references(() => contact.id, {
+      onDelete: "cascade",
+    }),
+    bookingId: text("booking_id").references(() => booking.id, {
+      onDelete: "cascade",
+    }),
+    dueAt: timestamp("due_at").notNull(),
+    leaseUntil: timestamp("lease_until"),
+    attempts: integer("attempts").notNull().default(0),
+    idempotencyKey: text("idempotency_key").notNull(),
+    messageText: text("message_text"),
+    templateId: text("template_id").references(() => template.id, {
+      onDelete: "set null",
+    }),
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
+    lastError: text("last_error"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("scheduled_automation_org_idempotency_uq").on(
+      t.organizationId,
+      t.idempotencyKey
+    ),
+    index("scheduled_automation_due_idx").on(t.status, t.dueAt),
+    index("scheduled_automation_org_booking_idx").on(
+      t.organizationId,
+      t.bookingId
+    ),
+  ]
+);
+
 
 /* ============================================================
  * 016 — Atribución de anuncios y Conversions API
