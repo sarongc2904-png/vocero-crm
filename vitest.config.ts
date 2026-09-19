@@ -10,7 +10,6 @@ export default defineConfig({
     // generan falsos timeouts; serial conserva los mismos casos y contratos.
     fileParallelism: false,
     maxWorkers: 1,
-    minWorkers: 1,
   },
   resolve: {
     alias: {

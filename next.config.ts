@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // La versión sale de package.json y no de una constante aparte: duplicarla es
 // tenerla desactualizada en uno de los dos lados, y justo esta no puede mentir.
@@ -8,6 +9,9 @@ const { version } = JSON.parse(
 ) as { version: string };
 
 const nextConfig: NextConfig = {
+  // Fija el root al checkout actual. Sin esto, una lockfile ajena en un
+  // directorio padre puede ampliar el tracing de producción por accidente.
+  outputFileTracingRoot: fileURLToPath(new URL(".", import.meta.url)),
   // standalone es para la imagen Docker (Linux). En Windows el trazado crea
   // symlinks que requieren permisos elevados, así que ahí se omite.
   output: process.platform === "win32" ? undefined : "standalone",
