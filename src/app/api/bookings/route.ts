@@ -18,11 +18,14 @@ const postSchema = z.discriminatedUnion("kind", [
     kind: z.literal("session"),
     contactId: z.string().min(1),
     conversationId: z.string().min(1).nullish(),
+    serviceId: z.string().min(1).optional(),
+    professionalId: z.string().min(1).optional(),
     startUtc: z.string().min(1),
     notes: z.string().nullish(),
   }),
   z.object({
     kind: z.literal("block"),
+    professionalId: z.string().min(1).optional(),
     startUtc: z.string().min(1),
     durationMinutes: z.number().int().min(5).max(600),
     notes: z.string().nullish(),
@@ -50,6 +53,7 @@ export const POST = withAuth(async (session, req: Request) => {
         organizationId: session.organizationId,
         startUtc: body.data.startUtc,
         durationMinutes: body.data.durationMinutes,
+        professionalId: body.data.professionalId ?? null,
         notes: body.data.notes ?? null,
       });
       return Response.json({ booking: { id: block.id } }, { status: 201 });
@@ -59,6 +63,8 @@ export const POST = withAuth(async (session, req: Request) => {
       organizationId: session.organizationId,
       contactId: body.data.contactId,
       conversationId: body.data.conversationId ?? null,
+      serviceId: body.data.serviceId,
+      professionalId: body.data.professionalId,
       startUtc: body.data.startUtc,
       notes: body.data.notes ?? null,
       source: "manual",

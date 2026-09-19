@@ -24,6 +24,10 @@ import {
 import { ConnectorError } from "@/server/agenda/connectors/types";
 import { moveLeadToStage } from "@/server/leads/stage-history";
 import { publish } from "@/server/events/bus";
+import {
+  findProfessionalSlot,
+  getSchedulingContext,
+} from "@/server/agenda/professional-availability";
 
 /**
  * 015 — Ciclo de vida de la cita y las dos reglas INNEGOCIABLES:
@@ -88,6 +92,8 @@ export async function createSessionBooking(input: {
   conversationId?: string | null;
   /** Camino manual del operador. */
   contactId?: string | null;
+  serviceId?: string;
+  professionalId?: string;
   notes?: string | null;
   /**
    * true ⇒ exige que el instante figure entre los ofrecidos a la conversación
@@ -99,6 +105,20 @@ export async function createSessionBooking(input: {
 }): Promise<BookingResult> {
   const db = getDb();
   const settings = await getSettings(input.organizationId);
+  if (Boolean(input.serviceId) !== Boolean(input.professionalId)) {
+    throw new BookingError(
+      "invalid",
+      "Servicio y profesional deben seleccionarse juntos"
+    );
+  }
+  const schedulingContext =
+    input.serviceId && input.professionalId
+      ? await getSchedulingContext({
+          organizationId: input.organizationId,
+          serviceId: input.serviceId,
+          professionalId: input.professionalId,
+        })
+      : null;
 
   if (Number.isNaN(Date.parse(input.startUtc))) {
     throw new BookingError("invalid", "Instante inválido");
@@ -143,7 +163,12 @@ export async function createSessionBooking(input: {
       );
     }
     const offers = await getOffers(input.organizationId, input.conversationId);
-    if (!findOffered(offers, input.startUtc)) {
+    if (
+      !findOffered(offers, input.startUtc, {
+        serviceId: input.serviceId,
+        professionalId: input.professionalId,
+      })
+    ) {
       throw new BookingError(
         "slot_not_offered",
         "Ese horario no se ofreció en esta conversación",
@@ -153,10 +178,17 @@ export async function createSessionBooking(input: {
   }
 
   // REGLA 2 (primera mitad): el hueco debe seguir libre AHORA.
-  const slot = await findSlot(input.organizationId, input.startUtc, {
-    now: input.now,
-    settings,
-  });
+  const slot = schedulingContext
+    ? await findProfessionalSlot(input.organizationId, {
+        serviceId: schedulingContext.service.id,
+        professionalId: schedulingContext.professional.id,
+        startUtc: input.startUtc,
+        now: input.now,
+      })
+    : await findSlot(input.organizationId, input.startUtc, {
+        now: input.now,
+        settings,
+      });
   if (!slot) {
     throw new BookingError(
       "slot_taken",
@@ -191,8 +223,12 @@ export async function createSessionBooking(input: {
         contactId,
         conversationId: input.conversationId ?? null,
         leadId: leadRows[0]?.id ?? null,
+        serviceId: schedulingContext?.service.id ?? null,
+        professionalId: schedulingContext?.professional.id ?? null,
         scheduledAt: new Date(slot.startUtc),
-        durationMinutes: settings.slotMinutes,
+        durationMinutes:
+          schedulingContext?.service.durationMinutes ?? settings.slotMinutes,
+        timezone: schedulingContext?.professional.timezone ?? settings.timezone,
         // Copia histórica: si el negocio cambia de conector, esta cita conserva
         // el que le tocó y sigue hablando con él al moverse o cancelarse.
         connector: settings.connector,
@@ -201,6 +237,13 @@ export async function createSessionBooking(input: {
       })
       .returning();
     booking = inserted[0]!;
+    await recordBookingEvent({
+      organizationId: input.organizationId,
+      bookingId: booking.id,
+      type: "created",
+      toStart: booking.scheduledAt,
+      toStatus: booking.status,
+    });
   } catch (err) {
     // REGLA 2 (segunda mitad): la llave única cierra la carrera exacta. Dos
     // confirmaciones simultáneas del mismo instante — la perdedora sale por
@@ -253,6 +296,7 @@ export async function createBlock(input: {
   organizationId: string;
   startUtc: string;
   durationMinutes: number;
+  professionalId?: string | null;
   notes?: string | null;
 }): Promise<BookingRow> {
   if (Number.isNaN(Date.parse(input.startUtc))) {
@@ -267,6 +311,7 @@ export async function createBlock(input: {
         organizationId: input.organizationId,
         kind: "block",
         source: "manual",
+        professionalId: input.professionalId ?? null,
         scheduledAt: new Date(input.startUtc),
         durationMinutes: input.durationMinutes,
         notes: input.notes ?? null,
@@ -300,11 +345,20 @@ export async function rescheduleBooking(input: {
 
   const settings = await getSettings(input.organizationId);
   // excludeBookingId: la propia cita no debe bloquearse a sí misma.
-  const slot = await findSlot(input.organizationId, input.startUtc, {
-    excludeBookingId: booking.id,
-    now: input.now,
-    settings,
-  });
+  const slot =
+    booking.serviceId && booking.professionalId
+      ? await findProfessionalSlot(input.organizationId, {
+          serviceId: booking.serviceId,
+          professionalId: booking.professionalId,
+          startUtc: input.startUtc,
+          excludeBookingId: booking.id,
+          now: input.now,
+        })
+      : await findSlot(input.organizationId, input.startUtc, {
+          excludeBookingId: booking.id,
+          now: input.now,
+          settings,
+        });
   if (!slot) {
     throw new BookingError("slot_taken", "Ese horario ya no está disponible");
   }
@@ -314,9 +368,22 @@ export async function rescheduleBooking(input: {
     const updated = await db
       .update(schema.booking)
       .set({ scheduledAt: new Date(slot.startUtc), updatedAt: new Date() })
-      .where(eq(schema.booking.id, booking.id))
+      .where(
+        scoped(
+          schema.booking.organizationId,
+          input.organizationId,
+          eq(schema.booking.id, booking.id)
+        )
+      )
       .returning();
     next = updated[0]!;
+    await recordBookingEvent({
+      organizationId: input.organizationId,
+      bookingId: booking.id,
+      type: "rescheduled",
+      fromStart: booking.scheduledAt,
+      toStart: next.scheduledAt,
+    });
   } catch (err) {
     if (isUniqueViolation(err)) {
       throw new BookingError("slot_taken", "Ese horario acaba de ocuparse");
@@ -430,7 +497,20 @@ export async function cancelBooking(input: {
   await db
     .update(schema.booking)
     .set({ status: "cancelada", updatedAt: new Date() })
-    .where(eq(schema.booking.id, booking.id));
+    .where(
+      scoped(
+        schema.booking.organizationId,
+        input.organizationId,
+        eq(schema.booking.id, booking.id)
+      )
+    );
+  await recordBookingEvent({
+    organizationId: input.organizationId,
+    bookingId: booking.id,
+    type: "cancelled",
+    fromStatus: booking.status,
+    toStatus: "cancelada",
+  });
 
   const settings = await getSettings(input.organizationId);
   await withConnector(booking, settings, async (conn, externalRef) => {
@@ -454,7 +534,20 @@ export async function markBookingStatus(input: {
     await db
       .update(schema.booking)
       .set({ status: input.status, updatedAt: new Date() })
-      .where(eq(schema.booking.id, booking.id));
+      .where(
+        scoped(
+          schema.booking.organizationId,
+          input.organizationId,
+          eq(schema.booking.id, booking.id)
+        )
+      );
+    await recordBookingEvent({
+      organizationId: input.organizationId,
+      bookingId: booking.id,
+      type: "status_changed",
+      fromStatus: booking.status,
+      toStatus: input.status,
+    });
   } catch (err) {
     // Reactivar a `realizada` un instante que otra cita ya ocupa.
     if (isUniqueViolation(err)) {
@@ -772,16 +865,44 @@ export async function hasActiveBooking(
   return rows.length > 0;
 }
 
-/** 23505 = unique_violation de Postgres. */
+async function recordBookingEvent(input: {
+  organizationId: string;
+  bookingId: string;
+  type:
+    | "created"
+    | "rescheduled"
+    | "cancelled"
+    | "status_changed"
+    | "sync_failed";
+  fromStart?: Date;
+  toStart?: Date;
+  fromStatus?: string;
+  toStatus?: string;
+}) {
+  const eventTable = schema.bookingEvent;
+  if (!eventTable) return;
+  await getDb().insert(eventTable).values({
+    id: newId("bookingEvent"),
+    organizationId: input.organizationId,
+    bookingId: input.bookingId,
+    type: input.type,
+    fromStart: input.fromStart ?? null,
+    toStart: input.toStart ?? null,
+    fromStatus: input.fromStatus ?? null,
+    toStatus: input.toStatus ?? null,
+  });
+}
+
+/** 23505 = unique_violation; 23P01 = exclusion_violation de Postgres. */
 function isUniqueViolation(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const code = (err as { code?: unknown }).code;
-  if (code === "23505") return true;
+  if (code === "23505" || code === "23P01") return true;
   // Drizzle envuelve el error del driver: el código real viaja en `cause`.
   const cause = (err as { cause?: unknown }).cause;
   return (
     typeof cause === "object" &&
     cause !== null &&
-    (cause as { code?: unknown }).code === "23505"
+    ["23505", "23P01"].includes(String((cause as { code?: unknown }).code))
   );
 }

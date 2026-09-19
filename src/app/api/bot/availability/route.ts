@@ -8,6 +8,10 @@ import { computeAvailability } from "@/server/agenda/availability";
 import { getSettings } from "@/server/agenda/settings";
 import { daysWithAgenda, spreadByDay } from "@/server/agenda/spread";
 import { replaceOffers } from "@/server/agenda/offers";
+import {
+  computeProfessionalAvailability,
+  getSchedulingContext,
+} from "@/server/agenda/professional-availability";
 
 export const dynamic = "force-dynamic";
 
@@ -47,8 +51,13 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const conversationId = url.searchParams.get("conversationId");
+  const serviceId = url.searchParams.get("serviceId");
+  const professionalId = url.searchParams.get("professionalId");
   if (!conversationId) {
     return apiError(422, "invalid_body", "Falta conversationId");
+  }
+  if (Boolean(serviceId) !== Boolean(professionalId)) {
+    return apiError(422, "invalid_body", "serviceId y professionalId deben enviarse juntos");
   }
 
   const db = getDb();
@@ -71,19 +80,41 @@ export async function GET(req: Request) {
 
   const settings = await getSettings(organizationId);
   const now = new Date();
-  const all = await computeAvailability(organizationId, { settings, now });
+  const all =
+    serviceId && professionalId
+      ? await computeProfessionalAvailability(organizationId, {
+          serviceId,
+          professionalId,
+          now,
+        })
+      : await computeAvailability(organizationId, { settings, now });
+  const timezone =
+    serviceId && professionalId
+      ? (
+          await getSchedulingContext({
+            organizationId,
+            serviceId,
+            professionalId,
+          })
+        ).professional.timezone
+      : settings.timezone;
   const slots = spreadByDay(all, {
-    timezone: settings.timezone,
+    timezone,
     limit,
     perDay,
     now,
-  }).filter((s) => withinDays(s.dayIso, days, settings.timezone, now));
+  }).filter((s) => withinDays(s.dayIso, days, timezone, now));
 
   // Reemplazo completo: la oferta vigente es siempre la última.
   await replaceOffers(
     organizationId,
     conversationId,
-    slots.map((s) => ({ startUtc: s.startUtc, label: s.label }))
+    slots.map((s) => ({
+      startUtc: s.startUtc,
+      label: s.label,
+      serviceId,
+      professionalId,
+    }))
   );
 
   return Response.json({

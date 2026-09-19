@@ -17,6 +17,8 @@ export type BookingListItem = {
   time: string;
   weekday: string;
   contact: { id: string; name: string } | null;
+  service: { id: string; name: string } | null;
+  professional: { id: string; name: string } | null;
   conversationId: string | null;
   /** Con qué conector nació la entrega de esta cita. */
   connector: string | null;
@@ -38,6 +40,10 @@ export async function listBookings(
       booking: schema.booking,
       contactId: schema.contact.id,
       contactName: schema.contact.name,
+      serviceId: schema.service.id,
+      serviceName: schema.service.name,
+      professionalId: schema.professional.id,
+      professionalName: schema.professional.name,
     })
     .from(schema.booking)
     .leftJoin(
@@ -47,13 +53,27 @@ export async function listBookings(
         eq(schema.contact.organizationId, schema.booking.organizationId)
       )
     )
+    .leftJoin(
+      schema.service,
+      and(
+        eq(schema.booking.serviceId, schema.service.id),
+        eq(schema.service.organizationId, schema.booking.organizationId)
+      )
+    )
+    .leftJoin(
+      schema.professional,
+      and(
+        eq(schema.booking.professionalId, schema.professional.id),
+        eq(schema.professional.organizationId, schema.booking.organizationId)
+      )
+    )
     .where(scoped(schema.booking.organizationId, organizationId))
     .orderBy(desc(schema.booking.scheduledAt))
     .limit(200);
 
   return rows.map((r) => {
     const scheduledAtUtc = r.booking.scheduledAt.toISOString();
-    const parts = partsInTz(scheduledAtUtc, settings.timezone);
+    const parts = partsInTz(scheduledAtUtc, r.booking.timezone || settings.timezone);
     return {
       id: r.booking.id,
       kind: r.booking.kind,
@@ -66,6 +86,12 @@ export async function listBookings(
       weekday: parts.weekday,
       contact: r.contactId
         ? { id: r.contactId, name: r.contactName ?? "" }
+        : null,
+      service: r.serviceId
+        ? { id: r.serviceId, name: r.serviceName ?? "" }
+        : null,
+      professional: r.professionalId
+        ? { id: r.professionalId, name: r.professionalName ?? "" }
         : null,
       conversationId: r.booking.conversationId,
       connector: r.booking.connector,

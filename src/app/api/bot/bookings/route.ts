@@ -26,6 +26,8 @@ export const dynamic = "force-dynamic";
 const createSchema = z.object({
   conversationId: z.string().min(1),
   startUtc: z.string().min(1),
+  serviceId: z.string().min(1).optional(),
+  professionalId: z.string().min(1).optional(),
   notes: z.string().nullish(),
 });
 
@@ -46,6 +48,8 @@ export async function POST(req: Request) {
       organizationId: gate.organizationId,
       conversationId: body.data.conversationId,
       startUtc: body.data.startUtc,
+      serviceId: body.data.serviceId,
+      professionalId: body.data.professionalId,
       notes: body.data.notes ?? null,
       source: "ai",
       // La regla innegociable: el agente solo reserva lo que ya ofreció.

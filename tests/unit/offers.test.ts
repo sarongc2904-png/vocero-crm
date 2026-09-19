@@ -43,6 +43,35 @@ describe("findOffered", () => {
   it("sin oferta previa no hay nada reservable", () => {
     expect(findOffered([], "2026-08-05T15:00:00.000Z")).toBeNull();
   });
+
+  it("no permite cambiar servicio o profesional conservando solo la hora", () => {
+    const contextual: OfferedSlot[] = [
+      {
+        startUtc: "2026-08-05T15:00:00.000Z",
+        label: "mié 5 ago, 09:00",
+        serviceId: "svc_manicure",
+        professionalId: "pro_ana",
+      },
+    ];
+    expect(
+      findOffered(contextual, contextual[0]!.startUtc, {
+        serviceId: "svc_manicure",
+        professionalId: "pro_ana",
+      })
+    ).not.toBeNull();
+    expect(
+      findOffered(contextual, contextual[0]!.startUtc, {
+        serviceId: "svc_facial",
+        professionalId: "pro_ana",
+      })
+    ).toBeNull();
+    expect(
+      findOffered(contextual, contextual[0]!.startUtc, {
+        serviceId: "svc_manicure",
+        professionalId: "pro_bety",
+      })
+    ).toBeNull();
+  });
 });
 
 describe("sameInstant", () => {

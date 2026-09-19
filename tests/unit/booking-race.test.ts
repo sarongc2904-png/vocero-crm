@@ -204,6 +204,22 @@ describe("la carrera del hueco", () => {
     ).rejects.toMatchObject({ code: "slot_taken" });
   });
 
+  it("traduce el 23P01 del constraint de traslape por profesional", async () => {
+    const { createSessionBooking } = await import("@/server/agenda/service");
+    primeLookups();
+    insertThrows = { code: "23P01" };
+
+    await expect(
+      createSessionBooking({
+        organizationId: "org_1",
+        conversationId: "cv_1",
+        startUtc: SLOT,
+        source: "ai",
+        requireOffer: true,
+      })
+    ).rejects.toMatchObject({ code: "slot_taken" });
+  });
+
   it("un error que NO es la carrera se propaga tal cual, sin disfrazarse de slot_taken", async () => {
     const { createSessionBooking } = await import("@/server/agenda/service");
     primeLookups();

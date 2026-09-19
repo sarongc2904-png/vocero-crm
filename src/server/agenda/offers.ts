@@ -11,7 +11,12 @@ import { scoped } from "@/lib/db/tenant";
  * en cada ronda (la vigente es siempre la última) y se limpia al reservar.
  */
 
-export type OfferedSlot = { startUtc: string; label: string };
+export type OfferedSlot = {
+  startUtc: string;
+  label: string;
+  serviceId?: string | null;
+  professionalId?: string | null;
+};
 
 /** Reemplaza TODA la oferta de la conversación, en una transacción. */
 export async function replaceOffers(
@@ -38,6 +43,8 @@ export async function replaceOffers(
         conversationId,
         startUtc: new Date(s.startUtc),
         label: s.label,
+        serviceId: s.serviceId ?? null,
+        professionalId: s.professionalId ?? null,
       }))
     );
   });
@@ -52,6 +59,8 @@ export async function getOffers(
     .select({
       startUtc: schema.offeredSlot.startUtc,
       label: schema.offeredSlot.label,
+      serviceId: schema.offeredSlot.serviceId,
+      professionalId: schema.offeredSlot.professionalId,
     })
     .from(schema.offeredSlot)
     .where(
@@ -66,6 +75,8 @@ export async function getOffers(
   return rows.map((r) => ({
     startUtc: r.startUtc.toISOString(),
     label: r.label,
+    serviceId: r.serviceId,
+    professionalId: r.professionalId,
   }));
 }
 
@@ -96,11 +107,20 @@ export async function clearOffers(
  */
 export function findOffered(
   offers: OfferedSlot[],
-  whenISO: string
+  whenISO: string,
+  context?: { serviceId?: string | null; professionalId?: string | null }
 ): OfferedSlot | null {
   const target = Date.parse(whenISO);
   if (Number.isNaN(target)) return null;
-  return offers.find((o) => Date.parse(o.startUtc) === target) ?? null;
+  return (
+    offers.find(
+      (offer) =>
+        Date.parse(offer.startUtc) === target &&
+        (context?.serviceId === undefined || offer.serviceId === context.serviceId) &&
+        (context?.professionalId === undefined ||
+          offer.professionalId === context.professionalId)
+    ) ?? null
+  );
 }
 
 /** Igualdad de instante, expuesta para tests. */
