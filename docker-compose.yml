@@ -19,8 +19,19 @@ services:
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
       OPENROUTER_JUDGE_MODEL: ${OPENROUTER_JUDGE_MODEL:-}
       AGENDA: ${AGENDA:-}
+      CHANNELS: ${CHANNELS:-}
+      ATRIBUCION: ${ATRIBUCION:-}
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-}
       AGENT_COALESCE_MS: ${AGENT_COALESCE_MS:-6000}
+      BOT_API_KEY: ${BOT_API_KEY:-}
+      MEDIA_DIR: /data/media
+      ZERNIO_BASE_URL: ${ZERNIO_BASE_URL:-}
+      ZOOM_BASE_URL: ${ZOOM_BASE_URL:-}
+      ZOOM_OAUTH_BASE_URL: ${ZOOM_OAUTH_BASE_URL:-}
+      GOOGLE_CAL_BASE_URL: ${GOOGLE_CAL_BASE_URL:-}
+      GOOGLE_OAUTH_BASE_URL: ${GOOGLE_OAUTH_BASE_URL:-}
+    volumes:
+      - vocero_media:/data/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,5 +74,6 @@ services:
 
 volumes:
   vocero_pg:
+  vocero_media:
   vocero_caddy_data:
   vocero_caddy_config:
