@@ -1092,6 +1092,8 @@ async function main() {
 async function tenantAndRbacChecks() {
   console.log("\n== release gate: tenant isolation + RBAC real ==");
   const ownerCookie = cookie;
+  const ownerOrganizations = await api("/api/organizations");
+  const tenantAId = ownerOrganizations.json?.activeOrganizationId;
   const suffix = Date.now().toString(36);
   const password = "password-e2e-123";
 
@@ -1164,11 +1166,15 @@ async function tenantAndRbacChecks() {
   ok("admin no puede eliminar usuarios", adminDeletesUser.res.status === 403, `status=${adminDeletesUser.res.status}`);
   const serviceA = serviceAResponse.json?.service;
 
-  cookie = "";
-  const tenantBEmail = `owner-b-${suffix}@vocero.test`;
-  const tenantBSignup = await api("/api/auth/sign-up/email", {
+  cookie = ownerCookie;
+  const tenantBCreate = await api("/api/organizations", {
     method: "POST",
-    body: JSON.stringify({ email: tenantBEmail, password, name: "Owner Tenant B" }),
+    body: JSON.stringify({ name: `Tenant B ${suffix}` }),
+  });
+  const tenantBId = tenantBCreate.json?.organization?.id;
+  const tenantBSwitch = await api("/api/organizations/active", {
+    method: "POST",
+    body: JSON.stringify({ organizationId: tenantBId }),
   });
   const serviceBResponse = await api("/api/services", {
     method: "POST",
@@ -1189,7 +1195,10 @@ async function tenantAndRbacChecks() {
   const professionalB = professionalBResponse.json?.professional;
   ok(
     "Tenant B crea su catálogo independiente",
-    tenantBSignup.res.ok && serviceBResponse.res.status === 201 && professionalBResponse.res.status === 201
+    tenantBCreate.res.status === 201 &&
+      tenantBSwitch.res.ok &&
+      serviceBResponse.res.status === 201 &&
+      professionalBResponse.res.status === 201
   );
 
   const bMutatesA = await api(`/api/services/${serviceA?.id}`, {
@@ -1199,6 +1208,10 @@ async function tenantAndRbacChecks() {
   ok("Tenant B no puede mutar recurso de A", bMutatesA.res.status === 404, `status=${bMutatesA.res.status}`);
 
   cookie = ownerCookie;
+  await api("/api/organizations/active", {
+    method: "POST",
+    body: JSON.stringify({ organizationId: tenantAId }),
+  });
   const aMutatesBService = await api(`/api/services/${serviceB?.id}`, {
     method: "PATCH",
     body: JSON.stringify({ name: "Fuga A a B" }),

@@ -74,6 +74,15 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     expect(retryDelayMs(20)).toBe(60_000);
   });
 
+  it("serializa JSON antes de cruzar el boundary postgres-js", () => {
+    const audit = source("src/server/auth/audit.ts");
+    const trace = source("src/server/lab/action-trace.ts");
+    expect(audit).toContain("JSON.stringify(input.metadata)");
+    expect(trace).toContain("JSON.stringify(input.trace)");
+    expect(audit).not.toContain("${sql.json(");
+    expect(trace).not.toContain("${sql.json(");
+  });
+
   it("detiene poison jobs al alcanzar el límite", () => {
     expect(shouldDeadLetter(MAX_JOB_ATTEMPTS - 1)).toBe(false);
     expect(shouldDeadLetter(MAX_JOB_ATTEMPTS)).toBe(true);

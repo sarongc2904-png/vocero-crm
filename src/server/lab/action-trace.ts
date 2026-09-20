@@ -28,6 +28,7 @@ export async function persistActionTrace(input: {
   trace: AgentActionTrace;
 }): Promise<void> {
   const sql = getSql();
+  const traceJson = JSON.stringify(input.trace);
   await sql`
     INSERT INTO agent_test_action_trace (
       id, organization_id, test_case_id, trace
@@ -35,7 +36,7 @@ export async function persistActionTrace(input: {
       ${newId("testTrace")},
       ${input.organizationId},
       ${input.testCaseId},
-      ${sql.json(input.trace)}
+      ${traceJson}::jsonb
     )
     ON CONFLICT (organization_id, test_case_id)
     DO UPDATE SET trace = EXCLUDED.trace

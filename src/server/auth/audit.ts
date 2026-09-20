@@ -12,10 +12,11 @@ export async function auditPrivilegedAction(
   }
 ): Promise<void> {
   const sql = getSql();
-  // El metadata lo construye exclusivamente el servidor con objetos JSON-safe.
-  // postgres-js exige un JSONValue nominal más estrecho que Record<string, unknown>,
-  // por eso el cast queda confinado justo en la frontera de serialización.
-  const metadata = input.metadata ? sql.json(input.metadata as never) : null;
+  // Next puede cargar postgres-js y este módulo en realms distintos. Pasar el
+  // wrapper de `sql.json(object)` a través de ese límite termina tratado como
+  // Buffer por la otra copia del driver. El texto JSON es neutral al realm y
+  // el cast explícito conserva el tipo jsonb de la columna.
+  const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
 
   await sql`
     insert into privileged_audit_log (
@@ -35,7 +36,7 @@ export async function auditPrivilegedAction(
       ${input.action},
       ${input.targetType ?? null},
       ${input.targetId ?? null},
-      ${metadata}
+      ${metadataJson}::jsonb
     )
   `;
 }
