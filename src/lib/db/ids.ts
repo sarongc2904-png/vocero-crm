@@ -44,6 +44,7 @@ const prefixes = {
   onboardingProgress: "obp",
   automationRule: "aur",
   scheduledAutomation: "sau",
+  labProfile: "lbp",
 } as const;
 
 export type IdKind = keyof typeof prefixes;
