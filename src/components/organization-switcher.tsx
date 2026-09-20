@@ -7,7 +7,18 @@ type OrganizationOption = {
   id: string;
   name: string;
   role: string;
+  commercialStatus: "trial" | "active" | "past_due" | "suspended" | "cancelled" | null;
+  operationalStatus: "configurando" | "listo_para_operar";
 };
+
+function statusLabel(status: OrganizationOption["commercialStatus"]) {
+  if (status === "active") return "Activo";
+  if (status === "trial") return "Demo";
+  if (status === "past_due") return "Pago pendiente";
+  if (status === "suspended") return "Suspendido";
+  if (status === "cancelled") return "Cancelado";
+  return "Sin plan";
+}
 
 export function OrganizationSwitcher({
   activeOrganizationId,
@@ -73,7 +84,7 @@ export function OrganizationSwitcher({
       >
         {organizations.map((organization) => (
           <option key={organization.id} value={organization.id}>
-            {organization.name}
+            {organization.name} · {statusLabel(organization.commercialStatus)}
           </option>
         ))}
       </select>
