@@ -58,6 +58,7 @@ const agendaActions = [
     startUtc: z.string().min(1),
     reply: z.string().optional(),
   }),
+  z.object({ action: z.literal("cancel_booking") }),
 ] as const;
 
 export const AgentAction = z.discriminatedUnion("action", [
@@ -90,6 +91,7 @@ export function resolveStage(
 }
 
 export function degradeAction(action: AgentActionType): AgentActionType {
+  if (action.action === "cancel_booking") return { action: "none" };
   if (
     action.action === "move_stage" ||
     action.action === "offer_slots" ||

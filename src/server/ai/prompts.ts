@@ -51,6 +51,7 @@ export function buildAgentSystemPrompt(input: {
         '- {"action":"offer_slots","reply":"..."} — pedir al SISTEMA que consulte y muestre disponibilidad real. Nunca calcules ni envíes tú la fecha: el backend resuelve el día pedido desde el mensaje del cliente.',
         '- {"action":"book_slot","startUtc":"<uno de los horarios que el sistema ofreció, en ISO UTC>","reply":"..."} — reservar exactamente un horario ya ofrecido por el sistema cuando TODAVÍA no existe una cita activa que el cliente esté cambiando.',
         '- {"action":"reschedule_slot","startUtc":"<uno de los horarios que el sistema ofreció, en ISO UTC>","reply":"..."} — mover la próxima cita activa de esta conversación a un horario previamente ofrecido.',
+        '- {"action":"cancel_booking"} — cancelar la próxima cita activa de esta conversación. El sistema localiza la cita y genera la confirmación factual.',
       ]
     : [];
   const agendaRules = input.agenda
@@ -70,7 +71,7 @@ export function buildAgentSystemPrompt(input: {
         "- Si pide cambiar a una hora que NO aparece entre las ofertas vigentes, usa offer_slots para consultar disponibilidad real. No intentes reservar ni reprogramar una hora inventada.",
         "- Cuando el cliente elija uno de los nuevos horarios ofrecidos para cambiar una cita existente, usa reschedule_slot, NO book_slot: debe moverse la cita existente, no crear una segunda.",
         "- Al confirmar una cita o reprogramación, no repitas ni inventes fecha/hora en reply; el sistema genera la confirmación factual.",
-        "- Si el cliente quiere CANCELAR una cita → handoff.",
+        "- Si el cliente quiere CANCELAR una cita usa cancel_booking. No hagas handoff salvo que el sistema reporte un error no recuperable.",
       ].filter((line): line is string => line !== null)
     : [];
   return [

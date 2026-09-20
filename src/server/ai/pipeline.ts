@@ -15,6 +15,7 @@ import {
   type AgentActionType,
 } from "@/server/ai/actions";
 import { matchesHandoffIntent } from "@/server/ai/handoff";
+import { matchesCancellationIntent } from "@/server/agenda/cancel-intent";
 import { buildAgentSystemPrompt } from "@/server/ai/prompts";
 import { agendaEnabled } from "@/server/agenda/flag";
 import {
@@ -24,7 +25,11 @@ import {
   offerRange,
   offerSlots,
 } from "@/server/agenda/agent";
-import { BookingError, rescheduleForConversation } from "@/server/agenda/service";
+import {
+  BookingError,
+  cancelBookingForConversation,
+  rescheduleForConversation,
+} from "@/server/agenda/service";
 import {
   currentOffers,
   getOffers,
@@ -114,6 +119,15 @@ export async function runAgentTurn(
 
   if (lastInbound.text && matchesHandoffIntent(lastInbound.text)) {
     await applyHandoff(conversationId, organizationId, "cliente");
+    return;
+  }
+
+  if (
+    agendaEnabled() &&
+    lastInbound.text &&
+    matchesCancellationIntent(lastInbound.text)
+  ) {
+    await handleCancellation(conversation);
     return;
   }
 
@@ -209,6 +223,11 @@ export async function runAgentTurn(
   }
 
   let action: AgentActionType = result.data;
+
+  if (action.action === "cancel_booking") {
+    if (agenda) await handleCancellation(conversation);
+    return;
+  }
 
   // El modelo no puede abrir la agenda por una pregunta informativa. El gate
   // usa el inbound real ya cargado por el pipeline, sin hacer una segunda
@@ -423,11 +442,41 @@ export async function runAgentTurn(
     case "offer_slots":
     case "book_slot":
     case "reschedule_slot":
+    case "cancel_booking":
       return;
   }
 }
 
 type Conversation = typeof schema.conversation.$inferSelect;
+
+async function handleCancellation(conversation: Conversation): Promise<void> {
+  try {
+    const cancelled = await cancelBookingForConversation({
+      organizationId: conversation.organizationId,
+      conversationId: conversation.id,
+    });
+    await deliverReply(
+      conversation,
+      `Listo, cancelé tu cita: ${cancelled.label}.`
+    );
+  } catch (err) {
+    if (err instanceof BookingError && err.code === "not_found") {
+      await deliverReply(
+        conversation,
+        "No encontré una cita activa para cancelar."
+      );
+      return;
+    }
+    console.error(
+      `[agente] la cancelación automática falló: ${String(err).slice(0, 500)}`
+    );
+    await deliverReply(
+      conversation,
+      "No pude cancelar tu cita automáticamente. Un asesor continuará contigo."
+    );
+    await applyHandoff(conversation.id, conversation.organizationId, "error");
+  }
+}
 
 async function deliverReply(
   conversation: Conversation,

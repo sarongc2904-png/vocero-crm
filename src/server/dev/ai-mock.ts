@@ -49,6 +49,10 @@ export function aiMockCompletion(messages: InMessage[]): string {
 
   const text = lastUser.toLowerCase();
 
+  if (/cancel|anul/.test(text) && /cita|reserva|canc[eé]lala|an[uú]lala/.test(text)) {
+    return JSON.stringify({ action: "cancel_booking" });
+  }
+
   /**
    * 015 — La agenda, ejercitando el camino REAL.
    *

@@ -81,8 +81,9 @@ export async function PATCH(req: Request) {
   }
 }
 
-/* Cancelar NO existe por esta superficie a propósito: esa decisión es del
- * dueño del negocio, no del agente. El camino es el handoff. */
+/* La cancelación conversacional ocurre dentro del pipeline del agente, donde
+ * conversationId y tenant ya están validados. No se expone aquí una operación
+ * de borrado/cancelación adicional para clientes externos del Bot API. */
 
 type Gate = { organizationId: string } | { response: Response };
 

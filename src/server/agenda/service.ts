@@ -1,8 +1,8 @@
-import { and, asc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, or } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
-import { labelInTz } from "@/lib/time/slots";
+import { dayLabelInTz, labelInTz, timeInTz } from "@/lib/time/slots";
 import { CONNECTOR_META, type ConnectorId } from "@/lib/agenda-connectors";
 import {
   computeAvailability,
@@ -946,6 +946,74 @@ async function recordBookingEvent(input: {
     fromStatus: input.fromStatus ?? null,
     toStatus: input.toStatus ?? null,
   });
+}
+
+/**
+ * Cancela la próxima cita activa asociada a una conversación o a su contacto.
+ * La conversación, el contacto y la cita se resuelven siempre dentro del
+ * mismo tenant; manipular un id de otro tenant equivale a no encontrarlo.
+ */
+export async function cancelBookingForConversation(input: {
+  organizationId: string;
+  conversationId: string;
+  now?: Date;
+}): Promise<{ bookingId: string; label: string }> {
+  const db = getDb();
+  const now = input.now ?? new Date();
+  const conversations = await db
+    .select({ contactId: schema.conversation.contactId })
+    .from(schema.conversation)
+    .where(
+      scoped(
+        schema.conversation.organizationId,
+        input.organizationId,
+        eq(schema.conversation.id, input.conversationId)
+      )
+    )
+    .limit(1);
+  const conversation = conversations[0];
+  if (!conversation) {
+    throw new BookingError("not_found", "Conversación no encontrada");
+  }
+
+  const bookings = await db
+    .select()
+    .from(schema.booking)
+    .where(
+      scoped(
+        schema.booking.organizationId,
+        input.organizationId,
+        and(
+          eq(schema.booking.kind, "session"),
+          eq(schema.booking.status, "agendada"),
+          gte(schema.booking.scheduledAt, now),
+          or(
+            eq(schema.booking.conversationId, input.conversationId),
+            eq(schema.booking.contactId, conversation.contactId)
+          )
+        )
+      )
+    )
+    .orderBy(asc(schema.booking.scheduledAt))
+    .limit(1);
+  const booking = bookings[0];
+  if (!booking) {
+    throw new BookingError("not_found", "No hay una cita activa que cancelar");
+  }
+
+  const settings = await getSettings(input.organizationId);
+  const timezone = booking.timezone || settings.timezone;
+  const startUtc = booking.scheduledAt.toISOString();
+  const label = `${dayLabelInTz(startUtc, timezone, now)} a las ${timeInTz(
+    startUtc,
+    timezone
+  )}`;
+
+  await cancelBooking({
+    organizationId: input.organizationId,
+    bookingId: booking.id,
+  });
+  return { bookingId: booking.id, label };
 }
 
 /** 23505 = unique_violation; 23P01 = exclusion_violation de Postgres. */
