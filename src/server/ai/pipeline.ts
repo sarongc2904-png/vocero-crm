@@ -47,6 +47,7 @@ import {
   type ScheduleScope,
 } from "@/server/agenda/schedule-scope";
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
+import { hasCommercialAccess } from "@/server/commercial/entitlement";
 
 /**
  * Compatibilidad para callers existentes: el scheduling ahora se persiste en
@@ -84,6 +85,10 @@ export async function runAgentTurn(
   const conversation = convRows[0];
   if (!conversation) return;
   const organizationId = conversation.organizationId;
+
+  // Defensa para jobs ya encolados cuando el trial expira entre la ingesta y
+  // la ejecución. El mensaje queda persistido, pero la IA no consume ni envía.
+  if (!(await hasCommercialAccess(organizationId))) return;
 
   if (conversation.handoffAt || !conversation.aiEnabled) return;
 
