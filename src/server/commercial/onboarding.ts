@@ -41,7 +41,7 @@ async function persistProgress(input: {
   const currentStep =
     firstIncompleteIndex >= 0 ? firstIncompleteIndex + 1 : input.steps.length;
   const activatedAt =
-    input.alreadyActivated || input.readyToActivate ? new Date() : null;
+    input.readyToActivate && !input.alreadyActivated ? new Date() : null;
 
   await getDb()
     .insert(schema.onboardingProgress)
