@@ -162,8 +162,8 @@ export async function claimNextJob(
         organization_id: string;
         conversation_id: string | null;
         run_id: string | null;
-        requested_at: Date;
-        claimed_request_at: Date;
+        requested_at: Date | string;
+        claimed_request_at: Date | string;
         attempts: number;
       }
     | undefined;
@@ -175,8 +175,14 @@ export async function claimNextJob(
     organizationId: row.organization_id,
     conversationId: row.conversation_id,
     runId: row.run_id,
-    requestedAt: row.requested_at,
-    claimedRequestAt: row.claimed_request_at,
+    requestedAt:
+      row.requested_at instanceof Date
+        ? row.requested_at
+        : new Date(row.requested_at),
+    claimedRequestAt:
+      row.claimed_request_at instanceof Date
+        ? row.claimed_request_at
+        : new Date(row.claimed_request_at),
     attempts: row.attempts,
   };
 }

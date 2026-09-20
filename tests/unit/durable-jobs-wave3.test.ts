@@ -85,6 +85,7 @@ describe("Wave 3 - durable agent/Lab execution", () => {
   it("serializa instantes antes de cruzar el boundary postgres-js", () => {
     const queue = source("src/server/jobs/queue.ts");
     expect(queue).toContain("const dueAtIso = dueAt.toISOString()");
+    expect(queue).toContain("new Date(row.claimed_request_at)");
     expect(queue).toContain(
       "const claimedRequestAtIso = job.claimedRequestAt.toISOString()"
     );
