@@ -1,5 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
+import { getOnboardingState } from "@/server/commercial/onboarding";
 
 export const COMMERCIAL_ACTIONS = [
   "extend_trial",
@@ -43,13 +44,27 @@ export async function listCommercialAccounts() {
     )
     .orderBy(asc(schema.organization.createdAt), asc(schema.organization.name));
 
-  return rows.map((row) => ({
-    ...row,
-    createdAt: row.createdAt.toISOString(),
-    trialStartedAt: row.trialStartedAt?.toISOString() ?? null,
-    trialEndsAt: row.trialEndsAt?.toISOString() ?? null,
-    currentPeriodEndsAt: row.currentPeriodEndsAt?.toISOString() ?? null,
-  }));
+  return Promise.all(
+    rows.map(async (row) => {
+      const onboarding = await getOnboardingState(row.organizationId);
+      const nextRequired =
+        onboarding.steps.find(
+          (step) => !step.complete && !step.optional && step.id !== "activation"
+        ) ?? null;
+
+      return {
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        trialStartedAt: row.trialStartedAt?.toISOString() ?? null,
+        trialEndsAt: row.trialEndsAt?.toISOString() ?? null,
+        currentPeriodEndsAt: row.currentPeriodEndsAt?.toISOString() ?? null,
+        operationalStatus: onboarding.operationalStatus,
+        requiredCompleted: onboarding.requiredCompleted,
+        requiredTotal: onboarding.requiredTotal,
+        nextRequiredStep: nextRequired?.label ?? null,
+      };
+    })
+  );
 }
 
 export async function listCommercialPlans() {
