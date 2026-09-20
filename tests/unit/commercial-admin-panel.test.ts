@@ -55,6 +55,30 @@ describe("panel comercial de superadmin", () => {
     expect(organizations).not.toContain("+ 3 * 86_400_000");
   });
 
+  it("muestra estado comercial en el selector y readiness en el panel", () => {
+    const organizationsRoute = source("src/app/api/organizations/route.ts");
+    const switcher = source("src/components/organization-switcher.tsx");
+    const admin = source("src/server/commercial/admin.ts");
+    const client = source("src/components/admin/commercial-admin-client.tsx");
+
+    expect(organizationsRoute).toContain("commercialStatus");
+    expect(switcher).toContain("statusLabel");
+    expect(switcher).toContain("Cancelado");
+    expect(admin).toContain("getOnboardingState");
+    expect(admin).toContain("nextRequiredStep");
+    expect(client).toContain("Listo para operar");
+    expect(client).toContain("Siguiente:");
+  });
+
+  it("muestra solo acciones compatibles con el estado comercial", () => {
+    const client = source("src/components/admin/commercial-admin-client.tsx");
+
+    expect(client).toContain('account.status === "trial"');
+    expect(client).toContain('account.status === "active"');
+    expect(client).toContain('account.status === "suspended" || account.status === "cancelled"');
+    expect(client).toContain('account.status !== "cancelled"');
+  });
+
   it("el menú solo expone Clientes cuando el usuario es superadmin", () => {
     const layout = source("src/app/(app)/layout.tsx");
     const shell = source("src/components/app-shell.tsx");
