@@ -10,6 +10,7 @@ import {
   Kanban,
   LayoutDashboard,
   LogOut,
+  ShieldCheck,
   Settings,
   Sparkles,
   Users,
@@ -65,6 +66,7 @@ export function AppNav({
   branding,
   userName,
   role,
+  isSuperadmin = false,
   activeOrganizationId,
   theme,
   commit,
@@ -75,6 +77,7 @@ export function AppNav({
   branding: Branding;
   userName: string;
   role: string;
+  isSuperadmin?: boolean;
   activeOrganizationId: string;
   theme: ThemePreference;
   /**
@@ -187,6 +190,16 @@ export function AppNav({
       </nav>
 
       <div className="flex-1" />
+
+      {isSuperadmin && (
+        <Link href="/admin/clients" className={navItemClass(pathname.startsWith("/admin/clients"))}>
+          <ShieldCheck
+            className={cn("h-[17px] w-[17px]", pathname.startsWith("/admin/clients") ? "text-brand" : "text-text-3")}
+            strokeWidth={1.8}
+          />
+          Clientes
+        </Link>
+      )}
 
       {role !== "agent" && (
         <Link href="/settings" className={navItemClass(settingsActive)}>
