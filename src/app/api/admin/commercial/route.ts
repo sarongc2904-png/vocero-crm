@@ -5,6 +5,7 @@ import {
   listCommercialAccounts,
   listCommercialPlans,
   updateCommercialAccount,
+  updateCommercialPlan,
 } from "@/server/commercial/admin";
 
 export const dynamic = "force-dynamic";
@@ -28,12 +29,22 @@ export const GET = withAuthOptions(
   }
 );
 
-const updateSchema = z.object({
+const accountUpdateSchema = z.object({
+  target: z.literal("account").default("account"),
   organizationId: z.string().min(1),
   action: z.enum(COMMERCIAL_ACTIONS),
   days: z.number().int().min(1).max(365).optional(),
   planId: z.string().min(1).optional(),
 });
+
+const planUpdateSchema = z.object({
+  target: z.literal("plan"),
+  planId: z.string().min(1),
+  monthlyPriceCents: z.number().int().min(0).max(100_000_000),
+  trialDays: z.number().int().min(0).max(365),
+});
+
+const updateSchema = z.union([accountUpdateSchema, planUpdateSchema]);
 
 export const PATCH = withAuthOptions(
   { allowBlockedCommercialAccess: true },
@@ -44,6 +55,11 @@ export const PATCH = withAuthOptions(
     if (!body.ok) return body.response;
 
     try {
+      if (body.data.target === "plan") {
+        const plan = await updateCommercialPlan(body.data);
+        return Response.json({ plan });
+      }
+
       const account = await updateCommercialAccount(body.data);
       if (!account) {
         return apiError(404, "not_found", "No se encontró la cuenta comercial");
