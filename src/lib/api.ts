@@ -13,6 +13,7 @@ import {
   hasOrganizationRole,
   type OrganizationRole,
 } from "@/lib/auth/roles";
+import { getCommercialAccess } from "@/server/commercial/entitlement";
 
 /** Respuesta de error estándar de la API interna (contrato api.md). */
 export function apiError(
@@ -23,11 +24,45 @@ export function apiError(
   return Response.json({ error: { code, message } }, { status });
 }
 
+type AuthOptions = {
+  /**
+   * Permite consultar superficies mínimas necesarias para explicar o resolver
+   * el bloqueo comercial. No debe usarse en operaciones del CRM.
+   */
+  allowBlockedCommercialAccess?: boolean;
+};
+
+async function commercialGate(
+  session: SessionContext,
+  options: AuthOptions
+): Promise<Response | null> {
+  if (session.isSuperadmin || options.allowBlockedCommercialAccess) return null;
+
+  const access = await getCommercialAccess(session.organizationId).catch(
+    () => null
+  );
+  if (access?.allowed) return null;
+
+  return apiError(
+    402,
+    "subscription_required",
+    "El plan de esta organización no permite usar el CRM en este momento"
+  );
+}
+
 /**
  * Envuelve un route handler autenticado: resuelve la sesión (401 si no hay),
- * captura errores no controlados (500 sin stack) y deja pasar Response.
+ * aplica el gate comercial (402 si el tenant no tiene acceso) y captura errores
+ * no controlados (500 sin stack).
  */
 export function withAuth<Args extends unknown[]>(
+  handler: (session: SessionContext, ...args: Args) => Promise<Response>
+): (...args: Args) => Promise<Response> {
+  return withAuthOptions({}, handler);
+}
+
+export function withAuthOptions<Args extends unknown[]>(
+  options: AuthOptions,
   handler: (session: SessionContext, ...args: Args) => Promise<Response>
 ): (...args: Args) => Promise<Response> {
   return async (...args: Args) => {
@@ -43,6 +78,10 @@ export function withAuth<Args extends unknown[]>(
       }
       throw err;
     }
+
+    const blocked = await commercialGate(session, options);
+    if (blocked) return blocked;
+
     try {
       return await handler(session, ...args);
     } catch (err) {
@@ -77,7 +116,15 @@ export function withOrgPermissions<Args extends unknown[]>(
   permissions: readonly OrganizationPermission[],
   handler: (session: SessionContext, ...args: Args) => Promise<Response>
 ): (...args: Args) => Promise<Response> {
-  return withAuth(async (session, ...args: Args) => {
+  return withOrgPermissionsOptions({}, permissions, handler);
+}
+
+export function withOrgPermissionsOptions<Args extends unknown[]>(
+  options: AuthOptions,
+  permissions: readonly OrganizationPermission[],
+  handler: (session: SessionContext, ...args: Args) => Promise<Response>
+): (...args: Args) => Promise<Response> {
+  return withAuthOptions(options, async (session, ...args: Args) => {
     const allowed = permissions.every((permission) =>
       hasOrganizationPermission(session.role, permission, {
         isSuperadmin: session.isSuperadmin,
