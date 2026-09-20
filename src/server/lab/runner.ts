@@ -5,7 +5,8 @@ import { publish } from "@/server/events/bus";
 import { runAgentTurn } from "@/server/ai/pipeline";
 import { renderKb } from "@/server/ai/prompts";
 import { computeScore, judgeCase } from "@/server/lab/judge";
-import { PERSONAS, type Persona } from "@/server/lab/personas";
+import { type Persona } from "@/server/lab/personas";
+import { getLabPersonas } from "@/server/lab/profile";
 import { enqueueLabRun } from "@/server/jobs/queue";
 import {
   persistActionTrace,
@@ -40,8 +41,10 @@ export async function startRun(organizationId: string): Promise<string> {
     throw err;
   }
 
+  const personas = await getLabPersonas(organizationId);
+
   await db.insert(schema.agentTestCase).values(
-    PERSONAS.map((p) => ({
+    personas.map((p) => ({
       id: newId("testCase"),
       organizationId,
       runId,
@@ -72,6 +75,7 @@ async function runAllCases(
   deadline: number
 ): Promise<void> {
   const db = getDb();
+  const personas = await getLabPersonas(organizationId);
   const cases = await db
     .select()
     .from(schema.agentTestCase)
@@ -121,7 +125,7 @@ async function runAllCases(
       continue;
     }
 
-    const persona = PERSONAS.find((p) => p.key === testCase.persona);
+    const persona = personas.find((p) => p.key === testCase.persona);
     if (!persona) {
       done += 1;
       continue;
@@ -471,7 +475,16 @@ async function failRun(
         eq(schema.agentTestRun.id, runId)
       )
     );
-  publishProgress(organizationId, runId, "failed", 0, PERSONAS.length);
+  const total = await db
+    .select({ id: schema.agentTestCase.id })
+    .from(schema.agentTestCase)
+    .where(
+      and(
+        eq(schema.agentTestCase.organizationId, organizationId),
+        eq(schema.agentTestCase.runId, runId)
+      )
+    );
+  publishProgress(organizationId, runId, "failed", 0, total.length);
 }
 
 function publishProgress(
