@@ -9,9 +9,75 @@ export type OnboardingStep = {
   href: string;
 };
 
+export type OnboardingOperationalStatus =
+  | "por_configurar"
+  | "configurando"
+  | "listo_para_activar"
+  | "listo_para_operar";
+
+function deriveOperationalStatus(input: {
+  requiredCompleted: number;
+  requiredTotal: number;
+  activated: boolean;
+}): OnboardingOperationalStatus {
+  if (input.activated) return "listo_para_operar";
+  if (input.requiredCompleted >= input.requiredTotal) return "listo_para_activar";
+  if (input.requiredCompleted > 1) return "configurando";
+  return "por_configurar";
+}
+
+async function persistProgress(input: {
+  organizationId: string;
+  steps: OnboardingStep[];
+  readyToActivate: boolean;
+  alreadyActivated: boolean;
+}) {
+  const completedSteps = input.steps
+    .filter((step) => step.complete)
+    .map((step) => step.id);
+  const firstIncompleteIndex = input.steps.findIndex(
+    (step) => !step.complete && !step.optional && step.id !== "activation"
+  );
+  const currentStep =
+    firstIncompleteIndex >= 0 ? firstIncompleteIndex + 1 : input.steps.length;
+  const activatedAt =
+    input.alreadyActivated || input.readyToActivate ? new Date() : null;
+
+  await getDb()
+    .insert(schema.onboardingProgress)
+    .values({
+      id: newId("onboardingProgress"),
+      organizationId: input.organizationId,
+      currentStep,
+      completedSteps:
+        input.readyToActivate && !completedSteps.includes("activation")
+          ? [...completedSteps, "activation"]
+          : completedSteps,
+      activatedAt,
+    })
+    .onConflictDoUpdate({
+      target: schema.onboardingProgress.organizationId,
+      set: {
+        currentStep,
+        completedSteps:
+          input.readyToActivate && !completedSteps.includes("activation")
+            ? [...completedSteps, "activation"]
+            : completedSteps,
+        ...(activatedAt ? { activatedAt } : {}),
+        updatedAt: new Date(),
+      },
+    });
+}
+
 export async function getOnboardingState(organizationId: string) {
   const rows = await getSql()`
     select
+      exists(
+        select 1
+        from organization
+        where id = ${organizationId}
+          and length(trim(name)) > 1
+      ) as business,
       exists(select 1 from calendar_settings where organization_id = ${organizationId}) as timezone,
       exists(
         select 1
@@ -29,7 +95,7 @@ export async function getOnboardingState(organizationId: string) {
   `;
   const fact = (rows[0] ?? {}) as Record<string, boolean>;
   const steps: OnboardingStep[] = [
-    { id: "business", label: "Negocio", complete: true, href: "/settings/branding" },
+    { id: "business", label: "Negocio", complete: Boolean(fact.business), href: "/settings/branding" },
     { id: "timezone", label: "Zona horaria", complete: Boolean(fact.timezone), href: "/settings/calendar" },
     { id: "whatsapp", label: "WhatsApp", complete: Boolean(fact.whatsapp), href: "/settings/whatsapp" },
     { id: "services", label: "Servicios", complete: Boolean(fact.services), href: "/settings/beauty" },
@@ -40,10 +106,44 @@ export async function getOnboardingState(organizationId: string) {
     { id: "test", label: "Prueba de conversación", complete: Boolean(fact.test), href: "/lab" },
     { id: "activation", label: "Activación", complete: Boolean(fact.activation), href: "/onboarding" },
   ];
-  const required = steps.filter((step) => !step.optional && step.id !== "activation");
+
+  const required = steps.filter(
+    (step) => !step.optional && step.id !== "activation"
+  );
+  const requiredCompleted = required.filter((step) => step.complete).length;
+  const readyToActivate = requiredCompleted === required.length;
+
+  if (readyToActivate && !fact.activation) {
+    await persistProgress({
+      organizationId,
+      steps,
+      readyToActivate: true,
+      alreadyActivated: false,
+    });
+    fact.activation = true;
+    const activation = steps.find((step) => step.id === "activation");
+    if (activation) activation.complete = true;
+  } else {
+    await persistProgress({
+      organizationId,
+      steps,
+      readyToActivate,
+      alreadyActivated: Boolean(fact.activation),
+    });
+  }
+
+  const operationalStatus = deriveOperationalStatus({
+    requiredCompleted,
+    requiredTotal: required.length,
+    activated: Boolean(fact.activation),
+  });
+
   return {
     steps,
-    readyToActivate: required.every((step) => step.complete),
+    readyToActivate,
+    operationalStatus,
+    requiredCompleted,
+    requiredTotal: required.length,
     completed: steps.filter((step) => step.complete).length,
     total: steps.length,
   };
@@ -52,26 +152,12 @@ export async function getOnboardingState(organizationId: string) {
 export async function activateOnboarding(organizationId: string) {
   const state = await getOnboardingState(organizationId);
   if (!state.readyToActivate) return false;
-  const completedSteps = state.steps
-    .filter((step) => step.complete || step.id === "activation")
-    .map((step) => step.id);
-  await getDb()
-    .insert(schema.onboardingProgress)
-    .values({
-      id: newId("onboardingProgress"),
-      organizationId,
-      currentStep: 10,
-      completedSteps,
-      activatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: schema.onboardingProgress.organizationId,
-      set: {
-        currentStep: 10,
-        completedSteps,
-        activatedAt: new Date(),
-        updatedAt: new Date(),
-      },
-    });
+
+  await persistProgress({
+    organizationId,
+    steps: state.steps,
+    readyToActivate: true,
+    alreadyActivated: true,
+  });
   return true;
 }
