@@ -71,7 +71,7 @@ export function CommercialAdminClient() {
     void load();
   }, []);
 
-  async function mutate(
+  async function mutateAccount(
     organizationId: string,
     action: string,
     extra: Record<string, unknown> = {}
@@ -81,11 +81,41 @@ export function CommercialAdminClient() {
       const res = await fetch("/api/admin/commercial", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ organizationId, action, ...extra }),
+        body: JSON.stringify({
+          target: "account",
+          organizationId,
+          action,
+          ...extra,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         throw new Error(data?.error?.message ?? "No se pudo actualizar");
+      }
+      await load();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "No se pudo actualizar");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function mutatePlan(plan: Plan, pricePesos: number, trialDays: number) {
+    setBusy(plan.id);
+    try {
+      const res = await fetch("/api/admin/commercial", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          target: "plan",
+          planId: plan.id,
+          monthlyPriceCents: Math.round(pricePesos * 100),
+          trialDays,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error?.message ?? "No se pudo actualizar el plan");
       }
       await load();
     } catch (error) {
@@ -110,13 +140,13 @@ export function CommercialAdminClient() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="kicker text-brand-text">Administración comercial</p>
           <h1 className="mt-1 text-2xl font-bold">Clientes y planes</h1>
           <p className="mt-1 text-sm text-text-3">
-            Extiende demos, activa, suspende, cancela, reactiva o cambia de plan.
+            Controla precio, demo, estado y plan sin entrar a PostgreSQL.
           </p>
         </div>
         <input
@@ -126,6 +156,23 @@ export function CommercialAdminClient() {
           className="h-10 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-brand"
         />
       </div>
+
+      <section className="rounded-xl border p-4">
+        <h2 className="text-base font-bold">Configuración de planes</h2>
+        <p className="mt-1 text-sm text-text-3">
+          Los cambios aplican a altas nuevas. Los trials ya iniciados conservan su fecha hasta que los extiendas manualmente.
+        </p>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {plans.map((plan) => (
+            <PlanEditor
+              key={plan.id}
+              plan={plan}
+              disabled={busy === plan.id}
+              onSave={mutatePlan}
+            />
+          ))}
+        </div>
+      </section>
 
       <div className="overflow-x-auto rounded-xl border">
         <table className="min-w-full text-left text-sm">
@@ -154,7 +201,7 @@ export function CommercialAdminClient() {
                       value={account.planId ?? ""}
                       disabled={disabled}
                       onChange={(event) =>
-                        void mutate(account.organizationId, "change_plan", {
+                        void mutateAccount(account.organizationId, "change_plan", {
                           planId: event.target.value,
                         })
                       }
@@ -192,7 +239,7 @@ export function CommercialAdminClient() {
                             window.alert("Usa un número entero entre 1 y 365");
                             return;
                           }
-                          void mutate(account.organizationId, "extend_trial", { days });
+                          void mutateAccount(account.organizationId, "extend_trial", { days });
                         }}
                         className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
                       >
@@ -200,21 +247,21 @@ export function CommercialAdminClient() {
                       </button>
                       <button
                         disabled={disabled}
-                        onClick={() => void mutate(account.organizationId, "activate")}
+                        onClick={() => void mutateAccount(account.organizationId, "activate")}
                         className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
                       >
                         Activar
                       </button>
                       <button
                         disabled={disabled}
-                        onClick={() => void mutate(account.organizationId, "suspend")}
+                        onClick={() => void mutateAccount(account.organizationId, "suspend")}
                         className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
                       >
                         Suspender
                       </button>
                       <button
                         disabled={disabled}
-                        onClick={() => void mutate(account.organizationId, "reactivate")}
+                        onClick={() => void mutateAccount(account.organizationId, "reactivate")}
                         className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
                       >
                         Reactivar
@@ -223,7 +270,7 @@ export function CommercialAdminClient() {
                         disabled={disabled}
                         onClick={() => {
                           if (window.confirm("¿Cancelar este plan? Los datos se conservarán.")) {
-                            void mutate(account.organizationId, "cancel");
+                            void mutateAccount(account.organizationId, "cancel");
                           }
                         }}
                         className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
@@ -238,9 +285,80 @@ export function CommercialAdminClient() {
           </tbody>
         </table>
         {filtered.length === 0 && (
-          <p className="p-6 text-center text-sm text-text-3">No hay clientes que coincidan.</p>
+          <p className="p-6 text-center text-sm text-text-3">
+            No hay clientes que coincidan.
+          </p>
         )}
       </div>
+    </div>
+  );
+}
+
+function PlanEditor({
+  plan,
+  disabled,
+  onSave,
+}: {
+  plan: Plan;
+  disabled: boolean;
+  onSave: (plan: Plan, pricePesos: number, trialDays: number) => Promise<void>;
+}) {
+  const [price, setPrice] = useState(String(plan.monthlyPriceCents / 100));
+  const [trialDays, setTrialDays] = useState(String(plan.trialDays));
+
+  useEffect(() => {
+    setPrice(String(plan.monthlyPriceCents / 100));
+    setTrialDays(String(plan.trialDays));
+  }, [plan.monthlyPriceCents, plan.trialDays]);
+
+  return (
+    <div className="rounded-lg bg-subtle p-4">
+      <div className="font-semibold">{plan.name}</div>
+      <div className="mt-1 text-xs text-text-3">{plan.code}</div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <label className="text-xs font-semibold text-text-2">
+          Precio mensual
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={price}
+            onChange={(event) => setPrice(event.target.value)}
+            className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm font-normal"
+          />
+        </label>
+        <label className="text-xs font-semibold text-text-2">
+          Días de demo
+          <input
+            type="number"
+            min="0"
+            max="365"
+            step="1"
+            value={trialDays}
+            onChange={(event) => setTrialDays(event.target.value)}
+            className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm font-normal"
+          />
+        </label>
+      </div>
+      <button
+        disabled={disabled}
+        onClick={() => {
+          const priceValue = Number(price);
+          const daysValue = Number(trialDays);
+          if (!Number.isFinite(priceValue) || priceValue < 0) {
+            window.alert("El precio no es válido");
+            return;
+          }
+          if (!Number.isInteger(daysValue) || daysValue < 0 || daysValue > 365) {
+            window.alert("Los días de demo deben estar entre 0 y 365");
+            return;
+          }
+          void onSave(plan, priceValue, daysValue);
+        }}
+        className="mt-3 rounded-md border px-3 py-2 text-xs font-semibold disabled:opacity-50"
+      >
+        Guardar plan
+      </button>
     </div>
   );
 }
