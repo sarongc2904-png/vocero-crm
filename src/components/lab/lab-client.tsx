@@ -8,6 +8,7 @@ import {
   ChevronUp,
   FlaskConical,
   Play,
+  Settings2,
   Sparkles,
   TrendingDown,
   TrendingUp,
@@ -47,6 +48,29 @@ type Case = {
   transcript: { role: "cliente" | "agente"; text: string }[];
 };
 
+type ScenarioKey =
+  | "comprador_decidido"
+  | "pregunton_precios"
+  | "cliente_enojado"
+  | "fuera_de_kb"
+  | "pide_humano"
+  | "errores_modismos";
+
+type LabProfile = {
+  businessContext: string;
+  enabledScenarios: ScenarioKey[];
+  scenarioScripts: Record<ScenarioKey, string[]>;
+};
+
+const SCENARIOS: { key: ScenarioKey; label: string }[] = [
+  { key: "comprador_decidido", label: "Comprador decidido" },
+  { key: "pregunton_precios", label: "Preguntón de precios" },
+  { key: "cliente_enojado", label: "Cliente enojado" },
+  { key: "fuera_de_kb", label: "Fuera del conocimiento" },
+  { key: "pide_humano", label: "Pide un humano" },
+  { key: "errores_modismos", label: "Errores y modismos" },
+];
+
 const TIPO_LABELS: Record<Hallazgo["tipo"], string> = {
   alucinacion: "Alucinación",
   fuera_de_kb: "Fuera del conocimiento",
@@ -62,6 +86,10 @@ export function LabClient() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [profile, setProfile] = useState<LabProfile | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSaved, setProfileSaved] = useState(false);
 
   const refetchRuns = useCallback(async () => {
     const res = await fetch("/api/lab/runs").catch(() => null);
@@ -80,6 +108,12 @@ export function LabClient() {
 
   useEffect(() => {
     void refetchRuns();
+    void fetch("/api/lab/profile")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { profile?: LabProfile } | null) => {
+        if (data?.profile) setProfile(data.profile);
+      })
+      .catch(() => null);
   }, [refetchRuns]);
 
   useEffect(() => {
@@ -96,6 +130,25 @@ export function LabClient() {
       }
     },
   });
+
+  async function saveProfile() {
+    if (!profile) return;
+    setSavingProfile(true);
+    setProfileSaved(false);
+    const res = await fetch("/api/lab/profile", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(profile),
+    }).catch(() => null);
+    setSavingProfile(false);
+    if (!res?.ok) {
+      setError("No se pudo guardar la configuración del Laboratorio");
+      return;
+    }
+    const data = (await res.json()) as { profile: LabProfile };
+    setProfile(data.profile);
+    setProfileSaved(true);
+  }
 
   async function launch() {
     setLaunching(true);
@@ -119,7 +172,7 @@ export function LabClient() {
   if (!aiConfigured) {
     return (
       <div className="flex h-full flex-col">
-        <Header running={false} launching={false} onLaunch={() => {}} disabled />
+        <Header running={false} launching={false} onLaunch={() => {}} disabled onConfigure={() => setConfigOpen(!configOpen)} />
         <div className="m-6 rounded-lg border border-brand-soft bg-brand-tint p-8 text-center">
           <Sparkles className="mx-auto mb-2 h-8 w-8 text-primary" />
           <p className="font-medium">
@@ -144,8 +197,87 @@ export function LabClient() {
         launching={launching}
         onLaunch={() => void launch()}
         disabled={false}
+        onConfigure={() => setConfigOpen(!configOpen)}
       />
       {error && <p className="px-4 pt-3 text-sm text-destructive sm:px-6">{error}</p>}
+
+      {configOpen && profile && (
+        <div className="mx-4 mt-4 rounded-lg border bg-card p-4 sm:mx-6">
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold">Configuración de pruebas de este cliente</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Esta configuración pertenece solo a la organización activa. Cambiar de cliente carga otro perfil.
+            </p>
+          </div>
+
+          <div className="mb-4 space-y-1">
+            <Label htmlFor="lab-business-context">Contexto del negocio</Label>
+            <Textarea
+              id="lab-business-context"
+              rows={3}
+              value={profile.businessContext}
+              onChange={(e) =>
+                setProfile({ ...profile, businessContext: e.target.value })
+              }
+              placeholder="Ej. Conecta Digital vende tarjetas digitales para asesores inmobiliarios..."
+            />
+          </div>
+
+          <div className="space-y-3">
+            {SCENARIOS.map((scenario) => {
+              const enabled = profile.enabledScenarios.includes(scenario.key);
+              return (
+                <div key={scenario.key} className="rounded-md border p-3">
+                  <label className="flex items-center gap-2 text-sm font-medium">
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...profile.enabledScenarios, scenario.key]
+                          : profile.enabledScenarios.filter((key) => key !== scenario.key);
+                        setProfile({ ...profile, enabledScenarios: next });
+                      }}
+                    />
+                    {scenario.label}
+                  </label>
+                  <Textarea
+                    className="mt-2"
+                    rows={4}
+                    disabled={!enabled}
+                    value={(profile.scenarioScripts[scenario.key] ?? []).join("\n")}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        scenarioScripts: {
+                          ...profile.scenarioScripts,
+                          [scenario.key]: e.target.value
+                            .split("\n")
+                            .map((line) => line.trim())
+                            .filter(Boolean),
+                        },
+                      })
+                    }
+                    placeholder="Un mensaje del cliente por línea"
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <Button
+              onClick={() => void saveProfile()}
+              disabled={savingProfile || profile.enabledScenarios.length === 0}
+            >
+              {savingProfile ? "Guardando…" : "Guardar configuración"}
+            </Button>
+            {profileSaved && (
+              <span className="text-xs text-success">Guardado para este cliente ✓</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {running && progress && (
         <div className="mx-6 mt-4 rounded-lg border bg-card p-4">
@@ -189,11 +321,13 @@ function Header({
   launching,
   onLaunch,
   disabled,
+  onConfigure,
 }: {
   running: boolean;
   launching: boolean;
   onLaunch: () => void;
   disabled: boolean;
+  onConfigure: () => void;
 }) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-6 sm:py-4">
@@ -205,10 +339,15 @@ function Header({
           Sandbox interno — no envía mensajes reales
         </p>
       </div>
-      <Button onClick={onLaunch} disabled={disabled || running || launching}>
-        <Play className="h-4 w-4" />
-        {running ? "Corrida en curso…" : "Correr evaluación"}
-      </Button>
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={onConfigure} disabled={running}>
+          <Settings2 className="h-4 w-4" /> Configurar pruebas
+        </Button>
+        <Button onClick={onLaunch} disabled={disabled || running || launching}>
+          <Play className="h-4 w-4" />
+          {running ? "Corrida en curso…" : "Correr evaluación"}
+        </Button>
+      </div>
     </header>
   );
 }
