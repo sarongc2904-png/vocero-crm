@@ -12,13 +12,22 @@ export type DurableJob = {
   organizationId: string;
   conversationId: string | null;
   runId: string | null;
-  requestedAt: Date;
-  claimedRequestAt: Date;
+  requestedAt: string;
+  claimedRequestAt: string;
   attempts: number;
 };
 
 const LEASE_MINUTES = 15;
 export const MAX_JOB_ATTEMPTS = 8;
+
+function exactSqlTimestamp(value: Date | string): string {
+  // postgres-js devuelve `timestamp without time zone` como texto y puede
+  // conservar microsegundos. Pasarlo por Date los truncaría a milisegundos:
+  // la comparación que decide si llegó otro inbound quedaría falsamente
+  // atrás y el mismo job se ejecutaría hasta dead-letter.
+  if (typeof value === "string") return value;
+  return value.toISOString();
+}
 
 export async function enqueueAgentTurn(
   organizationId: string,
@@ -175,28 +184,22 @@ export async function claimNextJob(
     organizationId: row.organization_id,
     conversationId: row.conversation_id,
     runId: row.run_id,
-    requestedAt:
-      row.requested_at instanceof Date
-        ? row.requested_at
-        : new Date(row.requested_at),
-    claimedRequestAt:
-      row.claimed_request_at instanceof Date
-        ? row.claimed_request_at
-        : new Date(row.claimed_request_at),
+    requestedAt: exactSqlTimestamp(row.requested_at),
+    claimedRequestAt: exactSqlTimestamp(row.claimed_request_at),
     attempts: row.attempts,
   };
 }
 
 export async function completeAgentJob(job: DurableJob): Promise<void> {
   const sql = getSql();
-  const claimedRequestAtIso = job.claimedRequestAt.toISOString();
+  const claimedRequestAtExact = job.claimedRequestAt;
 
   // Si nadie pidió otro turno mientras este corría, la fila puede desaparecer.
   const deleted = await sql`
     delete from durable_job
     where id = ${job.id}
       and organization_id = ${job.organizationId}
-      and requested_at <= ${claimedRequestAtIso}
+      and requested_at <= ${claimedRequestAtExact}
     returning id
   `;
   if (deleted.length > 0) return;
