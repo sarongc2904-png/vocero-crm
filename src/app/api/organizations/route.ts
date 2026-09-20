@@ -16,11 +16,21 @@ export const GET = withAuth(async (session) => {
       slug: schema.organization.slug,
       role: schema.member.role,
       createdAt: schema.organization.createdAt,
+      commercialStatus: schema.organizationEntitlement.status,
+      activatedAt: schema.onboardingProgress.activatedAt,
     })
     .from(schema.member)
     .innerJoin(
       schema.organization,
       eq(schema.member.organizationId, schema.organization.id)
+    )
+    .leftJoin(
+      schema.organizationEntitlement,
+      eq(schema.organizationEntitlement.organizationId, schema.organization.id)
+    )
+    .leftJoin(
+      schema.onboardingProgress,
+      eq(schema.onboardingProgress.organizationId, schema.organization.id)
     )
     .where(eq(schema.member.userId, session.userId))
     .orderBy(asc(schema.member.createdAt), asc(schema.member.id));
@@ -29,6 +39,7 @@ export const GET = withAuth(async (session) => {
     activeOrganizationId: session.organizationId,
     organizations: organizations.map((organization) => ({
       ...organization,
+      operationalStatus: organization.activatedAt ? "listo_para_operar" : "configurando",
       active: organization.id === session.organizationId,
     })),
   });
