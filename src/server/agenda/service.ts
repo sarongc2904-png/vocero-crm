@@ -12,6 +12,7 @@ import {
 import { getSettings, type CalendarSettings } from "@/server/agenda/settings";
 import {
   clearOffers,
+  currentOffers,
   findOffered,
   getOffers,
   replaceOffers,
@@ -110,6 +111,7 @@ export async function createSessionBooking(input: {
 }): Promise<BookingResult> {
   const db = getDb();
   const settings = await getSettings(input.organizationId);
+  const now = input.now ?? new Date();
   if (Boolean(input.serviceId) !== Boolean(input.professionalId)) {
     throw new BookingError(
       "invalid",
@@ -167,7 +169,14 @@ export async function createSessionBooking(input: {
         "Se necesita la conversación para validar la oferta"
       );
     }
-    const offers = await getOffers(input.organizationId, input.conversationId);
+    const offers = currentOffers(
+      await getOffers(input.organizationId, input.conversationId),
+      {
+        now,
+        minNoticeHours: settings.minNoticeHours,
+        timezone: settings.timezone,
+      }
+    );
     if (
       !findOffered(offers, input.startUtc, {
         serviceId: input.serviceId,
@@ -188,10 +197,10 @@ export async function createSessionBooking(input: {
         serviceId: schedulingContext.service.id,
         professionalId: schedulingContext.professional.id,
         startUtc: input.startUtc,
-        now: input.now,
+        now,
       })
     : await findSlot(input.organizationId, input.startUtc, {
-        now: input.now,
+        now,
         settings,
       });
   if (!slot) {
@@ -199,7 +208,7 @@ export async function createSessionBooking(input: {
       "slot_taken",
       "Ese horario ya no está disponible",
       await refreshOffer(input.organizationId, input.conversationId, {
-        now: input.now,
+        now,
       })
     );
   }
@@ -258,7 +267,7 @@ export async function createSessionBooking(input: {
         "slot_taken",
         "Ese horario acaba de ocuparse",
         await refreshOffer(input.organizationId, input.conversationId, {
-          now: input.now,
+          now,
         })
       );
     }
@@ -358,6 +367,7 @@ export async function rescheduleBooking(input: {
   now?: Date;
 }): Promise<BookingResult> {
   const db = getDb();
+  const now = input.now ?? new Date();
   const booking = await getOwnBooking(input.organizationId, input.bookingId);
   if (booking.status === "cancelada") {
     throw new BookingError("invalid", "La cita está cancelada");
@@ -372,11 +382,11 @@ export async function rescheduleBooking(input: {
           professionalId: booking.professionalId,
           startUtc: input.startUtc,
           excludeBookingId: booking.id,
-          now: input.now,
+          now,
         })
       : await findSlot(input.organizationId, input.startUtc, {
           excludeBookingId: booking.id,
-          now: input.now,
+          now,
           settings,
         });
   if (!slot) {
@@ -470,7 +480,15 @@ export async function rescheduleForConversation(input: {
   if (!conv) throw new BookingError("not_found", "Conversación no encontrada");
 
   // Mismas reglas que al crear: el instante nuevo tiene que haberse ofrecido.
-  const offers = await getOffers(input.organizationId, input.conversationId);
+  const settings = await getSettings(input.organizationId);
+  const offers = currentOffers(
+    await getOffers(input.organizationId, input.conversationId),
+    {
+      now,
+      minNoticeHours: settings.minNoticeHours,
+      timezone: settings.timezone,
+    }
+  );
   if (!findOffered(offers, input.startUtc)) {
     throw new BookingError(
       "slot_not_offered",
@@ -506,7 +524,7 @@ export async function rescheduleForConversation(input: {
     organizationId: input.organizationId,
     bookingId: target.id,
     startUtc: input.startUtc,
-    now: input.now,
+    now,
   });
   await clearOffers(input.organizationId, input.conversationId).catch(() => {});
   return result;

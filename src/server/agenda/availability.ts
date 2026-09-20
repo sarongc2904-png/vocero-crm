@@ -66,7 +66,9 @@ export function filterFreeSlots(
 ): AvailableSlot[] {
   const minStartMs = opts.now.getTime() + opts.minNoticeHours * 3_600_000;
   return candidates
-    .filter((c) => Date.parse(c.startUtc) >= minStartMs)
+    // El inicio debe quedar ESTRICTAMENTE después del reloj real + aviso.
+    // Aceptar igualdad permitía reservar un slot justo cuando ya comenzaba.
+    .filter((c) => Date.parse(c.startUtc) > minStartMs)
     .filter(
       (c) =>
         !busy.some((b) => overlaps(c.startUtc, c.endUtc, b.startUtc, b.endUtc))

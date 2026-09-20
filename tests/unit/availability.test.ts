@@ -65,24 +65,25 @@ describe("filterFreeSlots", () => {
 
   it("descarta lo que no cumple el aviso mínimo", () => {
     // "Ahora" son las 09:00 locales del mismo día, con 2 h de aviso ⇒ el
-    // primer hueco ofrecible es a las 11:00 locales (17:00Z).
+    // A las 11:00 exactas todavía no se supera el aviso: el primer hueco
+    // ofrecible es 11:30 local (17:30Z).
     const now = new Date("2026-08-05T15:00:00.000Z");
     const free = filterFreeSlots(candidates, [], {
       now,
       minNoticeHours: 2,
       timezone: tz,
     });
-    expect(free[0]!.startUtc).toBe("2026-08-05T17:00:00.000Z");
+    expect(free[0]!.startUtc).toBe("2026-08-05T17:30:00.000Z");
   });
 
-  it("sin aviso mínimo ofrece desde el instante actual", () => {
+  it("sin aviso mínimo exige que el slot empiece después del instante actual", () => {
     const now = new Date("2026-08-05T15:00:00.000Z");
     const free = filterFreeSlots(candidates, [], {
       now,
       minNoticeHours: 0,
       timezone: tz,
     });
-    expect(free[0]!.startUtc).toBe("2026-08-05T15:00:00.000Z");
+    expect(free[0]!.startUtc).toBe("2026-08-05T15:30:00.000Z");
   });
 
   it("una cita ocupada retira su hueco y solo ese", () => {

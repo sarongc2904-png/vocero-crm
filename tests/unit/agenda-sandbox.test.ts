@@ -30,6 +30,7 @@ const settings = {
 };
 
 const SLOT = "2026-08-05T15:00:00.000Z";
+const NOW = new Date("2026-08-05T14:59:00.000Z");
 
 const createMeeting = vi.fn(async () => ({
   externalId: "zoom_1",
@@ -150,6 +151,7 @@ describe("una cita del Laboratorio jamás llega al proveedor", () => {
       startUtc: SLOT,
       source: "ai",
       requireOffer: true,
+      now: NOW,
     });
 
     expect(lastInsert?.isTest).toBe(true);
@@ -167,6 +169,7 @@ describe("una cita del Laboratorio jamás llega al proveedor", () => {
       organizationId: "org_1",
       bookingId: "bk_test",
       startUtc: SLOT,
+      now: NOW,
     });
 
     expect(updateMeeting).not.toHaveBeenCalled();
@@ -195,6 +198,7 @@ describe("una cita del Laboratorio jamás llega al proveedor", () => {
       startUtc: SLOT,
       source: "ai",
       requireOffer: true,
+      now: NOW,
     });
 
     expect(createMeeting).toHaveBeenCalledOnce();

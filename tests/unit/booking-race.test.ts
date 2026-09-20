@@ -25,6 +25,7 @@ const settings = {
 };
 
 const SLOT = "2026-08-05T15:00:00.000Z";
+const NOW = new Date("2026-08-05T14:59:00.000Z");
 
 const ALTERNATIVES = [
   { startUtc: "2026-08-05T15:30:00.000Z", endUtc: "…", label: "mié 5 ago, 09:30" },
@@ -169,6 +170,7 @@ describe("la carrera del hueco", () => {
       startUtc: SLOT,
       source: "ai",
       requireOffer: true,
+      now: NOW,
     });
 
     await expect(promise).rejects.toBeInstanceOf(BookingError);
@@ -200,6 +202,7 @@ describe("la carrera del hueco", () => {
         startUtc: SLOT,
         source: "ai",
         requireOffer: true,
+        now: NOW,
       })
     ).rejects.toMatchObject({ code: "slot_taken" });
   });
@@ -216,6 +219,7 @@ describe("la carrera del hueco", () => {
         startUtc: SLOT,
         source: "ai",
         requireOffer: true,
+        now: NOW,
       })
     ).rejects.toMatchObject({ code: "slot_taken" });
   });
@@ -232,6 +236,7 @@ describe("la carrera del hueco", () => {
         startUtc: SLOT,
         source: "ai",
         requireOffer: true,
+        now: NOW,
       })
     ).rejects.toMatchObject({ code: "23503" });
   });
@@ -247,6 +252,7 @@ describe("la carrera del hueco", () => {
       startUtc: "2026-08-05T20:00:00.000Z",
       source: "ai",
       requireOffer: true,
+      now: NOW,
     });
 
     await expect(promise).rejects.toMatchObject({ code: "slot_not_offered" });
@@ -255,6 +261,23 @@ describe("la carrera del hueco", () => {
       // inventar.
       expect(err.slots[0].startUtc).toBe(SLOT);
     });
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("una oferta que venció se rechaza antes de insertar", async () => {
+    const { createSessionBooking } = await import("@/server/agenda/service");
+    primeLookups();
+
+    await expect(
+      createSessionBooking({
+        organizationId: "org_1",
+        conversationId: "cv_1",
+        startUtc: SLOT,
+        source: "ai",
+        requireOffer: true,
+        now: new Date("2026-08-06T00:00:00.000Z"),
+      })
+    ).rejects.toMatchObject({ code: "slot_not_offered", slots: [] });
     expect(inserted).toHaveLength(0);
   });
 });

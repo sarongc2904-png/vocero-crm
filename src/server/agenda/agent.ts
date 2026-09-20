@@ -39,7 +39,7 @@ function enrichAll(slots: AvailableSlot[], timezone: string, now: Date) {
  * WhatsApp: muestra el día una sola vez y cada hora en su propia línea.
  * Conserva TODOS los slots recibidos; solo cambia la presentación.
  */
-function formatSlotBlocks(
+export function formatSlotBlocks(
   slots: ReturnType<typeof enrichAll>,
   timezone: string,
   now: Date

@@ -2,6 +2,7 @@ import { asc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
+import { dayLabelInTz, timeInTz } from "@/lib/time/slots";
 
 /**
  * 015 — Memoria de lo ofrecido a una conversación (requisito INNEGOCIABLE).
@@ -17,6 +18,33 @@ export type OfferedSlot = {
   serviceId?: string | null;
   professionalId?: string | null;
 };
+
+/**
+ * Revalida una oferta persistida contra el reloj de ESTE turno.
+ *
+ * `label` puede haberse guardado cuando el slot era "hoy". Nunca se reutiliza
+ * ese texto relativo: se vuelve a renderizar con la zona del tenant y el reloj
+ * recibido. Así un proceso longevo o una conversación retomada días después
+ * no puede seguir diciendo "hoy jueves 17" el sábado 19.
+ */
+export function currentOffers(
+  offers: OfferedSlot[],
+  opts: { now: Date; minNoticeHours: number; timezone: string }
+): OfferedSlot[] {
+  const threshold = opts.now.getTime() + opts.minNoticeHours * 3_600_000;
+  return offers
+    .filter((offer) => {
+      const start = Date.parse(offer.startUtc);
+      return !Number.isNaN(start) && start > threshold;
+    })
+    .map((offer) => ({
+      ...offer,
+      label: `${dayLabelInTz(offer.startUtc, opts.timezone, opts.now)} a las ${timeInTz(
+        offer.startUtc,
+        opts.timezone
+      )}`,
+    }));
+}
 
 /** Reemplaza TODA la oferta de la conversación, en una transacción. */
 export async function replaceOffers(

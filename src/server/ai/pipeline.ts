@@ -25,7 +25,11 @@ import {
   offerSlots,
 } from "@/server/agenda/agent";
 import { BookingError, rescheduleForConversation } from "@/server/agenda/service";
-import { getOffers, mapaDeHuecosParaModelo } from "@/server/agenda/offers";
+import {
+  currentOffers,
+  getOffers,
+  mapaDeHuecosParaModelo,
+} from "@/server/agenda/offers";
 import { getSettings } from "@/server/agenda/settings";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
 import {
@@ -125,7 +129,16 @@ export async function runAgentTurn(
     .orderBy(asc(schema.pipelineStage.position));
 
   const agenda = agendaEnabled();
-  const ofertas = agenda ? await getOffers(organizationId, conversationId) : [];
+  const agendaContext = agenda
+    ? { settings: await getSettings(organizationId), now: new Date() }
+    : null;
+  const ofertas = agendaContext
+    ? currentOffers(await getOffers(organizationId, conversationId), {
+        now: agendaContext.now,
+        minNoticeHours: agendaContext.settings.minNoticeHours,
+        timezone: agendaContext.settings.timezone,
+      })
+    : [];
   const mapaDeHuecos = mapaDeHuecosParaModelo(ofertas);
 
   let todayInfo: { iso: string; label: string } | undefined;
@@ -133,9 +146,8 @@ export async function runAgentTurn(
   let scheduleScope: ScheduleScope | null = null;
   let schedulingSignal = false;
   let businessFact: Parameters<typeof buildAgentSystemPrompt>[0]["businessFact"];
-  if (agenda) {
-    const settings = await getSettings(organizationId);
-    const now = new Date();
+  if (agendaContext) {
+    const { settings, now } = agendaContext;
     todayInfo = {
       iso: todayInTz(now, settings.timezone),
       label: todayLabelInTz(now, settings.timezone),
