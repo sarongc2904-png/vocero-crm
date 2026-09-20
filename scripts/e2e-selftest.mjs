@@ -1083,9 +1083,142 @@ async function main() {
 
   await agendaChecks();
   await atribucionChecks();
+  await tenantAndRbacChecks();
 
   console.log(`\n===== ${checks - failures}/${checks} checks OK, ${failures} fallos =====`);
   process.exit(failures > 0 ? 1 : 0);
+}
+
+async function tenantAndRbacChecks() {
+  console.log("\n== release gate: tenant isolation + RBAC real ==");
+  const ownerCookie = cookie;
+  const suffix = Date.now().toString(36);
+  const password = "password-e2e-123";
+
+  const adminEmail = `admin-${suffix}@vocero.test`;
+  const agentEmail = `agent-${suffix}@vocero.test`;
+  const adminCreated = await api("/api/settings/team", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "Admin Gate",
+      email: adminEmail,
+      password,
+      role: "admin",
+    }),
+  });
+  const agentCreated = await api("/api/settings/team", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "Agent Gate",
+      email: agentEmail,
+      password,
+      role: "agent",
+    }),
+  });
+  ok(
+    "owner crea usuarios admin y agent dentro del tenant",
+    adminCreated.res.status === 201 && agentCreated.res.status === 201,
+    `${adminCreated.res.status}/${agentCreated.res.status}`
+  );
+
+  cookie = "";
+  const agentLogin = await api("/api/auth/sign-in/email", {
+    method: "POST",
+    body: JSON.stringify({ email: agentEmail, password }),
+  });
+  const agentReadsInbox = await api("/api/conversations");
+  const agentReadsSettings = await api("/api/services");
+  const agentWritesSettings = await api("/api/services", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `Servicio prohibido ${suffix}`,
+      durationMinutes: 30,
+      priceCents: 100,
+    }),
+  });
+  ok("agent inicia sesión y puede leer Inbox", agentLogin.res.ok && agentReadsInbox.res.ok);
+  ok(
+    "agent no puede leer ni mutar configuración",
+    agentReadsSettings.res.status === 403 && agentWritesSettings.res.status === 403,
+    `${agentReadsSettings.res.status}/${agentWritesSettings.res.status}`
+  );
+
+  cookie = "";
+  const adminLogin = await api("/api/auth/sign-in/email", {
+    method: "POST",
+    body: JSON.stringify({ email: adminEmail, password }),
+  });
+  const serviceAResponse = await api("/api/services", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `Servicio tenant A ${suffix}`,
+      durationMinutes: 45,
+      priceCents: 139700,
+    }),
+  });
+  const adminDeletesUser = await api("/api/settings/team", {
+    method: "DELETE",
+    body: JSON.stringify({ memberId: agentCreated.json?.memberId }),
+  });
+  ok("admin inicia sesión y administra catálogo", adminLogin.res.ok && serviceAResponse.res.status === 201);
+  ok("admin no puede eliminar usuarios", adminDeletesUser.res.status === 403, `status=${adminDeletesUser.res.status}`);
+  const serviceA = serviceAResponse.json?.service;
+
+  cookie = "";
+  const tenantBEmail = `owner-b-${suffix}@vocero.test`;
+  const tenantBSignup = await api("/api/auth/sign-up/email", {
+    method: "POST",
+    body: JSON.stringify({ email: tenantBEmail, password, name: "Owner Tenant B" }),
+  });
+  const serviceBResponse = await api("/api/services", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `Servicio tenant B ${suffix}`,
+      durationMinutes: 60,
+      priceCents: 50000,
+    }),
+  });
+  const serviceB = serviceBResponse.json?.service;
+  const professionalBResponse = await api("/api/professionals", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `Profesional tenant B ${suffix}`,
+      serviceIds: serviceB?.id ? [serviceB.id] : [],
+    }),
+  });
+  const professionalB = professionalBResponse.json?.professional;
+  ok(
+    "Tenant B crea su catálogo independiente",
+    tenantBSignup.res.ok && serviceBResponse.res.status === 201 && professionalBResponse.res.status === 201
+  );
+
+  const bMutatesA = await api(`/api/services/${serviceA?.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: "Fuga B a A" }),
+  });
+  ok("Tenant B no puede mutar recurso de A", bMutatesA.res.status === 404, `status=${bMutatesA.res.status}`);
+
+  cookie = ownerCookie;
+  const aMutatesBService = await api(`/api/services/${serviceB?.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: "Fuga A a B" }),
+  });
+  const aMutatesBProfessional = await api(`/api/professionals/${professionalB?.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: "Fuga A a profesional B" }),
+  });
+  const servicesA = (await api("/api/services")).json?.services ?? [];
+  const professionalsA = (await api("/api/professionals")).json?.professionals ?? [];
+  ok(
+    "Tenant A no puede mutar IDs de servicio/profesional de B",
+    aMutatesBService.res.status === 404 && aMutatesBProfessional.res.status === 404,
+    `${aMutatesBService.res.status}/${aMutatesBProfessional.res.status}`
+  );
+  ok(
+    "lecturas de A no filtran catálogo de B",
+    !servicesA.some((item) => item.id === serviceB?.id) &&
+      !professionalsA.some((item) => item.id === professionalB?.id)
+  );
 }
 
 /* ============================================================
