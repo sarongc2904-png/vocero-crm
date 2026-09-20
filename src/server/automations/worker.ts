@@ -10,6 +10,7 @@ import {
   retryAutomation,
   type ClaimedAutomation,
 } from "@/server/automations/queue";
+import { hasCommercialAccess } from "@/server/commercial/entitlement";
 
 const globalAutomation = globalThis as unknown as {
   __automationTimer?: ReturnType<typeof setInterval>;
@@ -17,6 +18,11 @@ const globalAutomation = globalThis as unknown as {
 };
 
 async function execute(job: ClaimedAutomation) {
+  if (!(await hasCommercialAccess(job.organizationId))) {
+    await finishAutomation(job, "cancelled", "subscription_inactive");
+    return;
+  }
+
   if (!job.conversationId) {
     await finishAutomation(job, "failed", "conversation_required");
     return;
