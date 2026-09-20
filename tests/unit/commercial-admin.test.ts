@@ -7,16 +7,16 @@ function source(path: string): string {
 }
 
 describe("panel comercial de superadmin", () => {
-  it("protege la API y la página con isSuperadmin", () => {
-    const route = source("src/app/api/admin/commercial/route.ts");
+  it("protege la página y la API con isSuperadmin", () => {
     const page = source("src/app/(app)/admin/clients/page.tsx");
+    const route = source("src/app/api/admin/commercial/route.ts");
 
-    expect(route).toContain("session.isSuperadmin");
-    expect(route).toContain('apiError(403, "forbidden"');
     expect(page).toContain("if (!session.isSuperadmin)");
+    expect(route).toContain("requireSuperadmin(session.isSuperadmin)");
+    expect(route).toContain("allowBlockedCommercialAccess: true");
   });
 
-  it("solo expone acciones comerciales explícitas", () => {
+  it("permite operar cuentas sin SQL manual", () => {
     const admin = source("src/server/commercial/admin.ts");
 
     for (const action of [
@@ -29,6 +29,7 @@ describe("panel comercial de superadmin", () => {
     ]) {
       expect(admin).toContain(`"${action}"`);
     }
+    expect(admin).toContain("updateCommercialPlan");
     expect(admin).not.toContain("delete(schema.organization)");
   });
 
@@ -40,11 +41,22 @@ describe("panel comercial de superadmin", () => {
     expect(admin).not.toContain(".delete(");
   });
 
-  it("las nuevas organizaciones derivan el trial del plan, no de 3 días fijos", () => {
+  it("el alta de organizaciones usa trial_days del plan como fuente de verdad", () => {
     const organizations = source("src/server/auth/organizations.ts");
 
+    expect(organizations).toContain("schema.commercialPlan.trialDays");
     expect(organizations).toContain("plan.trialDays * 86_400_000");
     expect(organizations).not.toContain("3 * 86_400_000");
+  });
+
+  it("el panel expone edición de precio y demo", () => {
+    const client = source("src/components/admin/commercial-admin-client.tsx");
+
+    expect(client).toContain("Precio mensual");
+    expect(client).toContain("Días de demo");
+    expect(client).toContain('target: "plan"');
+    expect(client).toContain("monthlyPriceCents");
+    expect(client).toContain("trialDays");
   });
 
   it("la navegación administrativa solo se muestra con isSuperadmin", () => {
