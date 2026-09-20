@@ -136,20 +136,20 @@ export async function getDashboardMetrics(organizationId: string) {
       select 'member'::text as kind, m.user_id as id, u.name as label, count(*) as assignments
       from conversation_assignment ca
       join member m
-        on m.id = ca.assigned_member_id
+        on m.id = ca.member_id
        and m.organization_id = ca.organization_id
       join "user" u on u.id = m.user_id
       where ca.organization_id = ${organizationId}
-        and ca.assigned_member_id is not null
+        and ca.member_id is not null
       group by m.user_id, u.name
       union all
       select 'team'::text as kind, t.id as id, t.name as label, count(*) as assignments
       from conversation_assignment ca
       join team t
-        on t.id = ca.assigned_team_id
+        on t.id = ca.team_id
        and t.organization_id = ca.organization_id
       where ca.organization_id = ${organizationId}
-        and ca.assigned_team_id is not null
+        and ca.team_id is not null
       group by t.id, t.name
     `,
     sql<{ count: string | number }[]>`
