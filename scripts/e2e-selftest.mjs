@@ -1440,6 +1440,72 @@ async function agendaChecks() {
     `activas=${activasEnElHueco.length}`
   );
 
+  // Carrera REAL: ambos clientes reciben el mismo slot antes de reservar y
+  // las dos requests llegan simultáneamente por la API. La constraint de
+  // PostgreSQL decide; la capa de dominio debe traducir 23P01 a slot_taken.
+  const raceSuffix = Date.now().toString().slice(-6);
+  const racePhones = [`5214630${raceSuffix}`, `5214631${raceSuffix}`];
+  for (const [index, phone] of racePhones.entries()) {
+    await api("/api/dev/wa-mock/inbound", {
+      method: "POST",
+      body: JSON.stringify({
+        phoneNumberId: PN,
+        from: phone,
+        name: `Lead carrera ${index + 1}`,
+        text: "quiero agendar",
+        waMessageId: `wamid.e2e.race.${raceSuffix}.${index}`,
+      }),
+    });
+  }
+  await sleep(600);
+  const raceConversations = (await api("/api/conversations")).json?.conversations ?? [];
+  const raceA = raceConversations.find((c) => c.contact.name === "Lead carrera 1");
+  const raceB = raceConversations.find((c) => c.contact.name === "Lead carrera 2");
+  if (raceA && raceB) {
+    const [offersRaceA, offersRaceB] = await Promise.all([
+      bot(`/api/bot/availability?conversationId=${raceA.id}&limit=12&perDay=3&days=5`),
+      bot(`/api/bot/availability?conversationId=${raceB.id}&limit=12&perDay=3&days=5`),
+    ]);
+    const startsB = new Set((offersRaceB.json?.slots ?? []).map((slot) => slot.startUtc));
+    const common = (offersRaceA.json?.slots ?? []).find((slot) => startsB.has(slot.startUtc));
+    if (common) {
+      const results = await Promise.all([
+        bot("/api/bot/bookings", {
+          method: "POST",
+          body: JSON.stringify({ conversationId: raceA.id, startUtc: common.startUtc }),
+        }),
+        bot("/api/bot/bookings", {
+          method: "POST",
+          body: JSON.stringify({ conversationId: raceB.id, startUtc: common.startUtc }),
+        }),
+      ]);
+      const winner = results.find((result) => result.res.status === 201);
+      const loser = results.find((result) => result.res.status === 409);
+      ok(
+        "dos requests concurrentes crean exactamente una cita",
+        Boolean(winner && loser),
+        results.map((result) => result.res.status).join("/")
+      );
+      ok(
+        "la carrera concurrente devuelve slot_taken",
+        loser?.json?.error?.code === "slot_taken",
+        JSON.stringify(loser?.json)
+      );
+      if (winner?.json?.bookingId) {
+        await api(`/api/bookings/${winner.json.bookingId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ action: "cancel" }),
+        });
+      }
+    } else {
+      ok("ambos clientes reciben un slot común para la carrera", false);
+      ok("la carrera concurrente devuelve slot_taken", false);
+    }
+  } else {
+    ok("se crean ambas conversaciones para la carrera", false);
+    ok("la carrera concurrente devuelve slot_taken", false);
+  }
+
   // Las alternativas del 409 ya son la oferta vigente: reservables de una.
   const alternativa = (tomado.json?.slots ?? [])[0];
   if (alternativa) {
