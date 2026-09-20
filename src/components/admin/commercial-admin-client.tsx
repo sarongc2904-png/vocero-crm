@@ -18,6 +18,14 @@ type Account = {
   monthlyPriceCents: number | null;
   currency: string | null;
   trialDays: number | null;
+  operationalStatus:
+    | "por_configurar"
+    | "configurando"
+    | "listo_para_activar"
+    | "listo_para_operar";
+  requiredCompleted: number;
+  requiredTotal: number;
+  nextRequiredStep: string | null;
 };
 
 type Plan = {
@@ -181,6 +189,7 @@ export function CommercialAdminClient() {
               <th className="px-4 py-3 font-semibold">Cliente</th>
               <th className="px-4 py-3 font-semibold">Plan</th>
               <th className="px-4 py-3 font-semibold">Estado</th>
+              <th className="px-4 py-3 font-semibold">Operación</th>
               <th className="px-4 py-3 font-semibold">Trial / periodo</th>
               <th className="px-4 py-3 font-semibold">Acciones</th>
             </tr>
@@ -223,60 +232,89 @@ export function CommercialAdminClient() {
                       {account.status ?? "sin entitlement"}
                     </span>
                   </td>
+                  <td className="px-4 py-4">
+                    <div className="text-xs font-semibold">
+                      {account.operationalStatus === "listo_para_operar"
+                        ? "Listo para operar"
+                        : account.operationalStatus === "listo_para_activar"
+                          ? "Listo para activar"
+                          : account.operationalStatus === "configurando"
+                            ? "Configurando"
+                            : "Por configurar"}
+                    </div>
+                    <div className="mt-1 text-xs text-text-3">
+                      {account.requiredCompleted}/{account.requiredTotal} requisitos
+                    </div>
+                    {account.nextRequiredStep && (
+                      <div className="mt-1 text-xs text-text-3">
+                        Siguiente: {account.nextRequiredStep}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-4 text-xs text-text-3">
                     <div>Trial: {date(account.trialEndsAt)}</div>
                     <div className="mt-1">Periodo: {date(account.currentPeriodEndsAt)}</div>
                   </td>
                   <td className="px-4 py-4">
                     <div className="flex min-w-[20rem] flex-wrap gap-2">
-                      <button
-                        disabled={disabled}
-                        onClick={() => {
-                          const raw = window.prompt("¿Cuántos días quieres extender?", "3");
-                          if (!raw) return;
-                          const days = Number(raw);
-                          if (!Number.isInteger(days) || days < 1 || days > 365) {
-                            window.alert("Usa un número entero entre 1 y 365");
-                            return;
-                          }
-                          void mutateAccount(account.organizationId, "extend_trial", { days });
-                        }}
-                        className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
-                      >
-                        Extender demo
-                      </button>
-                      <button
-                        disabled={disabled}
-                        onClick={() => void mutateAccount(account.organizationId, "activate")}
-                        className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
-                      >
-                        Activar
-                      </button>
-                      <button
-                        disabled={disabled}
-                        onClick={() => void mutateAccount(account.organizationId, "suspend")}
-                        className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
-                      >
-                        Suspender
-                      </button>
-                      <button
-                        disabled={disabled}
-                        onClick={() => void mutateAccount(account.organizationId, "reactivate")}
-                        className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
-                      >
-                        Reactivar
-                      </button>
-                      <button
-                        disabled={disabled}
-                        onClick={() => {
-                          if (window.confirm("¿Cancelar este plan? Los datos se conservarán.")) {
-                            void mutateAccount(account.organizationId, "cancel");
-                          }
-                        }}
-                        className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
-                      >
-                        Cancelar
-                      </button>
+                      {account.status === "trial" && (
+                        <button
+                          disabled={disabled}
+                          onClick={() => {
+                            const raw = window.prompt("¿Cuántos días quieres extender?", "3");
+                            if (!raw) return;
+                            const days = Number(raw);
+                            if (!Number.isInteger(days) || days < 1 || days > 365) {
+                              window.alert("Usa un número entero entre 1 y 365");
+                              return;
+                            }
+                            void mutateAccount(account.organizationId, "extend_trial", { days });
+                          }}
+                          className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        >
+                          Extender demo
+                        </button>
+                      )}
+                      {(account.status === "trial" || account.status === "past_due") && (
+                        <button
+                          disabled={disabled}
+                          onClick={() => void mutateAccount(account.organizationId, "activate")}
+                          className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        >
+                          Activar
+                        </button>
+                      )}
+                      {account.status === "active" && (
+                        <button
+                          disabled={disabled}
+                          onClick={() => void mutateAccount(account.organizationId, "suspend")}
+                          className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        >
+                          Suspender
+                        </button>
+                      )}
+                      {(account.status === "suspended" || account.status === "cancelled") && (
+                        <button
+                          disabled={disabled}
+                          onClick={() => void mutateAccount(account.organizationId, "reactivate")}
+                          className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        >
+                          Reactivar
+                        </button>
+                      )}
+                      {account.status !== "cancelled" && (
+                        <button
+                          disabled={disabled}
+                          onClick={() => {
+                            if (window.confirm("¿Cancelar este plan? Los datos se conservarán.")) {
+                              void mutateAccount(account.organizationId, "cancel");
+                            }
+                          }}
+                          className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        >
+                          Cancelar
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
