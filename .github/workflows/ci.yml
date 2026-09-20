@@ -119,7 +119,7 @@ jobs:
       META_APP_SECRET: release-gate-ci-meta-secret
       META_GRAPH_BASE_URL: http://127.0.0.1:3000/api/dev/wa-mock/graph
       OPENROUTER_API_TOKEN: release-gate-ci-ai-token
-      OPENROUTER_BASE_URL: http://127.0.0.1:3000/api/dev/ai-mock/v1
+      OPENROUTER_BASE_URL: http://127.0.0.1:3000/api/dev/ai-mock
       OPENROUTER_MODEL: mock
       BOT_API_KEY: release-gate-ci-bot-key-1234567890
       WA_MOCK_ENABLED: "true"
@@ -147,6 +147,9 @@ jobs:
 
       - name: migrate empty PostgreSQL
         run: pnpm db:migrate
+
+      - name: PostgreSQL release gate
+        run: pnpm test:release:postgres
 
       - name: start application
         run: |
