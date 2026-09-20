@@ -163,3 +163,32 @@ export async function updateCommercialAccount(input: {
       }
     : null;
 }
+
+
+export async function updateCommercialPlan(input: {
+  planId: string;
+  monthlyPriceCents: number;
+  trialDays: number;
+}) {
+  const monthlyPriceCents = Math.max(0, Math.trunc(input.monthlyPriceCents));
+  const trialDays = Math.max(0, Math.min(365, Math.trunc(input.trialDays)));
+  const [updated] = await getDb()
+    .update(schema.commercialPlan)
+    .set({
+      monthlyPriceCents,
+      trialDays,
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.commercialPlan.id, input.planId))
+    .returning({
+      id: schema.commercialPlan.id,
+      code: schema.commercialPlan.code,
+      name: schema.commercialPlan.name,
+      monthlyPriceCents: schema.commercialPlan.monthlyPriceCents,
+      currency: schema.commercialPlan.currency,
+      trialDays: schema.commercialPlan.trialDays,
+      active: schema.commercialPlan.active,
+    });
+  if (!updated) throw new Error("plan_not_found");
+  return updated;
+}
