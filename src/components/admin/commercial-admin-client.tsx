@@ -160,7 +160,7 @@ export function CommercialAdminClient() {
       <section className="rounded-xl border p-4">
         <h2 className="text-base font-bold">Configuración de planes</h2>
         <p className="mt-1 text-sm text-text-3">
-          Los cambios aplican a altas nuevas. Los trials ya iniciados conservan su fecha hasta que los extiendas manualmente.
+          El precio se actualiza para todos los clientes asignados a ese plan. Los días de demo aplican a altas nuevas; los trials ya iniciados conservan su fecha hasta que los extiendas manualmente.
         </p>
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           {plans.map((plan) => (
