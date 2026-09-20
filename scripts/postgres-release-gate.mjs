@@ -51,7 +51,7 @@ async function verifyUpgradePath() {
     const full = postgres(upgradeUrl.toString(), { max: 1, onnotice: () => {} });
     await migrate(drizzle(full), { migrationsFolder: "drizzle" });
     const rows = await full`select count(*)::int as count from drizzle.__drizzle_migrations`;
-    ok("upgrade 0020 -> HEAD aplica las migraciones forward-only", rows[0].count === 25);
+    ok("upgrade 0020 -> HEAD aplica las migraciones forward-only", rows[0].count === 26);
     await full.end();
   } finally {
     await admin.unsafe(`drop database if exists "${database}" with (force)`).catch(() => {});
@@ -75,7 +75,7 @@ const conversationA = `cv_gate_a_${suffix}`;
 
 try {
   const migrations = await sql`select count(*)::int as count from drizzle.__drizzle_migrations`;
-  ok("base vacía contiene las 25 migraciones", migrations[0].count === 25);
+  ok("base vacía contiene las 26 migraciones", migrations[0].count === 26);
 
   const requiredTables = await sql`
     select table_name from information_schema.tables
@@ -88,6 +88,12 @@ try {
     select conname from pg_constraint where conname = 'booking_professional_active_time_excl'
   `;
   ok("exclusion constraint de double booking presente", exclusion.length === 1);
+
+  const legacyGuard = await sql`
+    select tgname from pg_trigger
+    where tgname = 'booking_legacy_active_time_guard' and not tgisinternal
+  `;
+  ok("guard concurrente de agenda legacy presente", legacyGuard.length === 1);
 
   const indexes = await sql`
     select indexname from pg_indexes
@@ -123,6 +129,20 @@ try {
   const rejected = race.filter((result) => result.status === "rejected");
   ok("dos conexiones simultáneas crean exactamente una cita", fulfilled.length === 1 && rejected.length === 1);
   ok("la colisión real es exclusion_violation", rejected[0]?.reason?.code === "23P01", rejected[0]?.reason?.code);
+
+  const legacyRace = await Promise.allSettled([
+    insertBooking(`bk_legacy_1_${suffix}`, orgA, null, "2031-01-16T16:00:00.000Z"),
+    insertBooking(`bk_legacy_2_${suffix}`, orgA, null, "2031-01-16T16:00:00.000Z"),
+  ]);
+  ok(
+    "agenda legacy serializa dos reservas simultáneas",
+    legacyRace.filter((result) => result.status === "fulfilled").length === 1 &&
+      legacyRace.filter((result) => result.status === "rejected").length === 1
+  );
+  ok(
+    "agenda legacy devuelve exclusion_violation",
+    legacyRace.find((result) => result.status === "rejected")?.reason?.code === "23P01"
+  );
 
   await Promise.all([
     insertBooking(`bk_other_pro_${suffix}`, orgA, professionalA2),
