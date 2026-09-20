@@ -40,6 +40,11 @@ export async function enqueueAgentTurn(
 
   const delay = Math.max(0, getEnv().AGENT_COALESCE_MS);
   const dueAt = new Date(Date.now() + delay);
+  // El cliente postgres puede vivir en otro realm del bundle de Next. Pasar
+  // el Date crudo hace que su `instanceof Date` no siempre lo reconozca y
+  // termine intentando medirlo como string. ISO conserva exactamente el
+  // instante y PostgreSQL lo castea a timestamp de forma determinista.
+  const dueAtIso = dueAt.toISOString();
   const sql = getSql();
 
   await sql`
@@ -49,7 +54,7 @@ export async function enqueueAgentTurn(
     )
     values (
       ${newId("backgroundJob")}, 'agent_turn', ${organizationId}, ${conversationId},
-      now(), ${dueAt}, now(), now()
+      now(), ${dueAtIso}, now(), now()
     )
     on conflict (conversation_id) do update
       set organization_id = excluded.organization_id,
@@ -178,13 +183,14 @@ export async function claimNextJob(
 
 export async function completeAgentJob(job: DurableJob): Promise<void> {
   const sql = getSql();
+  const claimedRequestAtIso = job.claimedRequestAt.toISOString();
 
   // Si nadie pidió otro turno mientras este corría, la fila puede desaparecer.
   const deleted = await sql`
     delete from durable_job
     where id = ${job.id}
       and organization_id = ${job.organizationId}
-      and requested_at <= ${job.claimedRequestAt}
+      and requested_at <= ${claimedRequestAtIso}
     returning id
   `;
   if (deleted.length > 0) return;
@@ -226,6 +232,7 @@ export async function releaseFailedJob(
 ): Promise<"retry" | "dead_letter"> {
   const sql = getSql();
   const dueAt = new Date(Date.now() + retryDelayMs(job.attempts));
+  const dueAtIso = dueAt.toISOString();
   const detail = String(error).slice(0, 2000);
   if (shouldDeadLetter(job.attempts)) {
     await sql`
@@ -244,7 +251,7 @@ export async function releaseFailedJob(
     update durable_job
     set lease_until = null,
         claimed_request_at = null,
-        due_at = ${dueAt},
+        due_at = ${dueAtIso},
         last_error = ${detail},
         updated_at = now()
     where id = ${job.id}

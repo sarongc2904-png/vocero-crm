@@ -13,7 +13,7 @@
  */
 
 const BASE = process.env.APP_BASE_URL ?? "http://localhost:3000";
-const BOT_KEY = process.env.BOT_API_KEY;
+let botKey = "";
 
 let cookie = "";
 let failures = 0;
@@ -54,7 +54,7 @@ async function api(path, opts = {}) {
 function bot(path, opts = {}) {
   return api(path, {
     ...opts,
-    headers: { "x-api-key": BOT_KEY ?? "", ...(opts.headers ?? {}) },
+    headers: { "x-api-key": botKey, ...(opts.headers ?? {}) },
   });
 }
 
@@ -78,13 +78,6 @@ async function hasta(cond, ms = 15000, paso = 400) {
 const PN = "PN-E2E-1";
 
 async function main() {
-  if (!BOT_KEY || BOT_KEY.length < 16) {
-    console.error(
-      "BOT_API_KEY ausente o corta (<16): los checks de /api/bot/* no pueden correr."
-    );
-    process.exit(1);
-  }
-
   console.log("== Setup: registro/login + conexión WhatsApp ==");
   const email = "e2e@vocero.test";
   const password = "password-e2e-123";
@@ -100,6 +93,19 @@ async function main() {
     });
   }
   ok("registro o login del operador", su.res.ok, JSON.stringify(su.json));
+
+  // La API del bot ya no usa una clave global de instancia: la clave identifica
+  // al tenant. Emitirla por la superficie autenticada prueba el contrato real
+  // y evita que el E2E reintroduzca el bypass multi-tenant retirado en Wave 1.
+  const issuedBotKey = await api("/api/settings/bot-api-key", {
+    method: "POST",
+  });
+  botKey = issuedBotKey.json?.key ?? "";
+  ok(
+    "clave del bot emitida para la organización activa",
+    issuedBotKey.res.status === 201 && botKey.length >= 16,
+    JSON.stringify(issuedBotKey.json)
+  );
 
   const conn = await api("/api/settings/whatsapp", {
     method: "PUT",
@@ -337,7 +343,7 @@ async function main() {
   const noKey = await api("/api/bot/media/media123");
   ok("media sin API key → 401", noKey.res.status === 401);
   const badKey = await api("/api/bot/media/media123", {
-    headers: { "x-api-key": "x".repeat(BOT_KEY.length) },
+    headers: { "x-api-key": "x".repeat(botKey.length) },
   });
   ok("media con API key equivocada → 401", badKey.res.status === 401);
   const resetNoKey = await api("/api/bot/reset", {

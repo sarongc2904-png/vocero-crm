@@ -81,4 +81,14 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     expect(queue).toContain("dead_letter_at is null");
     expect(queue).toContain('return "dead_letter"');
   });
+
+  it("serializa instantes antes de cruzar el boundary postgres-js", () => {
+    const queue = source("src/server/jobs/queue.ts");
+    expect(queue).toContain("const dueAtIso = dueAt.toISOString()");
+    expect(queue).toContain(
+      "const claimedRequestAtIso = job.claimedRequestAt.toISOString()"
+    );
+    expect(queue).not.toContain("due_at = ${dueAt},");
+    expect(queue).not.toContain("requested_at <= ${job.claimedRequestAt}");
+  });
 });
