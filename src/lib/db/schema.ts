@@ -749,6 +749,22 @@ export const template = pgTable(
   ]
 );
 
+export const labProfile = pgTable(
+  "lab_profile",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    businessContext: text("business_context"),
+    enabledScenarios: jsonb("enabled_scenarios").$type<string[]>(),
+    scenarioScripts: jsonb("scenario_scripts").$type<Record<string, string[]>>(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("lab_profile_org_uq").on(t.organizationId)]
+);
+
 export const agentTestRun = pgTable(
   "agent_test_run",
   {
