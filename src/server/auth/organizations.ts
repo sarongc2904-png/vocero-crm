@@ -55,12 +55,24 @@ export async function initializeOrganization(
     id: newId("agentProfile"),
     organizationId: input.organizationId,
   });
+  const [plan] = await tx
+    .select({
+      id: schema.commercialPlan.id,
+      trialDays: schema.commercialPlan.trialDays,
+    })
+    .from(schema.commercialPlan)
+    .where(eq(schema.commercialPlan.id, "plan_conecta_mx"))
+    .limit(1);
+  if (!plan) throw new Error("commercial_plan_not_configured");
+
   const trialStartedAt = new Date();
-  const trialEndsAt = new Date(trialStartedAt.getTime() + 3 * 86_400_000);
+  const trialEndsAt = new Date(
+    trialStartedAt.getTime() + plan.trialDays * 86_400_000
+  );
   await tx.insert(schema.organizationEntitlement).values({
     id: newId("entitlement"),
     organizationId: input.organizationId,
-    planId: "plan_conecta_mx",
+    planId: plan.id,
     status: "trial",
     trialStartedAt,
     trialEndsAt,
