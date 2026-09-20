@@ -13,7 +13,12 @@ export async function getOnboardingState(organizationId: string) {
   const rows = await getSql()`
     select
       exists(select 1 from calendar_settings where organization_id = ${organizationId}) as timezone,
-      exists(select 1 from meta_credentials where organization_id = ${organizationId}) as whatsapp,
+      exists(
+        select 1
+        from meta_credentials
+        where organization_id = ${organizationId}
+          and status = 'connected'
+      ) as whatsapp,
       exists(select 1 from service where organization_id = ${organizationId} and active = true) as services,
       exists(select 1 from professional where organization_id = ${organizationId} and status = 'active') as professionals,
       exists(select 1 from professional_availability where organization_id = ${organizationId}) as hours,
