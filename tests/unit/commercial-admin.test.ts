@@ -59,6 +59,22 @@ describe("panel comercial de superadmin", () => {
     expect(client).toContain("trialDays");
   });
 
+  it("permite alta controlada de clientes desde superadmin", () => {
+    const route = source("src/app/api/admin/commercial/route.ts");
+    const admin = source("src/server/commercial/admin.ts");
+    const client = source("src/components/admin/commercial-admin-client.tsx");
+
+    expect(route).toContain("export const POST");
+    expect(route).toContain("createCommercialClient");
+    expect(admin).toContain("runInternalSignup");
+    expect(admin).toContain("createOrganizationForOwner");
+    expect(admin).toContain("organizationEntitlement");
+    expect(client).toContain("+ Crear cliente");
+    expect(client).toContain("Nombre del negocio");
+    expect(client).toContain("Contraseña temporal");
+    expect(client).toContain("Días de demo");
+  });
+
   it("la navegación administrativa solo se muestra con isSuperadmin", () => {
     const shell = source("src/components/app-shell.tsx");
     const nav = source("src/components/app-nav.tsx");
