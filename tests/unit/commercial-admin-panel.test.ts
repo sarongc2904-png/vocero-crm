@@ -41,7 +41,7 @@ describe("panel comercial de superadmin", () => {
     expect(client).toContain("Configuración de planes");
     expect(client).toContain("Extender demo");
     expect(client).toContain("Activar");
-    expect(client).toContain("Suspender");
+    expect(client).toContain("Desactivar acceso");
     expect(client).toContain("Reactivar");
     expect(client).toContain("Cancelar");
     expect(client).toContain("Guardar plan");
