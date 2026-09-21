@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -394,11 +394,17 @@ export async function runAgentTurn(
         stage.id
       );
       if (moveResult === "lead_missing" || moveResult === "rejected") {
-        await deliverReply(
-          conversation,
-          "Voy a pasar tu solicitud a un asesor para continuar."
+        const claimed = await applyHandoff(
+          conversationId,
+          organizationId,
+          "error"
         );
-        await applyHandoff(conversationId, organizationId, "error");
+        if (claimed) {
+          await deliverReply(
+            conversation,
+            "Voy a pasar tu solicitud a un asesor para continuar."
+          );
+        }
         return;
       }
       if (moveResult === "moved") {
@@ -427,21 +433,34 @@ export async function runAgentTurn(
         action.note
       );
       if (!updated) {
-        await deliverReply(
-          conversation,
-          "Voy a pasar tu solicitud a un asesor para continuar."
+        const claimed = await applyHandoff(
+          conversationId,
+          organizationId,
+          "error"
         );
-        await applyHandoff(conversationId, organizationId, "error");
+        if (claimed) {
+          await deliverReply(
+            conversation,
+            "Voy a pasar tu solicitud a un asesor para continuar."
+          );
+        }
         return;
       }
       if (action.reply) await deliverReply(conversation, action.reply);
       return;
     }
     case "handoff": {
-      if (action.farewell) {
+      // La transición se reclama ANTES de enviar el farewell. Si varios jobs
+      // quedaron en cola por mensajes consecutivos, solo uno puede ganar el
+      // handoff y por tanto solo uno envía el mensaje de transferencia.
+      const claimed = await applyHandoff(
+        conversationId,
+        organizationId,
+        "modelo"
+      );
+      if (claimed && action.farewell) {
         await deliverReply(conversation, action.farewell);
       }
-      await applyHandoff(conversationId, organizationId, "modelo");
       return;
     }
     case "offer_slots":
@@ -475,11 +494,17 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
     console.error(
       `[agente] la cancelación automática falló: ${String(err).slice(0, 500)}`
     );
-    await deliverReply(
-      conversation,
-      "No pude cancelar tu cita automáticamente. Un asesor continuará contigo."
+    const claimed = await applyHandoff(
+      conversation.id,
+      conversation.organizationId,
+      "error"
     );
-    await applyHandoff(conversation.id, conversation.organizationId, "error");
+    if (claimed) {
+      await deliverReply(
+        conversation,
+        "No pude cancelar tu cita automáticamente. Un asesor continuará contigo."
+      );
+    }
   }
 }
 
@@ -543,26 +568,37 @@ export async function applyHandoff(
   conversationId: string,
   organizationId: string,
   reason: "cliente" | "modelo" | "error" | "ventana"
-): Promise<void> {
+): Promise<boolean> {
   const db = getDb();
   const updated = await db
     .update(schema.conversation)
-    .set({ handoffAt: new Date(), handoffReason: reason, updatedAt: new Date() })
+    .set({
+      aiEnabled: false,
+      handoffAt: new Date(),
+      handoffReason: reason,
+      updatedAt: new Date(),
+    })
     .where(
       scoped(
         schema.conversation.organizationId,
         organizationId,
-        eq(schema.conversation.id, conversationId)
+        eq(schema.conversation.id, conversationId),
+        sql`${schema.conversation.handoffAt} is null`
       )
     )
     .returning();
-  if (!updated[0]) return;
+  if (!updated[0]) return false;
   publish(organizationId, {
     type: "conversation.updated",
     data: {
-      conversation: { id: conversationId, handoffReason: reason },
+      conversation: {
+        id: conversationId,
+        aiEnabled: false,
+        handoffReason: reason,
+      },
     },
   });
+  return true;
 }
 
 type AgentStageMoveResult =
