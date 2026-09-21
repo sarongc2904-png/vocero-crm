@@ -17,6 +17,7 @@ export const GET = withAuth(async (session) => {
       role: schema.member.role,
       createdAt: schema.organization.createdAt,
       commercialStatus: schema.organizationEntitlement.status,
+      trialEndsAt: schema.organizationEntitlement.trialEndsAt,
       activatedAt: schema.onboardingProgress.activatedAt,
     })
     .from(schema.member)
@@ -35,10 +36,23 @@ export const GET = withAuth(async (session) => {
     .where(eq(schema.member.userId, session.userId))
     .orderBy(asc(schema.member.createdAt), asc(schema.member.id));
 
+  const now = Date.now();
+  const visibleOrganizations = session.isSuperadmin
+    ? organizations
+    : organizations.filter((organization) => {
+        if (organization.commercialStatus === "active") return true;
+        if (organization.commercialStatus !== "trial") return false;
+        return Boolean(
+          organization.trialEndsAt &&
+            organization.trialEndsAt.getTime() > now
+        );
+      });
+
   return Response.json({
     activeOrganizationId: session.organizationId,
-    organizations: organizations.map((organization) => ({
+    organizations: visibleOrganizations.map((organization) => ({
       ...organization,
+      trialEndsAt: organization.trialEndsAt?.toISOString() ?? null,
       operationalStatus: organization.activatedAt ? "listo_para_operar" : "configurando",
       active: organization.id === session.organizationId,
     })),
