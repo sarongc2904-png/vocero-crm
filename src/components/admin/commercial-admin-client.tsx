@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 
 type Account = {
   organizationId: string;
@@ -407,6 +408,7 @@ function ClientCreator({
   const [ownerName, setOwnerName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [planId, setPlanId] = useState(defaultPlan?.id ?? "");
   const [trialDays, setTrialDays] = useState(
     defaultPlan ? String(defaultPlan.trialDays) : "3"
@@ -525,12 +527,28 @@ function ClientCreator({
         <label className="text-xs font-semibold text-text-2">
           Contraseña temporal
           <div className="mt-1 flex gap-2">
-            <input
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="mínimo 8 caracteres"
-              className="h-10 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm font-normal"
-            />
+            <div className="relative min-w-0 flex-1">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="mínimo 8 caracteres"
+                className="h-10 w-full rounded-md border bg-background px-3 pr-10 text-sm font-normal"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-text-3 hover:text-foreground"
+                aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+              >
+                {showPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
             <button
               type="button"
               onClick={generatePassword}
