@@ -26,3 +26,33 @@ describe("patrón de respaldo de handoff (FR-022 / SC-006)", () => {
     expect(matchesHandoffIntent(text)).toBe(false);
   });
 });
+
+
+describe("handoff durable", () => {
+  it("la transición es atómica y pausa la IA", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const source = readFileSync(
+      resolve(process.cwd(), "src/server/ai/pipeline.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain("aiEnabled: false");
+    expect(source).toContain("${schema.conversation.handoffAt} is null");
+    expect(source).toContain("const claimed = await applyHandoff");
+    expect(source).toContain("if (claimed && action.farewell)");
+  });
+
+  it("precio no obliga a escalar", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const prompt = readFileSync(
+      resolve(process.cwd(), "src/server/ai/prompts.ts"),
+      "utf8"
+    );
+
+    expect(prompt).toContain("Preguntas normales sobre precio");
+    expect(prompt).toContain("NO son handoff por sí solas");
+    expect(prompt).toContain("NO inventes ni escales automáticamente");
+  });
+});
