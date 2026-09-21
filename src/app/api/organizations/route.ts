@@ -1,7 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { z } from "zod";
-import { parseBody, withAuth, withOrgRoles } from "@/lib/api";
+import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getAuth } from "@/lib/auth";
 import { getDb, schema } from "@/lib/db";
 import { createOrganizationForOwner } from "@/server/auth/organizations";
@@ -63,7 +63,15 @@ const createSchema = z.object({
   name: z.string().trim().min(1).max(120),
 });
 
-export const POST = withOrgRoles(["owner"], async (session, req: Request) => {
+export const POST = withAuth(async (session, req: Request) => {
+  if (!session.isSuperadmin) {
+    return apiError(
+      403,
+      "forbidden",
+      "Las nuevas organizaciones se crean desde administración"
+    );
+  }
+
   const body = await parseBody(req, createSchema);
   if (!body.ok) return body.response;
 
