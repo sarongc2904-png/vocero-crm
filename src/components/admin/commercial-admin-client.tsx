@@ -182,7 +182,6 @@ export function CommercialAdminClient() {
           onBusy={setBusy}
           onCreated={async () => {
             await load();
-            setShowCreateClient(false);
           }}
         />
       )}
