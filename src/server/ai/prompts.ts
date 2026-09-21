@@ -94,7 +94,9 @@ export function buildAgentSystemPrompt(input: {
       ...agendaLines,
       "Reglas duras:",
       "- Si el cliente pide hablar con una persona/humano/asesor → handoff.",
-      "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala.",
+      "- Preguntas normales sobre precio, costo, servicios, productos, disponibilidad comercial o condiciones NO son handoff por sí solas. Si la respuesta está en CONOCIMIENTO DEL NEGOCIO, respóndela directamente.",
+      "- Si preguntan precio/costo y el conocimiento no trae ese dato, NO inventes ni escales automáticamente: explica brevemente que necesitas confirmarlo o pide el dato mínimo que falte. Solo haz handoff si el cliente pide una persona o una regla de escalado lo exige.",
+      "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala solo cuando corresponda por las reglas de escalado.",
       interestStage
         ? `- Si detectas intención clara de compra → move_stage usando EXACTAMENTE la etapa "${interestStage.name}". No inventes otra variante del nombre.`
         : "- Si detectas intención clara de compra y NO existe una etapa explícita de interés/calificación entre las etapas disponibles, NO inventes una etapa: responde al cliente y deja el pipeline sin cambios.",
