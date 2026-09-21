@@ -1,5 +1,7 @@
 import { asc, eq } from "drizzle-orm";
+import { getAuth, runInternalSignup } from "@/lib/auth";
 import { getDb, schema } from "@/lib/db";
+import { createOrganizationForOwner } from "@/server/auth/organizations";
 import { getOnboardingState } from "@/server/commercial/onboarding";
 
 export const COMMERCIAL_ACTIONS = [
@@ -179,6 +181,86 @@ export async function updateCommercialAccount(input: {
     : null;
 }
 
+
+export async function createCommercialClient(input: {
+  businessName: string;
+  ownerName: string;
+  email: string;
+  password: string;
+  planId: string;
+  trialDays?: number;
+}) {
+  const db = getDb();
+
+  const [plan] = await db
+    .select({
+      id: schema.commercialPlan.id,
+      trialDays: schema.commercialPlan.trialDays,
+      active: schema.commercialPlan.active,
+    })
+    .from(schema.commercialPlan)
+    .where(eq(schema.commercialPlan.id, input.planId))
+    .limit(1);
+
+  if (!plan || !plan.active) throw new Error("plan_not_found");
+
+  const auth = getAuth();
+  let userId: string;
+  try {
+    const result = await runInternalSignup(() =>
+      auth.api.signUpEmail({
+        body: {
+          name: input.ownerName,
+          email: input.email,
+          password: input.password,
+        },
+      })
+    );
+    userId = result.user.id;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/exist|already|duplicate/i.test(message)) {
+      throw new Error("email_already_exists");
+    }
+    throw error;
+  }
+
+  const organization = await createOrganizationForOwner(userId, input.businessName);
+  const now = new Date();
+  const trialDays = Math.max(
+    0,
+    Math.min(365, Math.trunc(input.trialDays ?? plan.trialDays))
+  );
+  const trialEndsAt = new Date(now.getTime() + trialDays * 86_400_000);
+
+  await db
+    .update(schema.organizationEntitlement)
+    .set({
+      planId: plan.id,
+      status: trialDays > 0 ? "trial" : "active",
+      trialStartedAt: trialDays > 0 ? now : null,
+      trialEndsAt: trialDays > 0 ? trialEndsAt : null,
+      suspendedAt: null,
+      cancelledAt: null,
+      updatedAt: now,
+    })
+    .where(
+      eq(schema.organizationEntitlement.organizationId, organization.id)
+    );
+
+  return {
+    organizationId: organization.id,
+    organizationName: organization.name,
+    organizationSlug: organization.slug,
+    ownerUserId: userId,
+    ownerName: input.ownerName,
+    email: input.email,
+    planId: plan.id,
+    status: trialDays > 0 ? ("trial" as const) : ("active" as const),
+    trialDays,
+    trialEndsAt: trialDays > 0 ? trialEndsAt.toISOString() : null,
+  };
+}
 
 export async function updateCommercialPlan(input: {
   planId: string;
