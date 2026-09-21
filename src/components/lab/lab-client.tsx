@@ -165,7 +165,7 @@ export function LabClient() {
     }
     const data = (await res.json()) as { runId: string };
     setSelectedRunId(data.runId);
-    setProgress({ done: 0, total: 6 });
+    setProgress({ done: 0, total: profile?.enabledScenarios.length ?? SCENARIOS.length });
     void refetchRuns();
   }
 
@@ -307,7 +307,7 @@ export function LabClient() {
         ) : (
           <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
             {runs.length === 0
-              ? "Corre tu primera evaluación: 6 clientes simulados conversarán con tu agente y un juez calificará cada conversación."
+              ? `Corre tu primera evaluación: ${profile?.enabledScenarios.length ?? SCENARIOS.length} escenarios simulados conversarán con tu agente y un juez calificará cada conversación.`
               : "Elige una corrida del historial."}
           </div>
         )}
