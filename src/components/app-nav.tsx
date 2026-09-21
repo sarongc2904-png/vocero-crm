@@ -165,7 +165,7 @@ export function AppNav({
 
       <OrganizationSwitcher
         activeOrganizationId={activeOrganizationId}
-        canCreate={role === "owner"}
+        canCreate={isSuperadmin}
       />
 
       <nav className="flex flex-col gap-0.5">
