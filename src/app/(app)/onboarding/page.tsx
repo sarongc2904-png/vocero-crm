@@ -17,7 +17,7 @@ export default async function OnboardingPage() {
       <div className="mx-auto max-w-2xl space-y-5">
         <div>
           <p className="kicker text-brand-text">Activación guiada</p>
-          <h1 className="mt-1 text-2xl font-bold">Prepara tu estética</h1>
+          <h1 className="mt-1 text-2xl font-bold">Configura tu CRM</h1>
           <p className="mt-1 text-sm text-text-3">
             {onboarding.completed} de {onboarding.total} pasos completos · Plan {subscription.plan.name} por {new Intl.NumberFormat("es-MX", { style: "currency", currency: subscription.plan.currency, maximumFractionDigits: 0 }).format(subscription.plan.monthlyPriceCents / 100)} al mes.
           </p>
