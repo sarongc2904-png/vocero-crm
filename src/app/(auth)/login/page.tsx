@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "@/lib/auth/client";
 import { Button } from "@/components/ui/button";
@@ -68,10 +67,7 @@ export default function LoginPage() {
             {loading ? "Entrando…" : "Entrar"}
           </Button>
           <p className="text-center text-sm text-muted-foreground">
-            ¿Primera vez aquí?{" "}
-            <Link href="/register" className="text-primary hover:underline">
-              Crear la cuenta inicial
-            </Link>
+            ¿Necesitas acceso? Solicítalo al administrador de tu cuenta.
           </p>
         </form>
       </CardContent>
