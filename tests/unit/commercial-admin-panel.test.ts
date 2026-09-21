@@ -74,7 +74,7 @@ describe("panel comercial de superadmin", () => {
     const client = source("src/components/admin/commercial-admin-client.tsx");
 
     expect(client).toContain('account.status === "trial"');
-    expect(client).toContain('account.status === "active"');
+    expect(client).toContain('account.status !== "suspended" && account.status !== "cancelled"');
     expect(client).toContain('account.status === "suspended" || account.status === "cancelled"');
     expect(client).toContain('account.status !== "cancelled"');
   });
