@@ -44,8 +44,8 @@ export default function RegisterPage() {
       <CardHeader>
         <CardTitle>Crear cuenta</CardTitle>
         <CardDescription>
-          El primer registro crea la organización de esta instancia y queda
-          como propietario.
+          Esta pantalla se usa solo para la configuración inicial. Los clientes
+          nuevos reciben su acceso desde el panel de administración.
         </CardDescription>
       </CardHeader>
       <CardContent>
