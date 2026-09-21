@@ -61,6 +61,7 @@ export function CommercialAdminClient() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "trial" | "inactive">("all");
   const [showCreateClient, setShowCreateClient] = useState(false);
 
   async function load() {
@@ -136,13 +137,24 @@ export function CommercialAdminClient() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return accounts;
-    return accounts.filter((account) =>
-      [account.organizationName, account.organizationSlug, account.status, account.planName]
+    return accounts.filter((account) => {
+      const matchesStatus =
+        statusFilter === "all" ||
+        (statusFilter === "active" && account.status === "active") ||
+        (statusFilter === "trial" && account.status === "trial") ||
+        (statusFilter === "inactive" &&
+          (account.status === "past_due" ||
+            account.status === "suspended" ||
+            account.status === "cancelled"));
+
+      if (!matchesStatus) return false;
+      if (!q) return true;
+
+      return [account.organizationName, account.organizationSlug, account.status, account.planName]
         .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(q))
-    );
-  }, [accounts, query]);
+        .some((value) => String(value).toLowerCase().includes(q));
+    });
+  }, [accounts, query, statusFilter]);
 
   if (loading) {
     return <p className="text-sm text-text-3">Cargando clientes…</p>;
@@ -173,6 +185,28 @@ export function CommercialAdminClient() {
             className="h-10 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-brand"
           />
         </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {([
+          ["all", "Todos"],
+          ["active", "Activos"],
+          ["trial", "Demo"],
+          ["inactive", "Inactivos"],
+        ] as const).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setStatusFilter(value)}
+            className={
+              statusFilter === value
+                ? "rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-brand-fg"
+                : "rounded-md border bg-background px-3 py-1.5 text-xs font-semibold text-text-2 hover:bg-accent"
+            }
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {showCreateClient && (
