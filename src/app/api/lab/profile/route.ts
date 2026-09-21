@@ -30,7 +30,9 @@ export const PUT = withOrgRoles(
 
     const profile = await saveLabProfile({
       organizationId: session.organizationId,
-      ...body.data,
+      businessContext: body.data.businessContext ?? "",
+      enabledScenarios: body.data.enabledScenarios,
+      scenarioScripts: body.data.scenarioScripts,
     });
     return Response.json({ profile });
   }
