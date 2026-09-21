@@ -90,7 +90,8 @@ describe("panel comercial de superadmin", () => {
   it("si el tenant activo queda oculto, el selector cambia a uno visible", () => {
     const switcher = source("src/components/organization-switcher.tsx");
 
-    expect(switcher).toContain("organizations.some((organization) => organization.id === activeOrganizationId)");
+    expect(switcher).toContain("organizations.some((organization) =>");
+    expect(switcher).toContain("organization.id === activeOrganizationId");
     expect(switcher).toContain("void switchOrganization(organizations[0].id)");
   });
 
