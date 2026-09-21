@@ -155,7 +155,7 @@ export function CommercialAdminClient() {
           <p className="kicker text-brand-text">Administración comercial</p>
           <h1 className="mt-1 text-2xl font-bold">Clientes y planes</h1>
           <p className="mt-1 text-sm text-text-3">
-            Controla precio, demo, estado y plan sin entrar a PostgreSQL.
+            Controla precio, demo, estado y plan sin entrar a PostgreSQL. Desactivar conserva todos los datos y quita el acceso hasta que reactives al cliente.
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -305,13 +305,17 @@ export function CommercialAdminClient() {
                           Activar
                         </button>
                       )}
-                      {account.status === "active" && (
+                      {account.status !== "suspended" && account.status !== "cancelled" && (
                         <button
                           disabled={disabled}
-                          onClick={() => void mutateAccount(account.organizationId, "suspend")}
+                          onClick={() => {
+                            if (window.confirm("¿Desactivar el acceso de este cliente? Sus datos se conservarán y podrás reactivarlo después.")) {
+                              void mutateAccount(account.organizationId, "suspend");
+                            }
+                          }}
                           className="rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
                         >
-                          Suspender
+                          Desactivar acceso
                         </button>
                       )}
                       {(account.status === "suspended" || account.status === "cancelled") && (
