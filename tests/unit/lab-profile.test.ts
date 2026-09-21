@@ -1,9 +1,15 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildPersonas,
   DEFAULT_SCENARIO_SCRIPTS,
   SCENARIO_KEYS,
 } from "@/server/lab/personas";
+
+function source(path: string): string {
+  return readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n");
+}
 
 describe("lab personas per organization", () => {
   it("uses industry-neutral defaults", () => {
@@ -47,4 +53,11 @@ describe("lab personas per organization", () => {
       DEFAULT_SCENARIO_SCRIPTS.comprador_decidido
     );
   });
+  it("usa el número de escenarios habilitados en el progreso de la UI", () => {
+    const client = source("src/components/lab/lab-client.tsx");
+
+    expect(client).toContain("profile?.enabledScenarios.length ?? SCENARIOS.length");
+    expect(client).not.toContain("setProgress({ done: 0, total: 6 })");
+  });
+
 });
