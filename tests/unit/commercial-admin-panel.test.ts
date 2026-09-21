@@ -79,6 +79,17 @@ describe("panel comercial de superadmin", () => {
     expect(client).toContain('account.status !== "cancelled"');
   });
 
+  it("permite filtrar clientes activos, demo e inactivos", () => {
+    const client = source("src/components/admin/commercial-admin-client.tsx");
+
+    expect(client).toContain('"active", "Activos"');
+    expect(client).toContain('"trial", "Demo"');
+    expect(client).toContain('"inactive", "Inactivos"');
+    expect(client).toContain('account.status === "past_due"');
+    expect(client).toContain('account.status === "suspended"');
+    expect(client).toContain('account.status === "cancelled"');
+  });
+
   it("crea propietarios y tenants desde el panel comercial", () => {
     const route = source("src/app/api/admin/commercial/route.ts");
     const admin = source("src/server/commercial/admin.ts");
