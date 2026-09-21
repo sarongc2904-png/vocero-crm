@@ -61,6 +61,7 @@ export function CommercialAdminClient() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [showCreateClient, setShowCreateClient] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -157,13 +158,34 @@ export function CommercialAdminClient() {
             Controla precio, demo, estado y plan sin entrar a PostgreSQL.
           </p>
         </div>
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Buscar cliente"
-          className="h-10 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-brand"
-        />
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={() => setShowCreateClient((value) => !value)}
+            className="h-10 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-fg"
+          >
+            {showCreateClient ? "Cerrar alta" : "+ Crear cliente"}
+          </button>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Buscar cliente"
+            className="h-10 rounded-lg border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-brand"
+          />
+        </div>
       </div>
+
+      {showCreateClient && (
+        <ClientCreator
+          plans={plans}
+          busy={busy === "create-client"}
+          onBusy={setBusy}
+          onCreated={async () => {
+            await load();
+            setShowCreateClient(false);
+          }}
+        />
+      )}
 
       <section className="rounded-xl border p-4">
         <h2 className="text-base font-bold">Configuración de planes</h2>
@@ -329,6 +351,215 @@ export function CommercialAdminClient() {
         )}
       </div>
     </div>
+  );
+}
+
+function ClientCreator({
+  plans,
+  busy,
+  onBusy,
+  onCreated,
+}: {
+  plans: Plan[];
+  busy: boolean;
+  onBusy: (value: string | null) => void;
+  onCreated: () => Promise<void>;
+}) {
+  const defaultPlan = plans.find((plan) => plan.active) ?? plans[0] ?? null;
+  const [businessName, setBusinessName] = useState("");
+  const [ownerName, setOwnerName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [planId, setPlanId] = useState(defaultPlan?.id ?? "");
+  const [trialDays, setTrialDays] = useState(
+    defaultPlan ? String(defaultPlan.trialDays) : "3"
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState<{
+    email: string;
+    password: string;
+    businessName: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!planId && defaultPlan) {
+      setPlanId(defaultPlan.id);
+      setTrialDays(String(defaultPlan.trialDays));
+    }
+  }, [defaultPlan, planId]);
+
+  function generatePassword() {
+    const alphabet =
+      "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const bytes = new Uint32Array(14);
+    crypto.getRandomValues(bytes);
+    setPassword(
+      Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("")
+    );
+  }
+
+  async function createClient() {
+    setError(null);
+    setCreated(null);
+    const days = Number(trialDays);
+    if (!Number.isInteger(days) || days < 0 || days > 365) {
+      setError("Los días de demo deben estar entre 0 y 365");
+      return;
+    }
+
+    onBusy("create-client");
+    try {
+      const res = await fetch("/api/admin/commercial", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          businessName,
+          ownerName,
+          email,
+          password,
+          planId,
+          trialDays: days,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error?.message ?? "No se pudo crear el cliente");
+      }
+      setCreated({ email, password, businessName });
+      setBusinessName("");
+      setOwnerName("");
+      setEmail("");
+      setPassword("");
+      await onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo crear el cliente");
+    } finally {
+      onBusy(null);
+    }
+  }
+
+  const canCreate =
+    businessName.trim().length >= 2 &&
+    ownerName.trim().length >= 2 &&
+    email.includes("@") &&
+    password.length >= 8 &&
+    Boolean(planId);
+
+  return (
+    <section className="rounded-xl border border-brand-soft bg-brand-tint p-4">
+      <div>
+        <p className="kicker text-brand-text">Alta controlada</p>
+        <h2 className="mt-1 text-base font-bold">Crear nuevo cliente</h2>
+        <p className="mt-1 text-sm text-text-3">
+          Crea el propietario, la organización, el plan, el trial, el onboarding,
+          el perfil del agente y el pipeline inicial en una sola operación.
+        </p>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <label className="text-xs font-semibold text-text-2">
+          Nombre del negocio
+          <input
+            value={businessName}
+            onChange={(event) => setBusinessName(event.target.value)}
+            placeholder="Clínica XYZ"
+            className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm font-normal"
+          />
+        </label>
+        <label className="text-xs font-semibold text-text-2">
+          Nombre del propietario
+          <input
+            value={ownerName}
+            onChange={(event) => setOwnerName(event.target.value)}
+            placeholder="María López"
+            className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm font-normal"
+          />
+        </label>
+        <label className="text-xs font-semibold text-text-2">
+          Correo de acceso
+          <input
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="maria@negocio.com"
+            className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm font-normal"
+          />
+        </label>
+        <label className="text-xs font-semibold text-text-2">
+          Contraseña temporal
+          <div className="mt-1 flex gap-2">
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="mínimo 8 caracteres"
+              className="h-10 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm font-normal"
+            />
+            <button
+              type="button"
+              onClick={generatePassword}
+              className="rounded-md border bg-background px-3 text-xs font-semibold"
+            >
+              Generar
+            </button>
+          </div>
+        </label>
+        <label className="text-xs font-semibold text-text-2">
+          Plan
+          <select
+            value={planId}
+            onChange={(event) => {
+              const next = event.target.value;
+              setPlanId(next);
+              const plan = plans.find((item) => item.id === next);
+              if (plan) setTrialDays(String(plan.trialDays));
+            }}
+            className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm font-normal"
+          >
+            <option value="" disabled>Selecciona un plan</option>
+            {plans.filter((plan) => plan.active).map((plan) => (
+              <option key={plan.id} value={plan.id}>
+                {plan.name} · {money(plan.monthlyPriceCents, plan.currency)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-semibold text-text-2">
+          Días de demo
+          <input
+            type="number"
+            min="0"
+            max="365"
+            step="1"
+            value={trialDays}
+            onChange={(event) => setTrialDays(event.target.value)}
+            className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm font-normal"
+          />
+        </label>
+      </div>
+
+      {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
+      {created && (
+        <div className="mt-3 rounded-md border border-success-soft bg-success-tint p-3 text-sm">
+          <p className="font-semibold text-success-text">Cliente creado ✓</p>
+          <p className="mt-1 text-success-text opacity-90">
+            Acceso: <code>{created.email}</code> · contraseña temporal{" "}
+            <code>{created.password}</code>
+          </p>
+          <p className="mt-1 text-xs text-success-text opacity-80">
+            Comparte estas credenciales ahora; la contraseña no se almacena en texto plano.
+          </p>
+        </div>
+      )}
+
+      <button
+        type="button"
+        disabled={!canCreate || busy}
+        onClick={() => void createClient()}
+        className="mt-4 rounded-md bg-brand px-4 py-2 text-sm font-semibold text-brand-fg disabled:opacity-50"
+      >
+        {busy ? "Creando cliente…" : "Crear cliente"}
+      </button>
+    </section>
   );
 }
 
