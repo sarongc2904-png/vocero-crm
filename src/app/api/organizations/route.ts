@@ -37,16 +37,14 @@ export const GET = withAuth(async (session) => {
     .orderBy(asc(schema.member.createdAt), asc(schema.member.id));
 
   const now = Date.now();
-  const visibleOrganizations = session.isSuperadmin
-    ? organizations
-    : organizations.filter((organization) => {
-        if (organization.commercialStatus === "active") return true;
-        if (organization.commercialStatus !== "trial") return false;
-        return Boolean(
-          organization.trialEndsAt &&
-            organization.trialEndsAt.getTime() > now
-        );
-      });
+  const visibleOrganizations = organizations.filter((organization) => {
+    if (organization.commercialStatus === "active") return true;
+    if (organization.commercialStatus !== "trial") return false;
+    return Boolean(
+      organization.trialEndsAt &&
+        organization.trialEndsAt.getTime() > now
+    );
+  });
 
   return Response.json({
     activeOrganizationId: session.organizationId,
