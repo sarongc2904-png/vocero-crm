@@ -79,6 +79,21 @@ describe("panel comercial de superadmin", () => {
     expect(client).toContain('account.status !== "cancelled"');
   });
 
+  it("crea propietarios y tenants desde el panel comercial", () => {
+    const route = source("src/app/api/admin/commercial/route.ts");
+    const admin = source("src/server/commercial/admin.ts");
+    const client = source("src/components/admin/commercial-admin-client.tsx");
+
+    expect(route).toContain("createClientSchema");
+    expect(route).toContain("createCommercialClient");
+    expect(admin).toContain("auth.api.signUpEmail");
+    expect(admin).toContain("createOrganizationForOwner");
+    expect(client).toContain("Crear nuevo cliente");
+    expect(client).toContain("Correo de acceso");
+    expect(client).toContain("Plan");
+    expect(client).toContain("Cliente creado ✓");
+  });
+
   it("el menú solo expone Clientes cuando el usuario es superadmin", () => {
     const layout = source("src/app/(app)/layout.tsx");
     const shell = source("src/components/app-shell.tsx");
