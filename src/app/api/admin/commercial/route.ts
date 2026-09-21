@@ -2,6 +2,7 @@ import { z } from "zod";
 import { apiError, parseBody, withAuthOptions } from "@/lib/api";
 import {
   COMMERCIAL_ACTIONS,
+  createCommercialClient,
   listCommercialAccounts,
   listCommercialPlans,
   updateCommercialAccount,
@@ -45,6 +46,45 @@ const planUpdateSchema = z.object({
 });
 
 const updateSchema = z.union([accountUpdateSchema, planUpdateSchema]);
+
+const createClientSchema = z.object({
+  businessName: z.string().trim().min(2).max(120),
+  ownerName: z.string().trim().min(2).max(120),
+  email: z.string().trim().email(),
+  password: z.string().min(8).max(128),
+  planId: z.string().trim().min(1),
+  trialDays: z.number().int().min(0).max(365).optional(),
+});
+
+export const POST = withAuthOptions(
+  { allowBlockedCommercialAccess: true },
+  async (session, req: Request) => {
+    const denied = requireSuperadmin(session.isSuperadmin);
+    if (denied) return denied;
+
+    const body = await parseBody(req, createClientSchema);
+    if (!body.ok) return body.response;
+
+    try {
+      const client = await createCommercialClient(body.data);
+      return Response.json({ client }, { status: 201 });
+    } catch (error) {
+      const code =
+        error instanceof Error ? error.message : "client_create_failed";
+      if (code === "email_already_exists") {
+        return apiError(
+          409,
+          code,
+          "Ya existe una cuenta con ese correo"
+        );
+      }
+      if (code === "plan_not_found") {
+        return apiError(422, code, "El plan indicado no es válido");
+      }
+      throw error;
+    }
+  }
+);
 
 export const PATCH = withAuthOptions(
   { allowBlockedCommercialAccess: true },
