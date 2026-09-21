@@ -81,9 +81,17 @@ describe("panel comercial de superadmin", () => {
 
     expect(route).toContain('organization.commercialStatus === "active"');
     expect(route).toContain('organization.commercialStatus !== "trial"');
+    expect(route).not.toContain("session.isSuperadmin\n    ? organizations");
     expect(client).toContain("Desactivar acceso");
     expect(client).toContain("Sus datos se conservarán");
     expect(client).toContain("Reactivar");
+  });
+
+  it("si el tenant activo queda oculto, el selector cambia a uno visible", () => {
+    const switcher = source("src/components/organization-switcher.tsx");
+
+    expect(switcher).toContain("organizations.some((organization) => organization.id === activeOrganizationId)");
+    expect(switcher).toContain("void switchOrganization(organizations[0].id)");
   });
 
   it("evita que clientes creen tenants extra por su cuenta", () => {
