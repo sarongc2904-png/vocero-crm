@@ -75,6 +75,17 @@ describe("panel comercial de superadmin", () => {
     expect(client).toContain("Días de demo");
   });
 
+  it("oculta tenants sin acceso del selector sin borrar sus datos", () => {
+    const route = source("src/app/api/organizations/route.ts");
+    const client = source("src/components/admin/commercial-admin-client.tsx");
+
+    expect(route).toContain('organization.commercialStatus === "active"');
+    expect(route).toContain('organization.commercialStatus !== "trial"');
+    expect(client).toContain("Desactivar acceso");
+    expect(client).toContain("Sus datos se conservarán");
+    expect(client).toContain("Reactivar");
+  });
+
   it("la navegación administrativa solo se muestra con isSuperadmin", () => {
     const shell = source("src/components/app-shell.tsx");
     const nav = source("src/components/app-nav.tsx");
