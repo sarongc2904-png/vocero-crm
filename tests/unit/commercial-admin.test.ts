@@ -86,6 +86,18 @@ describe("panel comercial de superadmin", () => {
     expect(client).toContain("Reactivar");
   });
 
+  it("evita que clientes creen tenants extra por su cuenta", () => {
+    const nav = source("src/components/app-nav.tsx");
+    const route = source("src/app/api/organizations/route.ts");
+    const login = source("src/app/(auth)/login/page.tsx");
+
+    expect(nav).toContain("canCreate={isSuperadmin}");
+    expect(route).toContain("if (!session.isSuperadmin)");
+    expect(route).toContain("Las nuevas organizaciones se crean desde administración");
+    expect(login).toContain("Solicítalo al administrador de tu cuenta");
+    expect(login).not.toContain("Crear la cuenta inicial");
+  });
+
   it("la navegación administrativa solo se muestra con isSuperadmin", () => {
     const shell = source("src/components/app-shell.tsx");
     const nav = source("src/components/app-nav.tsx");
