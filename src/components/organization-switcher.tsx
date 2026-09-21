@@ -39,21 +39,35 @@ export function OrganizationSwitcher({
     setOrganizations(data.organizations);
   }, []);
 
+  const switchOrganization = useCallback(
+    async (organizationId: string) => {
+      if (!organizationId || organizationId === activeOrganizationId) return;
+      setBusy(true);
+      const response = await fetch("/api/organizations/active", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ organizationId }),
+      }).catch(() => null);
+      if (response?.ok) window.location.reload();
+      else setBusy(false);
+    },
+    [activeOrganizationId]
+  );
+
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function switchOrganization(organizationId: string) {
-    if (!organizationId || organizationId === activeOrganizationId) return;
-    setBusy(true);
-    const response = await fetch("/api/organizations/active", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ organizationId }),
-    }).catch(() => null);
-    if (response?.ok) window.location.reload();
-    else setBusy(false);
-  }
+  useEffect(() => {
+    if (
+      organizations.length === 0 ||
+      organizations.some((organization) => organization.id === activeOrganizationId)
+    ) {
+      return;
+    }
+
+    void switchOrganization(organizations[0].id);
+  }, [activeOrganizationId, organizations, switchOrganization]);
 
   async function createOrganization() {
     const name = window.prompt("Nombre de la nueva organización")?.trim();
