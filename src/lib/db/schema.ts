@@ -326,6 +326,11 @@ export const lead = pgTable(
      */
     priority: text("priority", { enum: ["alta", "media", "baja"] }),
     priorityUpdatedAt: timestamp("priority_updated_at"),
+    nextActionType: text("next_action_type", {
+      enum: ["llamar", "whatsapp", "cotizacion", "seguimiento", "cita", "otro"],
+    }),
+    nextActionAt: timestamp("next_action_at"),
+    nextActionNote: text("next_action_note"),
     lastActivityAt: timestamp("last_activity_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
