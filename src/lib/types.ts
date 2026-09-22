@@ -13,6 +13,8 @@ export type ConversationDto = {
   handoffReason: string | null;
   /** Señales operativas para decidir qué conversación atender primero. */
   needsReply30m: boolean;
+  /** El último intento de salida falló y aún no hubo otro envío posterior. */
+  sendFailed: boolean;
   nextActionType:
     | "llamar"
     | "whatsapp"
