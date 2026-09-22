@@ -90,6 +90,7 @@ export async function getDashboardMetrics(organizationId: string) {
       unread_messages: string | number;
       handoff: string | number;
       unanswered_30m: string | number;
+      failed_outgoing: string | number;
     }[]>`
       select
         count(*) filter (where is_test = false) as total,
@@ -113,7 +114,26 @@ export async function getDashboardMetrics(organizationId: string) {
                 and m.direction = 'out'
                 and coalesce(m.wa_timestamp, m.created_at) > conversation.last_inbound_at
             )
-        ) as unanswered_30m
+        ) as unanswered_30m,
+        count(*) filter (
+          where is_test = false
+            and exists (
+              select 1
+              from message failed
+              where failed.organization_id = conversation.organization_id
+                and failed.conversation_id = conversation.id
+                and failed.direction = 'out'
+                and failed.status = 'failed'
+                and not exists (
+                  select 1
+                  from message later
+                  where later.organization_id = failed.organization_id
+                    and later.conversation_id = failed.conversation_id
+                    and later.direction = 'out'
+                    and later.created_at > failed.created_at
+                )
+            )
+        ) as failed_outgoing
       from conversation
       where organization_id = ${organizationId}
     `,
@@ -304,6 +324,7 @@ export async function getDashboardMetrics(organizationId: string) {
       unreadMessages: n(conversations?.unread_messages),
       humanHandoff: n(conversations?.handoff),
       unanswered30m: n(conversations?.unanswered_30m),
+      failedOutgoing: n(conversations?.failed_outgoing),
     },
     pipeline: {
       ...pipeline,
