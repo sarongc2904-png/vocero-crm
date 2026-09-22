@@ -36,6 +36,9 @@ export type BoardLead = {
   amountCents: number | null;
   currency: string | null;
   priority: PriorityValue | null;
+  nextActionType: "llamar" | "whatsapp" | "cotizacion" | "seguimiento" | "cita" | "otro" | null;
+  nextActionAt: string | null;
+  nextActionNote: string | null;
 };
 
 export function PipelineClient() {
@@ -135,6 +138,25 @@ export function PipelineClient() {
     void refetch();
   }
 
+  async function guardarProximaAccion(
+    leadId: string,
+    nextAction: {
+      nextActionType: BoardLead["nextActionType"];
+      nextActionAt: string | null;
+      nextActionNote: string | null;
+    }
+  ) {
+    setLeads((prev) =>
+      prev.map((l) => (l.id === leadId ? { ...l, ...nextAction } : l))
+    );
+    await fetch(`/api/pipeline/leads/${leadId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(nextAction),
+    }).catch(() => null);
+    void refetch();
+  }
+
   async function onDragEnd(event: DragEndEvent) {
     setActiveLead(null);
     const leadId = String(event.active.id);
@@ -228,6 +250,9 @@ export function PipelineClient() {
           onMoveStage={(stageId) => moverDesdeCajon(abierto.id, stageId)}
           onAmount={(cents) => void guardarMonto(abierto.id, cents)}
           onPriority={(p) => void guardarPrioridad(abierto.id, p)}
+          onNextAction={(nextAction) =>
+            void guardarProximaAccion(abierto.id, nextAction)
+          }
         />
       )}
 
