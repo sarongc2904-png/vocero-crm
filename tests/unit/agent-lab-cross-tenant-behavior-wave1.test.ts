@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
 
 type Predicate =
   | { kind: "eq"; column: unknown; value: unknown }
+  | { kind: "isNull"; column: unknown }
   | { kind: "scoped"; organizationId: string; conditions: Predicate[] };
 
 const ORG_A = "org_a";
@@ -56,6 +57,7 @@ vi.mock("drizzle-orm", () => ({
   asc: (column: unknown) => ({ kind: "asc", column }),
   desc: (column: unknown) => ({ kind: "desc", column }),
   eq: (column: unknown, value: unknown): Predicate => ({ kind: "eq", column, value }),
+  isNull: (column: unknown): Predicate => ({ kind: "isNull", column }),
 }));
 
 vi.mock("@/lib/db/tenant", () => ({
