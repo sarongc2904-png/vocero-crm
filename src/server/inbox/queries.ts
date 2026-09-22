@@ -164,13 +164,19 @@ export async function listMessages(
     .orderBy(schema.message.createdAt);
 }
 
+function toIso(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 export function serializeConversation(
   c: typeof schema.conversation.$inferSelect,
   contact: typeof schema.contact.$inferSelect,
   preview: string | null = null,
   stageName: string | null = null,
   nextActionType: string | null = null,
-  nextActionAt: Date | null = null,
+  nextActionAt: Date | string | null = null,
   needsReply30m = false,
   sendFailed = false
 ): ConversationDto {
@@ -180,7 +186,7 @@ export function serializeConversation(
     contact: { id: contact.id, name: contact.name, phone: contact.phone },
     stageName,
     aiEnabled: c.aiEnabled,
-    handoffAt: c.handoffAt?.toISOString() ?? null,
+    handoffAt: toIso(c.handoffAt),
     handoffReason: c.handoffReason,
     needsReply30m,
     sendFailed,
@@ -194,10 +200,12 @@ export function serializeConversation(
         ? nextActionType
         : null
     ),
-    nextActionAt: nextActionAt?.toISOString() ?? null,
-    nextActionOverdue: Boolean(nextActionAt && nextActionAt.getTime() < Date.now()),
-    lastInboundAt: c.lastInboundAt?.toISOString() ?? null,
-    lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
+    nextActionAt: toIso(nextActionAt),
+    nextActionOverdue: Boolean(
+      nextActionAt && new Date(nextActionAt).getTime() < Date.now()
+    ),
+    lastInboundAt: toIso(c.lastInboundAt),
+    lastMessageAt: toIso(c.lastMessageAt),
     unreadCount: c.unreadCount,
     windowOpen: isWindowOpen(c.lastInboundAt),
     windowRemainingMs: windowRemainingMs(c.lastInboundAt),
