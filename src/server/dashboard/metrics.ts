@@ -75,6 +75,7 @@ export async function getDashboardMetrics(organizationId: string) {
     lossReasonRows,
     sourceRows,
     appointmentCoverageRows,
+    nextActionRows,
   ] = await Promise.all([
     sql<{ name: string }[]>`
       select name
@@ -221,6 +222,27 @@ export async function getDashboardMetrics(organizationId: string) {
        and b.is_test = false
       where l.organization_id = ${organizationId}
     `,
+    sql<{
+      without_next_action: string | number;
+      overdue_next_action: string | number;
+    }[]>`
+      select
+        count(*) filter (
+          where s.kind = 'open'
+            and (l.next_action_type is null or l.next_action_at is null)
+        ) as without_next_action,
+        count(*) filter (
+          where s.kind = 'open'
+            and l.next_action_type is not null
+            and l.next_action_at is not null
+            and l.next_action_at < now()
+        ) as overdue_next_action
+      from lead l
+      join pipeline_stage s
+        on s.id = l.stage_id
+       and s.organization_id = l.organization_id
+      where l.organization_id = ${organizationId}
+    `,
   ]);
 
   const branding = await getBranding(organizationId);
@@ -252,6 +274,7 @@ export async function getDashboardMetrics(organizationId: string) {
   const conversations = conversationRows[0];
   const agent = agentRows[0] ?? null;
   const leadsWithAppointment = n(appointmentCoverageRows[0]?.leads_with_appointment);
+  const nextAction = nextActionRows[0];
 
   return {
     organization: {
@@ -274,7 +297,8 @@ export async function getDashboardMetrics(organizationId: string) {
       appointmentCoverage:
         pipeline.totalLeads === 0 ? null : leadsWithAppointment / pipeline.totalLeads,
       qualifiedLeads: null as number | null,
-      leadsWithoutNextAction: null as number | null,
+      leadsWithoutNextAction: n(nextAction?.without_next_action),
+      overdueNextActions: n(nextAction?.overdue_next_action),
     },
     appointments: {
       today: futureSessions.filter((booking) => booking.date === today).length,
@@ -321,7 +345,7 @@ export async function getDashboardMetrics(organizationId: string) {
     })),
     unavailable: {
       qualifiedLeads: "Requiere el contrato formal de calificación del gate de Pipeline",
-      nextAction: "Requiere el modelo de próxima acción del gate de Pipeline",
+      nextAction: null,
     },
   };
 }
