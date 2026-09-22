@@ -17,6 +17,7 @@ Este roadmap convierte la investigación competitiva en trabajo de producto. La 
 - [x] Métrica de leads sin próxima acción.
 - [x] Métrica de próximas acciones vencidas.
 - [x] Alerta de conversaciones sin respuesta >30 min y seguimientos vencidos en dashboard.
+- [x] Bandeja con filtro “Requieren atención” (handoff, sin respuesta y seguimiento vencido).
 - [ ] Notificaciones automáticas de leads sin respuesta / sin seguimiento.
 - [ ] Seguimiento automático configurable por tenant.
 - [ ] Clasificación estructurada de intención (información, precio, compra, cita, queja, humano).
@@ -24,7 +25,8 @@ Este roadmap convierte la investigación competitiva en trabajo de producto. La 
 
 ## P1 — Onboarding
 
-- [ ] Wizard de 5–7 pasos: negocio → WhatsApp → oferta/KB → horario → agenda → prueba → activación.
+- [x] Wizard simplificado: negocio → WhatsApp → conocimiento IA → prueba → activación, con horario/Calendar opcionales.
+- [x] Una sola acción principal: “Continuar configuración” hacia el siguiente paso pendiente.
 - [ ] Ocultar complejidad de Meta/API al usuario final cuando Embedded Signup esté disponible.
 - [ ] Checklist de readiness con una sola acción siguiente.
 
