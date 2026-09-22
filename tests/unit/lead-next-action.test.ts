@@ -32,8 +32,8 @@ describe("próxima acción comercial", () => {
     const drawer = source("src/components/pipeline/lead-drawer.tsx");
     const pipeline = source("src/components/pipeline/pipeline-client.tsx");
 
-    expect(drawer).toContain("Próxima acción");
-    expect(drawer).toContain("Guardar próxima acción");
+    expect(drawer).toContain("¿Qué sigue con este prospecto?");
+    expect(drawer).toContain("Guardar seguimiento");
     expect(drawer).toContain('type="datetime-local"');
     expect(pipeline).toContain("guardarProximaAccion");
     expect(pipeline).toContain("nextActionOverdue");
