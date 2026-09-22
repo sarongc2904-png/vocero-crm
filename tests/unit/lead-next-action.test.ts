@@ -51,4 +51,14 @@ describe("próxima acción comercial", () => {
     expect(page).toContain("Sin próxima acción");
     expect(page).toContain("Seguimientos vencidos");
   });
+
+  it("alerta conversaciones sin respuesta por más de 30 minutos", () => {
+    const metrics = source("src/server/dashboard/metrics.ts");
+    const page = source("src/app/(app)/dashboard/page.tsx");
+
+    expect(metrics).toContain("unanswered_30m");
+    expect(metrics).toContain("interval '30 minutes'");
+    expect(metrics).toContain("not exists");
+    expect(page).toContain("Sin respuesta >30 min");
+  });
 });
