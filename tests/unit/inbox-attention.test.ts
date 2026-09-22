@@ -15,6 +15,8 @@ describe("bandeja orientada a atención", () => {
     expect(queries).toContain("nextActionTypeSql");
     expect(queries).toContain("nextActionAtSql");
     expect(queries).toContain("nextActionOverdue");
+    expect(queries).toContain("sendFailedSql");
+    expect(queries).toContain("failed.status = 'failed'");
   });
 
   it("permite ver solo lo que requiere atención", () => {
@@ -24,6 +26,7 @@ describe("bandeja orientada a atención", () => {
     expect(list).toContain("Requieren atención");
     expect(list).toContain("Sin respuesta");
     expect(list).toContain("Seguimiento vencido");
+    expect(list).toContain("Mensaje no enviado");
     expect(list).toContain("Atención humana");
   });
 
