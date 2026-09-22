@@ -29,6 +29,7 @@ export function LeadDrawer({
   onMoveStage,
   onAmount,
   onPriority,
+  onNextAction,
 }: {
   lead: BoardLead;
   stages: StageDto[];
@@ -39,10 +40,23 @@ export function LeadDrawer({
   onMoveStage: (stageId: string) => void;
   onAmount: (cents: number | null) => void;
   onPriority: (value: PriorityValue | null) => void;
+  onNextAction: (value: {
+    nextActionType: BoardLead["nextActionType"];
+    nextActionAt: string | null;
+    nextActionNote: string | null;
+  }) => void;
 }) {
   const [ficha, setFicha] = useState<FichaDto>({});
   const [monto, setMonto] = useState("");
   const [editandoMonto, setEditandoMonto] = useState(false);
+  const [nextActionType, setNextActionType] =
+    useState<BoardLead["nextActionType"]>(lead.nextActionType);
+  const [nextActionAt, setNextActionAt] = useState(
+    lead.nextActionAt ? toLocalDateTimeInput(lead.nextActionAt) : ""
+  );
+  const [nextActionNote, setNextActionNote] = useState(
+    lead.nextActionNote ?? ""
+  );
 
   const contactId = lead.contact.id;
   const moneda = lead.currency ?? currency;
@@ -57,8 +71,19 @@ export function LeadDrawer({
   useEffect(() => {
     setEditandoMonto(false);
     setMonto(lead.amountCents === null ? "" : (lead.amountCents / 100).toFixed(2));
+    setNextActionType(lead.nextActionType);
+    setNextActionAt(
+      lead.nextActionAt ? toLocalDateTimeInput(lead.nextActionAt) : ""
+    );
+    setNextActionNote(lead.nextActionNote ?? "");
     void cargarFicha();
-  }, [cargarFicha, lead.amountCents]);
+  }, [
+    cargarFicha,
+    lead.amountCents,
+    lead.nextActionAt,
+    lead.nextActionNote,
+    lead.nextActionType,
+  ]);
 
   // Escape cierra: un cajón que solo se cierra con el ratón estorba a quien
   // revisa el tablero con el teclado.
@@ -225,6 +250,87 @@ export function LeadDrawer({
             <PriorityPicker value={lead.priority} onChange={onPriority} />
           </section>
 
+          {/* Qué sigue */}
+          <section className="border-b p-4">
+            <p className="mb-2 kicker">Próxima acción</p>
+            <div className="space-y-2">
+              <select
+                value={nextActionType ?? ""}
+                onChange={(event) =>
+                  setNextActionType(
+                    (event.target.value || null) as BoardLead["nextActionType"]
+                  )
+                }
+                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                aria-label="Tipo de próxima acción"
+              >
+                <option value="">Sin próxima acción</option>
+                <option value="llamar">Llamar</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="cotizacion">Enviar cotización</option>
+                <option value="seguimiento">Seguimiento</option>
+                <option value="cita">Cita</option>
+                <option value="otro">Otro</option>
+              </select>
+              <Input
+                type="datetime-local"
+                value={nextActionAt}
+                onChange={(event) => setNextActionAt(event.target.value)}
+                disabled={!nextActionType}
+                aria-label="Fecha y hora de próxima acción"
+              />
+              <Input
+                value={nextActionNote}
+                onChange={(event) => setNextActionNote(event.target.value)}
+                disabled={!nextActionType}
+                maxLength={500}
+                placeholder="Ej. enviar propuesta y confirmar presupuesto"
+                aria-label="Nota de próxima acción"
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  disabled={Boolean(nextActionType && !nextActionAt)}
+                  onClick={() => {
+                    if (!nextActionType) {
+                      onNextAction({
+                        nextActionType: null,
+                        nextActionAt: null,
+                        nextActionNote: null,
+                      });
+                      return;
+                    }
+                    onNextAction({
+                      nextActionType,
+                      nextActionAt: new Date(nextActionAt).toISOString(),
+                      nextActionNote: nextActionNote.trim() || null,
+                    });
+                  }}
+                >
+                  Guardar próxima acción
+                </Button>
+                {lead.nextActionType && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setNextActionType(null);
+                      setNextActionAt("");
+                      setNextActionNote("");
+                      onNextAction({
+                        nextActionType: null,
+                        nextActionAt: null,
+                        nextActionNote: null,
+                      });
+                    }}
+                  >
+                    Quitar
+                  </Button>
+                )}
+              </div>
+            </div>
+          </section>
+
           {/* Dónde va */}
           <section className="border-b p-4">
             <p className="mb-2 kicker">
@@ -259,4 +365,11 @@ export function LeadDrawer({
       </aside>
     </>
   );
+}
+
+
+function toLocalDateTimeInput(value: string): string {
+  const date = new Date(value);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }
