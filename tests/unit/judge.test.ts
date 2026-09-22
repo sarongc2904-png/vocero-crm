@@ -16,11 +16,14 @@ describe("judge prompt contract", () => {
       transcript: [],
       kbText: "",
       behaviorText: "",
+      agendaEnabled: false,
     }).system;
 
     expect(prompt).toContain('"evidenceRefs"');
     expect(prompt).toContain("`evidenceRefs` es OBLIGATORIO");
     expect(prompt).toContain("`evidencia` SIEMPRE debe ser string");
+    expect(prompt).toContain("agenda DESHABILITADA");
+    expect(prompt).toContain("falla grave tipo=alucinacion");
   });
 });
 
