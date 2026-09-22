@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -135,7 +135,17 @@ export async function runAgentTurn(
   }
 
   if (lastInbound.text && matchesHandoffIntent(lastInbound.text)) {
-    await applyHandoff(conversationId, organizationId, "cliente");
+    const claimed = await applyHandoff(
+      conversationId,
+      organizationId,
+      "cliente"
+    );
+    if (claimed) {
+      await deliverReply(
+        conversation,
+        "Claro. Voy a pasar tu conversación a un asesor. La IA queda en pausa mientras te atienden."
+      );
+    }
     return;
   }
 
@@ -614,7 +624,8 @@ export async function applyHandoff(
         schema.conversation.organizationId,
         organizationId,
         eq(schema.conversation.id, conversationId),
-        eq(schema.conversation.aiEnabled, true)
+        eq(schema.conversation.aiEnabled, true),
+        isNull(schema.conversation.handoffAt)
       )
     )
     .returning();
