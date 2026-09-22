@@ -8,6 +8,7 @@ import { computeScore, judgeCase } from "@/server/lab/judge";
 import { type Persona } from "@/server/lab/personas";
 import { getLabPersonas } from "@/server/lab/profile";
 import { enqueueLabRun } from "@/server/jobs/queue";
+import { agendaEnabled } from "@/server/agenda/flag";
 import {
   persistActionTrace,
   type AgentActionTrace,
@@ -159,6 +160,7 @@ async function runAllCases(
       kbText,
       behaviorText,
       actionTrace,
+      agendaEnabled: agendaEnabled(),
     });
 
     await db
