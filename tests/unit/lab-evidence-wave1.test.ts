@@ -71,7 +71,7 @@ describe("Wave 1 - evidencia anclada del juez", () => {
     }
   });
 
-  it("acepta action_trace para efectos observados", () => {
+  it("descarta debio_escalar cuando el action_trace demuestra que sí hubo handoff", () => {
     const result = validateAndAnchorVerdict({
       verdict: verdict({
         tipo: "debio_escalar",
@@ -83,8 +83,8 @@ describe("Wave 1 - evidencia anclada del juez", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.verdict.hallazgos[0]!.evidencia).toContain("handoff");
-      expect(result.verdict.hallazgos[0]!.evidencia).toContain("cliente");
+      expect(result.verdict.veredicto).toBe("verde");
+      expect(result.verdict.hallazgos).toEqual([]);
     }
   });
 
