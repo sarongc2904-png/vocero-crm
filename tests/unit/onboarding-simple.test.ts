@@ -31,6 +31,7 @@ describe("onboarding simple para negocio general", () => {
 
   it("usa lenguaje de siguiente paso en la interfaz", () => {
     const page = source("src/app/(app)/onboarding/page.tsx");
+    const onboarding = source("src/server/commercial/onboarding.ts");
 
     expect(page).toContain("Vamos paso a paso");
     expect(page).toContain("Continuar configuración");
