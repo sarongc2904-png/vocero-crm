@@ -48,6 +48,7 @@ import {
 } from "@/server/agenda/schedule-scope";
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 import { hasCommercialAccess } from "@/server/commercial/entitlement";
+import { enforceAgentCapabilities } from "@/server/ai/capability-guard";
 
 /**
  * Compatibilidad para callers existentes: el scheduling ahora se persiste en
@@ -159,6 +160,8 @@ export async function runAgentTurn(
     .orderBy(asc(schema.pipelineStage.position));
 
   const agenda = agendaEnabled();
+  const safeModelReply = (text: string) =>
+    enforceAgentCapabilities({ text, agenda });
   const agendaContext = agenda
     ? { settings: await getSettings(organizationId), now: new Date() }
     : null;
@@ -426,7 +429,7 @@ export async function runAgentTurn(
         });
       }
       if (action.reply) {
-        await deliverReply(conversation, action.reply);
+        await deliverReply(conversation, safeModelReply(action.reply));
       }
       return;
     }
@@ -436,7 +439,7 @@ export async function runAgentTurn(
     case "none":
       return;
     case "reply":
-      await deliverReply(conversation, action.text);
+      await deliverReply(conversation, safeModelReply(action.text));
       return;
     case "update_lead": {
       const updated = await appendLeadNote(
@@ -458,7 +461,9 @@ export async function runAgentTurn(
         }
         return;
       }
-      if (action.reply) await deliverReply(conversation, action.reply);
+      if (action.reply) {
+        await deliverReply(conversation, safeModelReply(action.reply));
+      }
       return;
     }
     case "handoff": {
@@ -471,7 +476,7 @@ export async function runAgentTurn(
         "modelo"
       );
       if (claimed && action.farewell) {
-        await deliverReply(conversation, action.farewell);
+        await deliverReply(conversation, safeModelReply(action.farewell));
       }
       return;
     }
