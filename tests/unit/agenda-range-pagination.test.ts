@@ -150,6 +150,6 @@ describe("offerGrouped — disponibilidad completa", () => {
     // 15:00Z..22:00Z se presenta en America/Mexico_City como 09:00..16:00.
     expect(turno.text).toContain("09:00");
     expect(turno.text).toContain("16:00");
-    expect(turno.text).toContain("Martes, 22 de septiembre");
+    expect(turno.text).toContain("Mañana martes, 22 de septiembre");
   });
 });
