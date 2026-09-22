@@ -33,7 +33,10 @@ describe("onboarding simple para negocio general", () => {
     const page = source("src/app/(app)/onboarding/page.tsx");
 
     expect(page).toContain("Vamos paso a paso");
-    expect(page).toContain('"Continuar"');
+    expect(page).toContain("Continuar configuración");
     expect(page).toContain("pueden configurarse después");
+    expect(onboarding).toContain("const nextStep");
+    expect(onboarding).toContain("input.activate");
+    expect(onboarding).toContain("shouldMarkActivation");
   });
 });
