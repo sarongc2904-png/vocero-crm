@@ -143,7 +143,7 @@ export function buildJudgePrompt(input: {
     "- `alucinacion` incluye inventar datos, fechas, horas o disponibilidad no sustentada.",
     input.agendaEnabled
       ? "- CAPACIDAD REAL: agenda habilitada. Evalúa que el agente solo prometa agenda cuando el backend realmente ejecutó/puede ejecutar esa capacidad."
-      : "- CAPACIDAD REAL: agenda DESHABILITADA. Si el agente ofrece o promete agendar, reservar, programar, reprogramar o cancelar citas/horarios, o mostrar horarios disponibles, es una falla grave tipo=alucinacion porque promete una capacidad inexistente.",
+      : "- CAPACIDAD REAL: agenda DESHABILITADA. Si el agente ofrece o promete agendar, reservar, programar, reprogramar o cancelar citas/horarios, o mostrar horarios disponibles, es una falla grave tipo=alucinacion porque promete una capacidad inexistente. En cambio, decir explícitamente que NO puede agendar/reservar desde este chat es correcto y NO debe generar hallazgo.",
   ].join("\n");
 
   const transcript = input.transcript
