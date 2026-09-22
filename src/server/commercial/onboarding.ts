@@ -88,9 +88,6 @@ export async function getOnboardingState(organizationId: string) {
         where organization_id = ${organizationId}
           and status = 'connected'
       ) as whatsapp,
-      exists(select 1 from service where organization_id = ${organizationId} and active = true) as services,
-      exists(select 1 from professional where organization_id = ${organizationId} and status = 'active') as professionals,
-      exists(select 1 from professional_availability where organization_id = ${organizationId}) as hours,
       exists(select 1 from google_credentials where organization_id = ${organizationId} and status = 'connected') as calendar,
       exists(select 1 from agent_profile where organization_id = ${organizationId} and length(coalesce(instructions, '')) > 0) as agent,
       exists(select 1 from agent_test_run where organization_id = ${organizationId} and status = 'done') as test,
