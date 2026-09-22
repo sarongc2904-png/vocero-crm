@@ -8,7 +8,7 @@ Este roadmap convierte la investigación competitiva en trabajo de producto. La 
 - [x] Handoff IA → humano idempotente: una sola transición y una sola despedida.
 - [x] Reactivar IA desde la conversación.
 - [x] Laboratorio por tenant para probar escenarios antes de activar.
-- [ ] Observabilidad de mensajes fallidos y alertas operativas.
+- [x] Observabilidad de mensajes fallidos y alertas operativas.
 - [ ] Prueba E2E de handoff con mensajes consecutivos reales.
 
 ## P1 — Sistema de ventas
