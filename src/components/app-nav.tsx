@@ -163,10 +163,7 @@ export function AppNav({
         </div>
       </div>
 
-      <OrganizationSwitcher
-        activeOrganizationId={activeOrganizationId}
-        canCreate={isSuperadmin}
-      />
+      <OrganizationSwitcher activeOrganizationId={activeOrganizationId} />
 
       <nav className="flex flex-col gap-0.5">
         {items.map((item) => {
