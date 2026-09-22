@@ -89,6 +89,7 @@ export async function getDashboardMetrics(organizationId: string) {
       unread_conversations: string | number;
       unread_messages: string | number;
       handoff: string | number;
+      unanswered_30m: string | number;
     }[]>`
       select
         count(*) filter (where is_test = false) as total,
@@ -99,7 +100,20 @@ export async function getDashboardMetrics(organizationId: string) {
         ) as active_24h,
         count(*) filter (where is_test = false and unread_count > 0) as unread_conversations,
         coalesce(sum(unread_count) filter (where is_test = false), 0) as unread_messages,
-        count(*) filter (where is_test = false and handoff_at is not null) as handoff
+        count(*) filter (where is_test = false and handoff_at is not null) as handoff,
+        count(*) filter (
+          where is_test = false
+            and last_inbound_at is not null
+            and last_inbound_at <= now() - interval '30 minutes'
+            and not exists (
+              select 1
+              from message m
+              where m.organization_id = conversation.organization_id
+                and m.conversation_id = conversation.id
+                and m.direction = 'out'
+                and coalesce(m.wa_timestamp, m.created_at) > conversation.last_inbound_at
+            )
+        ) as unanswered_30m
       from conversation
       where organization_id = ${organizationId}
     `,
@@ -289,6 +303,7 @@ export async function getDashboardMetrics(organizationId: string) {
       unreadConversations: n(conversations?.unread_conversations),
       unreadMessages: n(conversations?.unread_messages),
       humanHandoff: n(conversations?.handoff),
+      unanswered30m: n(conversations?.unanswered_30m),
     },
     pipeline: {
       ...pipeline,
