@@ -340,13 +340,19 @@ export function ConversationList({
                             Atención humana
                           </span>
                         )}
-                        {!c.handoffAt && c.needsReply30m && (
+                        {!c.handoffAt && c.sendFailed && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-danger-soft bg-danger-tint px-2 py-0.5 text-[11px] text-danger-text">
+                            <Clock3 className="h-3 w-3" strokeWidth={1.7} />
+                            Mensaje no enviado
+                          </span>
+                        )}
+                        {!c.handoffAt && !c.sendFailed && c.needsReply30m && (
                           <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
                             <Clock3 className="h-3 w-3" strokeWidth={1.7} />
                             Sin respuesta
                           </span>
                         )}
-                        {!c.handoffAt && !c.needsReply30m && c.nextActionOverdue && (
+                        {!c.handoffAt && !c.sendFailed && !c.needsReply30m && c.nextActionOverdue && (
                           <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
                             <Clock3 className="h-3 w-3" strokeWidth={1.7} />
                             Seguimiento vencido
