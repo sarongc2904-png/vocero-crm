@@ -59,32 +59,87 @@ function renderTraceEvidence(trace: AgentActionTrace[number]): string {
   });
 }
 
-function traceShowsHandoff(
-  finding: VerdictType["hallazgos"][number],
-  actionTrace: AgentActionTrace
-): boolean {
-  return finding.evidenceRefs.some((ref) => {
-    if (ref.source !== "action_trace") return false;
-    const trace = actionTrace[ref.index];
-    return Boolean(
-      trace &&
-        (trace.observedActions.includes("handoff") ||
-          trace.result.handoffReason !== null)
+function actionTraceHasHandoff(actionTrace: AgentActionTrace): boolean {
+  return actionTrace.some(
+    (trace) =>
+      trace.observedActions.includes("handoff") ||
+      trace.result.handoffReason !== null
+  );
+}
+
+function normalizeForSafetyCheck(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isSafeKnowledgeAbstention(text: string): boolean {
+  const value = normalizeForSafetyCheck(text);
+
+  const explicitlyUnknown =
+    /\b(no tengo|no cuento con|desconozco|necesito|debo|tengo que)\b.{0,80}\b(informacion|dato|precio|precios|costo|costos|detalle|detalles|confirmar|verificar|revisar)\b/.test(
+      value
+    ) ||
+    /\b(confirmar|verificar|revisar)(?:lo|la|los|las)?\b.{0,60}\b(equipo|asesor|persona)\b/.test(
+      value
     );
-  });
+
+  const explicitHandoff =
+    /\b(voy a|puedo|te puedo|prefieres que te)\b.{0,50}\b(escalar|transferir|pasar|comunicar)\b/.test(
+      value
+    ) ||
+    /\b(asesor|persona|equipo)\b.{0,50}\b(ayud|continu|confirm)/.test(value);
+
+  // Una abstención segura no puede colar a la vez un precio/fecha/hora
+  // concreta, que sí sería una afirmación factual evaluable.
+  const concreteUnsupportedFact =
+    /(?:\$|mxn|usd)\s*\d/i.test(text) ||
+    /\b\d{1,2}[:.]\d{2}\b/.test(text) ||
+    /\b\d{4}-\d{2}-\d{2}\b/.test(text);
+
+  return (explicitlyUnknown || explicitHandoff) && !concreteUnsupportedFact;
+}
+
+function findingAgentEvidence(
+  finding: VerdictType["hallazgos"][number],
+  transcript: { role: "cliente" | "agente"; text: string }[]
+): string[] {
+  const messages = agentMessages(transcript);
+  return finding.evidenceRefs.flatMap((ref) =>
+    ref.source === "agent_message" && messages[ref.index] !== undefined
+      ? [messages[ref.index]!]
+      : []
+  );
 }
 
 function normalizeVerdictConsistency(input: {
   verdict: VerdictType;
+  transcript: { role: "cliente" | "agente"; text: string }[];
   actionTrace: AgentActionTrace;
 }): VerdictType {
+  const hasHandoff = actionTraceHasHandoff(input.actionTrace);
+
   const hallazgos = input.verdict.hallazgos.filter((finding) => {
-    if (
-      finding.tipo === "debio_escalar" &&
-      traceShowsHandoff(finding, input.actionTrace)
-    ) {
+    // Si el backend observó un handoff real, no puede existir un hallazgo
+    // "debió escalar". El juez puede haber citado solo el farewell y omitir el
+    // action_trace, así que la consistencia se valida contra TODO el trace.
+    if (finding.tipo === "debio_escalar" && hasHandoff) {
       return false;
     }
+
+    if (finding.tipo === "fuera_de_kb") {
+      const citedAgentMessages = findingAgentEvidence(finding, input.transcript);
+      if (
+        citedAgentMessages.length > 0 &&
+        citedAgentMessages.every(isSafeKnowledgeAbstention)
+      ) {
+        return false;
+      }
+    }
+
     return true;
   });
 
@@ -154,6 +209,7 @@ export function validateAndAnchorVerdict(input: {
     ok: true,
     verdict: normalizeVerdictConsistency({
       verdict: input.verdict,
+      transcript: input.transcript,
       actionTrace: input.actionTrace,
     }),
   };
