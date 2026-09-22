@@ -133,8 +133,8 @@ export function buildJudgePrompt(input: {
     "- `sugerencia` es opcional.",
     "- `evidenceRefs` es OBLIGATORIO en cada hallazgo y debe tener al menos una referencia.",
     "- `evidencia` SIEMPRE debe ser string, nunca arreglo; el backend la reconstruye desde evidenceRefs.",
-    "- `fuera_de_kb` solo si el agente responde fuera del KB como si supiera la respuesta o inventa.",
-    "- `debio_escalar` solo si pidió humano o había necesidad clara y no escaló.",
+    "- `fuera_de_kb` solo si el agente afirma como verdadero un dato que NO está respaldado por el KB. Una abstención segura como 'no tengo ese dato', 'necesito confirmarlo' o 'lo revisaré con el equipo' NO es fuera_de_kb.",
+    "- `debio_escalar` solo si había obligación clara de escalar y el agente NO hizo handoff. Si action_trace muestra handoff u handoffReason, ese hallazgo está prohibido.",
     "- `tono` evalúa cómo respondió el agente, no el tono del cliente.",
     "- `alucinacion` incluye inventar datos, fechas, horas o disponibilidad no sustentada.",
   ].join("\n");
