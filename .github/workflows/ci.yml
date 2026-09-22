@@ -133,6 +133,9 @@ jobs:
       ZOOM_BASE_URL: http://127.0.0.1:3000/api/dev/zoom-mock
       ZOOM_OAUTH_BASE_URL: http://127.0.0.1:3000/api/dev/zoom-mock
       MEDIA_DIR: /tmp/conecta-media
+      # El self-test crea un segundo tenant exclusivamente desde la superficie
+      # autorizada de superadmin; un cliente normal no puede crear tenants extra.
+      SUPERADMIN_EMAILS: e2e@vocero.test
 
     steps:
       - uses: actions/checkout@v7
