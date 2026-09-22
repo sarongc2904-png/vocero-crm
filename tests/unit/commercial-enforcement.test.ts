@@ -38,9 +38,13 @@ describe("enforcement comercial end-to-end", () => {
     const pipeline = source("src/server/ai/pipeline.ts");
 
     expect(pipeline).toContain("hasCommercialAccess");
-    expect(pipeline).toContain("if (!(await hasCommercialAccess(organizationId))) return");
+    expect(pipeline).toContain(
+      "if (!conversation.isTest && !(await hasCommercialAccess(organizationId))) return"
+    );
     expect(
-      pipeline.indexOf("if (!(await hasCommercialAccess(organizationId))) return")
+      pipeline.indexOf(
+        "if (!conversation.isTest && !(await hasCommercialAccess(organizationId))) return"
+      )
     ).toBeLessThan(pipeline.indexOf("const result = await chatJson"));
   });
 
