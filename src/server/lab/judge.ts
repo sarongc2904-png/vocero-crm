@@ -59,6 +59,46 @@ function renderTraceEvidence(trace: AgentActionTrace[number]): string {
   });
 }
 
+function traceShowsHandoff(
+  finding: VerdictType["hallazgos"][number],
+  actionTrace: AgentActionTrace
+): boolean {
+  return finding.evidenceRefs.some((ref) => {
+    if (ref.source !== "action_trace") return false;
+    const trace = actionTrace[ref.index];
+    return Boolean(
+      trace &&
+        (trace.observedActions.includes("handoff") ||
+          trace.result.handoffReason !== null)
+    );
+  });
+}
+
+function normalizeVerdictConsistency(input: {
+  verdict: VerdictType;
+  actionTrace: AgentActionTrace;
+}): VerdictType {
+  const hallazgos = input.verdict.hallazgos.filter((finding) => {
+    if (
+      finding.tipo === "debio_escalar" &&
+      traceShowsHandoff(finding, input.actionTrace)
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  if (hallazgos.length === 0) {
+    return { veredicto: "verde", hallazgos: [] };
+  }
+
+  const hasGrave = hallazgos.some((finding) => finding.severity === "grave");
+  return {
+    veredicto: hasGrave ? "rojo" : "amarillo",
+    hallazgos,
+  };
+}
+
 /**
  * Valida referencias contra fuentes reales y reconstruye `evidencia`.
  * Una frase del cliente jamás puede convertirse en prueba de alucinación:
@@ -110,7 +150,13 @@ export function validateAndAnchorVerdict(input: {
     finding.evidencia = anchored.join("\n---\n");
   }
 
-  return { ok: true, verdict: input.verdict };
+  return {
+    ok: true,
+    verdict: normalizeVerdictConsistency({
+      verdict: input.verdict,
+      actionTrace: input.actionTrace,
+    }),
+  };
 }
 
 /** UNA llamada del juez por conversación; la corrida continúa si falla. */
