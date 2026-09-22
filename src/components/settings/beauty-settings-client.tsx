@@ -75,6 +75,19 @@ export function BeautySettingsClient() {
     Array<{ startsAt: string; endsAt: string; reason: string | null }>
   >([]);
   const [message, setMessage] = useState<string | null>(null);
+  const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
+  const [serviceEdit, setServiceEdit] = useState<{
+    name: string;
+    category: string;
+    durationMinutes: number;
+    price: string;
+  } | null>(null);
+  const [editingProfessionalId, setEditingProfessionalId] = useState<string | null>(null);
+  const [professionalEdit, setProfessionalEdit] = useState<{
+    name: string;
+    timezone: string;
+    serviceIds: string[];
+  } | null>(null);
 
   const activeServices = useMemo(
     () => services.filter((service) => service.active),
@@ -141,6 +154,108 @@ export function BeautySettingsClient() {
     setSelectedServices([]);
     setSelectedProfessional(data.professional.id);
     setMessage("Profesional guardada. Configura ahora su horario.");
+    await refresh();
+  }
+
+  function beginServiceEdit(service: Service) {
+    setEditingServiceId(service.id);
+    setServiceEdit({
+      name: service.name,
+      category: service.category ?? "",
+      durationMinutes: service.durationMinutes,
+      price: (service.priceCents / 100).toString(),
+    });
+  }
+
+  async function saveServiceEdit(serviceId: string) {
+    if (!serviceEdit) return;
+    setMessage(null);
+    const priceCents = Math.round(Number(serviceEdit.price) * 100);
+    const response = await fetch(`/api/services/${serviceId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: serviceEdit.name,
+        category: serviceEdit.category || null,
+        durationMinutes: serviceEdit.durationMinutes,
+        priceCents,
+        currency: "MXN",
+      }),
+    });
+    if (!response.ok) return setMessage(await errorMessage(response));
+    setEditingServiceId(null);
+    setServiceEdit(null);
+    setMessage("Servicio actualizado");
+    await refresh();
+  }
+
+  async function deleteServiceItem(service: Service) {
+    const confirmed = window.confirm(
+      `¿Eliminar el servicio "${service.name}"? Se quitará también de las asignaciones del personal.`
+    );
+    if (!confirmed) return;
+    setMessage(null);
+    const response = await fetch(`/api/services/${service.id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) return setMessage(await errorMessage(response));
+    if (editingServiceId === service.id) {
+      setEditingServiceId(null);
+      setServiceEdit(null);
+    }
+    setSelectedServices((current) => current.filter((id) => id !== service.id));
+    setMessage("Servicio eliminado");
+    await refresh();
+  }
+
+  function beginProfessionalEdit(professional: Professional) {
+    setEditingProfessionalId(professional.id);
+    setProfessionalEdit({
+      name: professional.name,
+      timezone: professional.timezone,
+      serviceIds: [...professional.serviceIds],
+    });
+  }
+
+  async function saveProfessionalEdit(professionalId: string) {
+    if (!professionalEdit) return;
+    setMessage(null);
+    const response = await fetch(`/api/professionals/${professionalId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: professionalEdit.name,
+        timezone: professionalEdit.timezone,
+        serviceIds: professionalEdit.serviceIds,
+      }),
+    });
+    if (!response.ok) return setMessage(await errorMessage(response));
+    setEditingProfessionalId(null);
+    setProfessionalEdit(null);
+    setMessage("Profesional actualizado");
+    await refresh();
+  }
+
+  async function deleteProfessionalItem(professional: Professional) {
+    const confirmed = window.confirm(
+      `¿Eliminar a "${professional.name}"? Se eliminarán sus horarios, ausencias y asignaciones de servicios.`
+    );
+    if (!confirmed) return;
+    setMessage(null);
+    const response = await fetch(`/api/professionals/${professional.id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) return setMessage(await errorMessage(response));
+    if (selectedProfessional === professional.id) {
+      setSelectedProfessional("");
+      setDays(DEFAULT_DAYS);
+      setTimeOff([]);
+    }
+    if (editingProfessionalId === professional.id) {
+      setEditingProfessionalId(null);
+      setProfessionalEdit(null);
+    }
+    setMessage("Profesional eliminado");
     await refresh();
   }
 
@@ -252,9 +367,102 @@ export function BeautySettingsClient() {
           </Button>
           <ul className="divide-y rounded-md border text-sm">
             {services.map((service) => (
-              <li key={service.id} className="flex justify-between gap-3 p-3">
-                <span>{service.name} · {service.durationMinutes} min</span>
-                <span>${(service.priceCents / 100).toLocaleString("es-MX")} {service.currency}</span>
+              <li key={service.id} className="p-3">
+                {editingServiceId === service.id && serviceEdit ? (
+                  <div className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Nombre">
+                        <Input
+                          value={serviceEdit.name}
+                          onChange={(event) =>
+                            setServiceEdit({ ...serviceEdit, name: event.target.value })
+                          }
+                        />
+                      </Field>
+                      <Field label="Categoría">
+                        <Input
+                          value={serviceEdit.category}
+                          onChange={(event) =>
+                            setServiceEdit({ ...serviceEdit, category: event.target.value })
+                          }
+                        />
+                      </Field>
+                      <Field label="Duración (minutos)">
+                        <Input
+                          type="number"
+                          min={5}
+                          value={serviceEdit.durationMinutes}
+                          onChange={(event) =>
+                            setServiceEdit({
+                              ...serviceEdit,
+                              durationMinutes: Number(event.target.value),
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="Precio (MXN)">
+                        <Input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={serviceEdit.price}
+                          onChange={(event) =>
+                            setServiceEdit({ ...serviceEdit, price: event.target.value })
+                          }
+                        />
+                      </Field>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        disabled={
+                          !serviceEdit.name.trim() ||
+                          !serviceEdit.price ||
+                          serviceEdit.durationMinutes < 5
+                        }
+                        onClick={() => void saveServiceEdit(service.id)}
+                      >
+                        Guardar cambios
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setEditingServiceId(null);
+                          setServiceEdit(null);
+                        }}
+                      >
+                        Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium">
+                        {service.name} · {service.durationMinutes} min
+                      </p>
+                      {service.category && (
+                        <p className="text-xs text-muted-foreground">{service.category}</p>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>
+                        ${(service.priceCents / 100).toLocaleString("es-MX")} {service.currency}
+                      </span>
+                      <Button size="sm" variant="outline" onClick={() => beginServiceEdit(service)}>
+                        Editar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => void deleteServiceItem(service)}
+                      >
+                        Eliminar
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -298,6 +506,106 @@ export function BeautySettingsClient() {
           <Button disabled={!professionalName.trim() || selectedServices.length === 0} onClick={createProfessional}>
             Agregar profesional
           </Button>
+          <ul className="divide-y rounded-md border text-sm">
+            {professionals.map((professional) => (
+              <li key={professional.id} className="p-3">
+                {editingProfessionalId === professional.id && professionalEdit ? (
+                  <div className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Nombre">
+                        <Input
+                          value={professionalEdit.name}
+                          onChange={(event) =>
+                            setProfessionalEdit({
+                              ...professionalEdit,
+                              name: event.target.value,
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="Zona horaria">
+                        <Input
+                          value={professionalEdit.timezone}
+                          onChange={(event) =>
+                            setProfessionalEdit({
+                              ...professionalEdit,
+                              timezone: event.target.value,
+                            })
+                          }
+                        />
+                      </Field>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      {activeServices.map((service) => (
+                        <label key={service.id} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={professionalEdit.serviceIds.includes(service.id)}
+                            onChange={() =>
+                              setProfessionalEdit({
+                                ...professionalEdit,
+                                serviceIds: professionalEdit.serviceIds.includes(service.id)
+                                  ? professionalEdit.serviceIds.filter((id) => id !== service.id)
+                                  : [...professionalEdit.serviceIds, service.id],
+                              })
+                            }
+                          />
+                          {service.name}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        disabled={!professionalEdit.name.trim()}
+                        onClick={() => void saveProfessionalEdit(professional.id)}
+                      >
+                        Guardar cambios
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setEditingProfessionalId(null);
+                          setProfessionalEdit(null);
+                        }}
+                      >
+                        Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium">{professional.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {professional.serviceIds
+                          .map((serviceId) => services.find((service) => service.id === serviceId)?.name)
+                          .filter(Boolean)
+                          .join(", ") || "Sin servicios asignados"}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => beginProfessionalEdit(professional)}
+                      >
+                        Editar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => void deleteProfessionalItem(professional)}
+                      >
+                        Eliminar
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
         </CardContent>
       </Card>
 
