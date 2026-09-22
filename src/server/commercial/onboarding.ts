@@ -31,6 +31,7 @@ async function persistProgress(input: {
   steps: OnboardingStep[];
   readyToActivate: boolean;
   alreadyActivated: boolean;
+  activate?: boolean;
 }) {
   const completedSteps = input.steps
     .filter((step) => step.complete)
@@ -41,7 +42,9 @@ async function persistProgress(input: {
   const currentStep =
     firstIncompleteIndex >= 0 ? firstIncompleteIndex + 1 : input.steps.length;
   const activatedAt =
-    input.readyToActivate && !input.alreadyActivated ? new Date() : null;
+    input.activate && input.readyToActivate && !input.alreadyActivated
+      ? new Date()
+      : null;
 
   await getDb()
     .insert(schema.onboardingProgress)
@@ -147,24 +150,12 @@ export async function getOnboardingState(organizationId: string) {
   const requiredCompleted = required.filter((step) => step.complete).length;
   const readyToActivate = requiredCompleted === required.length;
 
-  if (readyToActivate && !fact.activation) {
-    await persistProgress({
-      organizationId,
-      steps,
-      readyToActivate: true,
-      alreadyActivated: false,
-    });
-    fact.activation = true;
-    const activation = steps.find((step) => step.id === "activation");
-    if (activation) activation.complete = true;
-  } else {
-    await persistProgress({
-      organizationId,
-      steps,
-      readyToActivate,
-      alreadyActivated: Boolean(fact.activation),
-    });
-  }
+  await persistProgress({
+    organizationId,
+    steps,
+    readyToActivate,
+    alreadyActivated: Boolean(fact.activation),
+  });
 
   const operationalStatus = deriveOperationalStatus({
     requiredCompleted,
@@ -172,8 +163,17 @@ export async function getOnboardingState(organizationId: string) {
     activated: Boolean(fact.activation),
   });
 
+  const nextStep =
+    steps.find(
+      (step) =>
+        !step.complete &&
+        !step.optional &&
+        step.id !== "activation"
+    ) ?? null;
+
   return {
     steps,
+    nextStep,
     readyToActivate,
     operationalStatus,
     requiredCompleted,
@@ -191,7 +191,10 @@ export async function activateOnboarding(organizationId: string) {
     organizationId,
     steps: state.steps,
     readyToActivate: true,
-    alreadyActivated: true,
+    alreadyActivated: Boolean(
+      state.steps.find((step) => step.id === "activation")?.complete
+    ),
+    activate: true,
   });
   return true;
 }
