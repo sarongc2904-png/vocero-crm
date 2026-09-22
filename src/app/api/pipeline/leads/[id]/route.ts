@@ -45,6 +45,12 @@ const patchSchema = z.object({
   currency: z.string().length(3).nullable().optional(),
   /** `null` explícito la quita; ausente la deja como estaba. */
   priority: z.enum(["alta", "media", "baja"]).nullable().optional(),
+  nextActionType: z
+    .enum(["llamar", "whatsapp", "cotizacion", "seguimiento", "cita", "otro"])
+    .nullable()
+    .optional(),
+  nextActionAt: z.string().datetime().nullable().optional(),
+  nextActionNote: z.string().trim().max(500).nullable().optional(),
 });
 
 export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
@@ -71,6 +77,24 @@ export const PATCH = withAuth(async (session, req: Request, ctx: Params) => {
     // La fecha acompaña al valor: sirve para saber si la decisión es de hoy o
     // de hace tres semanas, que es lo que vuelve útil mirarla.
     extra.priorityUpdatedAt = body.data.priority === null ? null : new Date();
+  }
+
+  if (body.data.nextActionType !== undefined) {
+    extra.nextActionType = body.data.nextActionType;
+  }
+  if (body.data.nextActionAt !== undefined) {
+    extra.nextActionAt =
+      body.data.nextActionAt === null ? null : new Date(body.data.nextActionAt);
+  }
+  if (body.data.nextActionNote !== undefined) {
+    extra.nextActionNote = body.data.nextActionNote || null;
+  }
+
+  // Borrar el tipo significa borrar la próxima acción completa: no dejamos
+  // una fecha huérfana que el dashboard pudiera interpretar como pendiente.
+  if (body.data.nextActionType === null) {
+    extra.nextActionAt = null;
+    extra.nextActionNote = null;
   }
 
   // Sin etapa: solo se actualizan los campos del lead. No pasa por la puerta
