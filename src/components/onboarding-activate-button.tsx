@@ -20,13 +20,14 @@ export function OnboardingActivateButton({ enabled }: { enabled: boolean }) {
       setError("Todavía faltan pasos obligatorios");
       return;
     }
+    router.push("/inbox");
     router.refresh();
   }
 
   return (
     <div className="space-y-2">
       <Button disabled={!enabled || busy} onClick={activate}>
-        {busy ? "Activando…" : "Activar CRM"}
+        {busy ? "Activando…" : "Activar y abrir mensajes"}
       </Button>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
