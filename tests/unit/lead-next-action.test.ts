@@ -36,6 +36,8 @@ describe("próxima acción comercial", () => {
     expect(drawer).toContain("Guardar próxima acción");
     expect(drawer).toContain('type="datetime-local"');
     expect(pipeline).toContain("guardarProximaAccion");
+    expect(pipeline).toContain("nextActionOverdue");
+    expect(pipeline).toContain("Vencida · ");
   });
 
   it("mide leads sin acción y seguimientos vencidos", () => {
