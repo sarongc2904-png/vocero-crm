@@ -38,7 +38,7 @@ describe("handoff durable", () => {
     );
 
     expect(source).toContain("aiEnabled: false");
-    expect(source).toContain("${schema.conversation.handoffAt} is null");
+    expect(source).toContain("eq(schema.conversation.aiEnabled, true)");
     expect(source).toContain("const claimed = await applyHandoff");
     expect(source).toContain("if (claimed && action.farewell)");
   });
