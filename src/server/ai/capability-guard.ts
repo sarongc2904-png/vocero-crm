@@ -11,7 +11,7 @@ const AGENDA_PROMISE_PATTERNS = [
   /\b(?:cita|horario|reuni[oó]n)\b.{0,40}\bagend(?:ar|amos|arte|arle|o|e|emos)\b/i,
   /\b(?:reservar|reservamos|reservarte|reservarle|programar|programamos|coordinar|coordinamos|apartar|apartamos)\b.{0,40}\b(?:cita|horario|reuni[oó]n)\b/i,
   /\b(?:te|le)\s+(?:agendo|agendamos|reservo|reservamos|programo|programamos|coordino|coordinamos)\b/i,
-  /\b(?:mostrar|muestro|ofrecer|ofrezco)\b.{0,30}\bhorarios?\s+disponibles\b/i,
+  /\b(?:mostrar|mostrarte|mostrarle|mostrarles|mostramos|muestro|ofrecer|ofrecerte|ofrecerle|ofrecerles|ofrecemos|ofrezco)\b.{0,30}\bhorarios?\s+disponibles\b/i,
 ];
 
 export const AGENDA_DISABLED_SAFE_REPLY =
