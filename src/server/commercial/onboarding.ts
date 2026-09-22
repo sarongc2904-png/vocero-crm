@@ -95,16 +95,50 @@ export async function getOnboardingState(organizationId: string) {
   `;
   const fact = (rows[0] ?? {}) as Record<string, boolean>;
   const steps: OnboardingStep[] = [
-    { id: "business", label: "Negocio", complete: Boolean(fact.business), href: "/settings/branding" },
-    { id: "timezone", label: "Zona horaria", complete: Boolean(fact.timezone), href: "/settings/calendar" },
-    { id: "whatsapp", label: "WhatsApp", complete: Boolean(fact.whatsapp), href: "/settings/whatsapp" },
-    { id: "services", label: "Servicios", complete: Boolean(fact.services), href: "/settings/beauty" },
-    { id: "professionals", label: "Profesionales", complete: Boolean(fact.professionals), href: "/settings/beauty" },
-    { id: "hours", label: "Horarios", complete: Boolean(fact.hours), href: "/settings/beauty" },
-    { id: "calendar", label: "Google Calendar", complete: Boolean(fact.calendar), optional: true, href: "/settings/calendar" },
-    { id: "agent", label: "Conocimiento del agente", complete: Boolean(fact.agent), href: "/agent" },
-    { id: "test", label: "Prueba de conversación", complete: Boolean(fact.test), href: "/lab" },
-    { id: "activation", label: "Activación", complete: Boolean(fact.activation), href: "/onboarding" },
+    {
+      id: "business",
+      label: "Datos del negocio",
+      complete: Boolean(fact.business),
+      href: "/settings/branding",
+    },
+    {
+      id: "whatsapp",
+      label: "Conecta WhatsApp",
+      complete: Boolean(fact.whatsapp),
+      href: "/settings/whatsapp",
+    },
+    {
+      id: "agent",
+      label: "Enséñale a la IA sobre tu negocio",
+      complete: Boolean(fact.agent),
+      href: "/agent",
+    },
+    {
+      id: "timezone",
+      label: "Horario y zona del negocio",
+      complete: Boolean(fact.timezone),
+      optional: true,
+      href: "/settings/calendar",
+    },
+    {
+      id: "calendar",
+      label: "Google Calendar",
+      complete: Boolean(fact.calendar),
+      optional: true,
+      href: "/settings/calendar",
+    },
+    {
+      id: "test",
+      label: "Haz una prueba",
+      complete: Boolean(fact.test),
+      href: "/lab",
+    },
+    {
+      id: "activation",
+      label: "Listo para operar",
+      complete: Boolean(fact.activation),
+      href: "/onboarding",
+    },
   ];
 
   const required = steps.filter(
