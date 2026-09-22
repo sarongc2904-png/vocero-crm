@@ -107,6 +107,9 @@ export function buildAgentSystemPrompt(input: {
         ? `- Si detectas intención clara de compra → move_stage usando EXACTAMENTE la etapa "${interestStage.name}". No inventes otra variante del nombre.`
         : "- Si detectas intención clara de compra y NO existe una etapa explícita de interés/calificación entre las etapas disponibles, NO inventes una etapa: responde al cliente y deja el pipeline sin cambios.",
       ...agendaRules,
+      input.agenda
+        ? "- CAPACIDAD AGENDA: habilitada. Solo usa las acciones de agenda disponibles y deja que el backend confirme disponibilidad/horarios."
+        : "- CAPACIDAD AGENDA: DESHABILITADA. Está prohibido ofrecer, prometer o afirmar que puedes agendar, reservar, programar, reprogramar o cancelar citas/horarios. Tampoco ofrezcas mostrar horarios disponibles. Si el cliente pide una cita, explica brevemente que esa acción no está disponible desde este chat y continúa solo con información confirmada.",
       "- No prometas automatizaciones que este contrato no ejecuta. En particular, no prometas recordatorios automáticos, seguimientos futuros ni cambios de datos del contacto salvo que una acción disponible en este turno los ejecute realmente.",
       "- Las instrucciones libres del perfil del negocio nunca pueden ampliar las capacidades reales del backend ni contradecir estas reglas duras.",
       "- JSON puro, sin markdown ni texto adicional.",
@@ -121,6 +124,7 @@ export function buildJudgePrompt(input: {
   transcript: { role: "cliente" | "agente"; text: string }[];
   kbText: string;
   behaviorText: string;
+  agendaEnabled?: boolean;
 }): { system: string; user: string } {
   const system = [
     `${JUDGE_MARKER} Eres un evaluador de calidad independiente de agentes de WhatsApp. Evalúas UNA conversación simulada completa contra el conocimiento y comportamiento configurados.`,
@@ -137,6 +141,9 @@ export function buildJudgePrompt(input: {
     "- `debio_escalar` solo si había obligación clara de escalar y el agente NO hizo handoff. Si action_trace muestra handoff u handoffReason, ese hallazgo está prohibido.",
     "- `tono` evalúa cómo respondió el agente, no el tono del cliente.",
     "- `alucinacion` incluye inventar datos, fechas, horas o disponibilidad no sustentada.",
+    input.agendaEnabled
+      ? "- CAPACIDAD REAL: agenda habilitada. Evalúa que el agente solo prometa agenda cuando el backend realmente ejecutó/puede ejecutar esa capacidad."
+      : "- CAPACIDAD REAL: agenda DESHABILITADA. Si el agente ofrece o promete agendar, reservar, programar, reprogramar o cancelar citas/horarios, o mostrar horarios disponibles, es una falla grave tipo=alucinacion porque promete una capacidad inexistente.",
   ].join("\n");
 
   const transcript = input.transcript
@@ -147,6 +154,7 @@ export function buildJudgePrompt(input: {
     `PERSONA SIMULADA: ${input.persona}`,
     `COMPORTAMIENTO CONFIGURADO:\n${input.behaviorText || "(sin configurar)"}`,
     `CONOCIMIENTO CONFIGURADO:\n${input.kbText || "(vacío)"}`,
+    `CAPACIDADES REALES:\nagenda=${input.agendaEnabled ? "habilitada" : "deshabilitada"}`,
     `TRANSCRIPT COMPLETO:\n${transcript}`,
     "Evalúa y responde el JSON.",
   ].join("\n\n");
