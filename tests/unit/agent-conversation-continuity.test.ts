@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildAgentSystemPrompt } from "@/server/ai/prompts";
+import type { schema } from "@/lib/db";
 
-function profile() {
+function profile(): typeof schema.agentProfile.$inferSelect {
   return {
     id: "profile_test",
     organizationId: "org_test",
@@ -13,7 +14,7 @@ function profile() {
     greeting: "Hola, ¿en qué puedo ayudarte?",
     createdAt: new Date(),
     updatedAt: new Date(),
-  } as any;
+  };
 }
 
 describe("continuidad conversacional del agente", () => {
