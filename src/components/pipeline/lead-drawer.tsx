@@ -13,6 +13,18 @@ import { Input } from "@/components/ui/input";
 import { PriorityPicker } from "./priority-picker";
 import type { BoardLead } from "./pipeline-client";
 
+const NEXT_ACTION_OPTIONS: Array<{
+  value: Exclude<BoardLead["nextActionType"], null>;
+  label: string;
+}> = [
+  { value: "llamar", label: "Llamar" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "cotizacion", label: "Enviar cotización" },
+  { value: "seguimiento", label: "Dar seguimiento" },
+  { value: "cita", label: "Agendar" },
+  { value: "otro", label: "Otro" },
+];
+
 /**
  * El trato, abierto, sin salir del tablero.
  *
@@ -252,82 +264,82 @@ export function LeadDrawer({
 
           {/* Qué sigue */}
           <section className="border-b p-4">
-            <p className="mb-2 kicker">Próxima acción</p>
-            <div className="space-y-2">
-              <select
-                value={nextActionType ?? ""}
-                onChange={(event) =>
-                  setNextActionType(
-                    (event.target.value || null) as BoardLead["nextActionType"]
-                  )
-                }
-                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-                aria-label="Tipo de próxima acción"
+            <p className="kicker">Seguimiento</p>
+            <h4 className="mt-1 text-sm font-bold">¿Qué sigue con este prospecto?</h4>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {NEXT_ACTION_OPTIONS.map((option) => {
+                const selected = nextActionType === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setNextActionType(option.value)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1.5 text-xs font-semibold transition-colors",
+                      selected
+                        ? "border-brand bg-brand text-brand-fg"
+                        : "border-border-strong bg-background text-text-2 hover:border-brand"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {nextActionType && (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-semibold text-text-2">¿Cuándo?</p>
+                <Input
+                  type="datetime-local"
+                  value={nextActionAt}
+                  onChange={(event) => setNextActionAt(event.target.value)}
+                  aria-label="Fecha y hora de próxima acción"
+                />
+                <Input
+                  value={nextActionNote}
+                  onChange={(event) => setNextActionNote(event.target.value)}
+                  maxLength={500}
+                  placeholder="Nota opcional"
+                  aria-label="Nota de próxima acción"
+                />
+              </div>
+            )}
+
+            <div className="mt-3 flex gap-2">
+              <Button
+                size="sm"
+                disabled={!nextActionType || !nextActionAt}
+                onClick={() => {
+                  if (!nextActionType || !nextActionAt) return;
+                  onNextAction({
+                    nextActionType,
+                    nextActionAt: new Date(nextActionAt).toISOString(),
+                    nextActionNote: nextActionNote.trim() || null,
+                  });
+                }}
               >
-                <option value="">Sin próxima acción</option>
-                <option value="llamar">Llamar</option>
-                <option value="whatsapp">WhatsApp</option>
-                <option value="cotizacion">Enviar cotización</option>
-                <option value="seguimiento">Seguimiento</option>
-                <option value="cita">Cita</option>
-                <option value="otro">Otro</option>
-              </select>
-              <Input
-                type="datetime-local"
-                value={nextActionAt}
-                onChange={(event) => setNextActionAt(event.target.value)}
-                disabled={!nextActionType}
-                aria-label="Fecha y hora de próxima acción"
-              />
-              <Input
-                value={nextActionNote}
-                onChange={(event) => setNextActionNote(event.target.value)}
-                disabled={!nextActionType}
-                maxLength={500}
-                placeholder="Ej. enviar propuesta y confirmar presupuesto"
-                aria-label="Nota de próxima acción"
-              />
-              <div className="flex gap-2">
+                Guardar seguimiento
+              </Button>
+              {lead.nextActionType && (
                 <Button
                   size="sm"
-                  disabled={Boolean(nextActionType && !nextActionAt)}
+                  variant="ghost"
                   onClick={() => {
-                    if (!nextActionType) {
-                      onNextAction({
-                        nextActionType: null,
-                        nextActionAt: null,
-                        nextActionNote: null,
-                      });
-                      return;
-                    }
+                    setNextActionType(null);
+                    setNextActionAt("");
+                    setNextActionNote("");
                     onNextAction({
-                      nextActionType,
-                      nextActionAt: new Date(nextActionAt).toISOString(),
-                      nextActionNote: nextActionNote.trim() || null,
+                      nextActionType: null,
+                      nextActionAt: null,
+                      nextActionNote: null,
                     });
                   }}
                 >
-                  Guardar próxima acción
+                  Quitar
                 </Button>
-                {lead.nextActionType && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setNextActionType(null);
-                      setNextActionAt("");
-                      setNextActionNote("");
-                      onNextAction({
-                        nextActionType: null,
-                        nextActionAt: null,
-                        nextActionNote: null,
-                      });
-                    }}
-                  >
-                    Quitar
-                  </Button>
-                )}
-              </div>
+              )}
             </div>
           </section>
 
