@@ -106,6 +106,13 @@ export default async function DashboardPage() {
             icon={MessageCircleWarning}
           />
           <MetricCard
+            label="Mensajes no enviados"
+            value={data.conversations.failedOutgoing}
+            detail="Últimos intentos de salida que fallaron y requieren revisión"
+            href="/inbox"
+            icon={MessageCircleWarning}
+          />
+          <MetricCard
             label="Leads en pipeline"
             value={data.pipeline.totalLeads}
             detail={`${data.pipeline.newLeads} en la primera etapa abierta`}
