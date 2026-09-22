@@ -20,6 +20,7 @@ function eqValue(predicate: Predicate, column: unknown): unknown {
   if (predicate.kind === "eq") {
     return predicate.column === column ? predicate.value : undefined;
   }
+  if (predicate.kind === "isNull") return undefined;
   for (const condition of predicate.conditions) {
     const value = eqValue(condition, column);
     if (value !== undefined) return value;
