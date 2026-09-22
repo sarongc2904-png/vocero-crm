@@ -114,6 +114,7 @@ export function ConversationList({
   const needsAttention = (conversation: ConversationDto) =>
     Boolean(
       conversation.handoffAt ||
+        conversation.sendFailed ||
         conversation.needsReply30m ||
         conversation.nextActionOverdue
     );
