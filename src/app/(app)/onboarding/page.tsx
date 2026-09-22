@@ -88,9 +88,7 @@ export default async function OnboardingPage() {
             Solo necesitas completar los pasos esenciales. Horario y Google Calendar pueden configurarse después.
           </p>
         )}
-        {onboarding.nextStep ? null : onboarding.readyToActivate ? null : (
-          <OnboardingActivateButton enabled={false} />
-        )}
+
       </div>
     </main>
   );
