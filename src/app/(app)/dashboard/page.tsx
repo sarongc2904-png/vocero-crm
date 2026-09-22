@@ -99,6 +99,13 @@ export default async function DashboardPage() {
             icon={MessageCircleWarning}
           />
           <MetricCard
+            label="Sin respuesta >30 min"
+            value={data.conversations.unanswered30m}
+            detail="Conversaciones con entrada pendiente de respuesta"
+            href="/inbox"
+            icon={MessageCircleWarning}
+          />
+          <MetricCard
             label="Leads en pipeline"
             value={data.pipeline.totalLeads}
             detail={`${data.pipeline.newLeads} en la primera etapa abierta`}
