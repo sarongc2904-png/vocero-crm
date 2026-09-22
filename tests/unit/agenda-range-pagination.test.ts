@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Contrato actual: la disponibilidad que devuelve computeAvailability se
@@ -49,6 +49,14 @@ function semanaCompleta(countPorDia: number) {
 }
 
 describe("offerGrouped — disponibilidad completa", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-21T15:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   it("muestra los 28 slots de lunes a domingo sin truncar", async () => {
     computeAvailabilityImpl = async () => semanaCompleta(4);
     const { offerRange } = await import("@/server/agenda/agent");
