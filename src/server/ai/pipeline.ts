@@ -117,6 +117,17 @@ export async function runAgentTurn(
   const lastInbound = [...history].reverse().find((m) => m.direction === "in");
   if (!lastInbound) return;
 
+  const repeatedGreeting = Boolean(
+    lastInbound.text &&
+      isBareGreeting(lastInbound.text) &&
+      history.some(
+        (m) =>
+          m.direction === "out" &&
+          m.createdAt < lastInbound.createdAt &&
+          Boolean(m.text?.trim())
+      )
+  );
+
   if (!conversation.isTest && !isWindowOpen(conversation.lastInboundAt)) {
     await applyHandoff(conversationId, organizationId, "ventana");
     return;
@@ -206,6 +217,7 @@ export async function runAgentTurn(
         agenda,
         today: todayInfo,
         businessFact,
+        repeatedGreeting,
       }),
     },
     ...history
@@ -469,6 +481,20 @@ export async function runAgentTurn(
     case "cancel_booking":
       return;
   }
+}
+
+function isBareGreeting(text: string): boolean {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9ñ\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return /^(hola|holi|hey|buenas|buenos dias|buenas tardes|buenas noches)$/.test(
+    normalized
+  );
 }
 
 type Conversation = typeof schema.conversation.$inferSelect;
