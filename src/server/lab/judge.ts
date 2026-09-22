@@ -166,12 +166,14 @@ export async function judgeCase(input: {
   kbText: string;
   behaviorText: string;
   actionTrace: AgentActionTrace;
+  agendaEnabled?: boolean;
 }): Promise<JudgeOutcome> {
   const { system, user } = buildJudgePrompt({
     persona: input.personaKey,
     transcript: input.transcript,
     kbText: input.kbText,
     behaviorText: input.behaviorText,
+    agendaEnabled: input.agendaEnabled,
   });
 
   const indexedAgentMessages = agentMessages(input.transcript)
