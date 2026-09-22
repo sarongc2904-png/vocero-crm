@@ -25,6 +25,32 @@ export async function listConversations(
       and s.organization_id = l.organization_id
     limit 1
   )`;
+  const nextActionTypeSql = sql<string | null>`(
+    select l.next_action_type
+    from lead l
+    where l.contact_id = ${schema.contact.id}
+      and l.organization_id = ${schema.contact.organizationId}
+    limit 1
+  )`;
+  const nextActionAtSql = sql<Date | null>`(
+    select l.next_action_at
+    from lead l
+    where l.contact_id = ${schema.contact.id}
+      and l.organization_id = ${schema.contact.organizationId}
+    limit 1
+  )`;
+  const needsReply30mSql = sql<boolean>`(
+    ${schema.conversation.lastInboundAt} is not null
+    and ${schema.conversation.lastInboundAt} <= now() - interval '30 minutes'
+    and not exists (
+      select 1
+      from message m
+      where m.organization_id = ${schema.conversation.organizationId}
+        and m.conversation_id = ${schema.conversation.id}
+        and m.direction = 'out'
+        and coalesce(m.wa_timestamp, m.created_at) > ${schema.conversation.lastInboundAt}
+    )
+  )`;
 
   const rows = await db
     .select({
@@ -32,6 +58,9 @@ export async function listConversations(
       contact: schema.contact,
       preview: previewSql,
       stageName: stageSql,
+      nextActionType: nextActionTypeSql,
+      nextActionAt: nextActionAtSql,
+      needsReply30m: needsReply30mSql,
     })
     .from(schema.conversation)
     .innerJoin(
@@ -52,7 +81,15 @@ export async function listConversations(
     .orderBy(desc(sql`coalesce(${schema.conversation.lastMessageAt}, ${schema.conversation.createdAt})`));
 
   return rows.map((r) =>
-    serializeConversation(r.conversation, r.contact, r.preview, r.stageName)
+    serializeConversation(
+      r.conversation,
+      r.contact,
+      r.preview,
+      r.stageName,
+      r.nextActionType,
+      r.nextActionAt,
+      r.needsReply30m
+    )
   );
 }
 
@@ -113,7 +150,10 @@ export function serializeConversation(
   c: typeof schema.conversation.$inferSelect,
   contact: typeof schema.contact.$inferSelect,
   preview: string | null = null,
-  stageName: string | null = null
+  stageName: string | null = null,
+  nextActionType: string | null = null,
+  nextActionAt: Date | null = null,
+  needsReply30m = false
 ): ConversationDto {
   return {
     id: c.id,
@@ -123,6 +163,19 @@ export function serializeConversation(
     aiEnabled: c.aiEnabled,
     handoffAt: c.handoffAt?.toISOString() ?? null,
     handoffReason: c.handoffReason,
+    needsReply30m,
+    nextActionType: (
+      nextActionType === "llamar" ||
+      nextActionType === "whatsapp" ||
+      nextActionType === "cotizacion" ||
+      nextActionType === "seguimiento" ||
+      nextActionType === "cita" ||
+      nextActionType === "otro"
+        ? nextActionType
+        : null
+    ),
+    nextActionAt: nextActionAt?.toISOString() ?? null,
+    nextActionOverdue: Boolean(nextActionAt && nextActionAt.getTime() < Date.now()),
     lastInboundAt: c.lastInboundAt?.toISOString() ?? null,
     lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
     unreadCount: c.unreadCount,
