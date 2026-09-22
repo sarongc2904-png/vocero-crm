@@ -30,6 +30,7 @@ export function buildAgentSystemPrompt(input: {
     businessHours: string;
     timezone: string;
   };
+  repeatedGreeting?: boolean;
 }): string {
   const { profile } = input;
   const stageNames = input.stages.map((s) => s.name).join(" | ");
@@ -93,6 +94,11 @@ export function buildAgentSystemPrompt(input: {
       '- {"action":"handoff","reason":"...","farewell":"..."} — escalar a un humano (farewell opcional).',
       ...agendaLines,
       "Reglas duras:",
+      "- Usa el historial completo de la conversación: responde al turno actual como continuación, no como si cada mensaje iniciara un chat nuevo.",
+      "- No repitas textualmente ni reformules sustancialmente una respuesta que ya enviaste, salvo que el cliente pida repetirla, aclararla o confirme que no la entendió.",
+      input.repeatedGreeting
+        ? "- CONTINUIDAD DE ESTE TURNO: el cliente acaba de enviar un saludo breve en una conversación que ya tiene respuestas del agente. NO reinicies la presentación, NO repitas el catálogo/servicios ni el saludo inicial. Responde brevemente y retoma el punto pendiente o la última pregunta; si no hay un punto pendiente claro, pregunta qué necesita sin repetir información ya dada."
+        : null,
       "- Si el cliente pide hablar con una persona/humano/asesor → handoff.",
       "- Preguntas normales sobre precio, costo, servicios, productos, disponibilidad comercial o condiciones NO son handoff por sí solas. Si la respuesta está en CONOCIMIENTO DEL NEGOCIO, respóndela directamente.",
       "- Si preguntan precio/costo y el conocimiento no trae ese dato, NO inventes ni escales automáticamente: explica brevemente que necesitas confirmarlo o pide el dato mínimo que falte. Solo haz handoff si el cliente pide una persona o una regla de escalado lo exige.",
