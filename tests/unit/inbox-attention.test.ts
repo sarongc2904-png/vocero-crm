@@ -15,6 +15,9 @@ describe("bandeja orientada a atención", () => {
     expect(queries).toContain("nextActionTypeSql");
     expect(queries).toContain("nextActionAtSql");
     expect(queries).toContain("nextActionOverdue");
+    expect(queries).toContain("toIso(nextActionAt)");
+    expect(queries).toContain("new Date(nextActionAt).getTime()");
+    expect(queries).not.toContain("nextActionAt?.toISOString()");
     expect(queries).toContain("sendFailedSql");
     expect(queries).toContain("failed.status = 'failed'");
   });
@@ -23,6 +26,7 @@ describe("bandeja orientada a atención", () => {
     const list = source("src/components/inbox/conversation-list.tsx");
 
     expect(list).toContain('"attention"');
+    expect(list).toContain("conversation.sendFailed");
     expect(list).toContain("Requieren atención");
     expect(list).toContain("Sin respuesta");
     expect(list).toContain("Seguimiento vencido");
