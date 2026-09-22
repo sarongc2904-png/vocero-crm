@@ -96,14 +96,19 @@ describe("panel comercial de superadmin", () => {
     expect(switcher).toContain("void switchOrganization(fallbackOrganization.id)");
   });
 
-  it("evita que clientes creen tenants extra por su cuenta", () => {
+  it("centraliza la creación de clientes en el panel comercial", () => {
     const nav = source("src/components/app-nav.tsx");
+    const switcher = source("src/components/organization-switcher.tsx");
     const route = source("src/app/api/organizations/route.ts");
+    const client = source("src/components/admin/commercial-admin-client.tsx");
     const login = source("src/app/(auth)/login/page.tsx");
 
-    expect(nav).toContain("canCreate={isSuperadmin}");
+    expect(nav).not.toContain("canCreate={isSuperadmin}");
+    expect(switcher).not.toContain("window.prompt");
+    expect(switcher).not.toContain("Crear organización");
     expect(route).toContain("if (!session.isSuperadmin)");
     expect(route).toContain("Las nuevas organizaciones se crean desde administración");
+    expect(client).toContain("+ Crear cliente");
     expect(login).toContain("Solicítalo al administrador de tu cuenta");
     expect(login).not.toContain("Crear la cuenta inicial");
   });
