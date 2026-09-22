@@ -1,4 +1,4 @@
-import { asc, desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -88,7 +88,7 @@ export async function runAgentTurn(
 
   // Defensa para jobs ya encolados cuando el trial expira entre la ingesta y
   // la ejecución. El mensaje queda persistido, pero la IA no consume ni envía.
-  if (!(await hasCommercialAccess(organizationId))) return;
+  if (!conversation.isTest && !(await hasCommercialAccess(organizationId))) return;
 
   if (conversation.handoffAt || !conversation.aiEnabled) return;
 
@@ -583,7 +583,7 @@ export async function applyHandoff(
         schema.conversation.organizationId,
         organizationId,
         eq(schema.conversation.id, conversationId),
-        sql`${schema.conversation.handoffAt} is null`
+        eq(schema.conversation.aiEnabled, true)
       )
     )
     .returning();
