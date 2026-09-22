@@ -16,7 +16,8 @@ Este roadmap convierte la investigación competitiva en trabajo de producto. La 
 - [x] Próxima acción por lead: tipo, fecha/hora y nota.
 - [x] Métrica de leads sin próxima acción.
 - [x] Métrica de próximas acciones vencidas.
-- [ ] Alertas de leads sin respuesta / sin seguimiento.
+- [x] Alerta de conversaciones sin respuesta >30 min y seguimientos vencidos en dashboard.
+- [ ] Notificaciones automáticas de leads sin respuesta / sin seguimiento.
 - [ ] Seguimiento automático configurable por tenant.
 - [ ] Clasificación estructurada de intención (información, precio, compra, cita, queja, humano).
 - [ ] Historial auditable de decisiones de IA por conversación.
