@@ -61,6 +61,9 @@ export const GET = withAuth(async (session) => {
       amountCents: r.lead.amountCents,
       currency: r.lead.currency,
       priority: r.lead.priority,
+      nextActionType: r.lead.nextActionType,
+      nextActionAt: r.lead.nextActionAt?.toISOString() ?? null,
+      nextActionNote: r.lead.nextActionNote,
       contact: {
         id: r.contact.id,
         name: r.contact.name,
