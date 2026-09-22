@@ -19,6 +19,9 @@ export default async function OnboardingPage() {
           <p className="kicker text-brand-text">Activación guiada</p>
           <h1 className="mt-1 text-2xl font-bold">Configura tu CRM</h1>
           <p className="mt-1 text-sm text-text-3">
+            Vamos paso a paso. Completa lo esencial y deja lo opcional para después.
+          </p>
+          <p className="mt-1 text-xs text-text-3">
             {onboarding.completed} de {onboarding.total} pasos completos · Plan {subscription.plan.name} por {new Intl.NumberFormat("es-MX", { style: "currency", currency: subscription.plan.currency, maximumFractionDigits: 0 }).format(subscription.plan.monthlyPriceCents / 100)} al mes.
           </p>
         </div>
@@ -34,15 +37,15 @@ export default async function OnboardingPage() {
               <span className="flex-1 text-sm font-semibold">
                 {step.label}{step.optional ? " (opcional)" : ""}
               </span>
-              <Link className="text-sm text-brand-text hover:underline" href={step.href}>
-                {step.complete ? "Revisar" : "Configurar"}
+              <Link className="text-sm font-semibold text-brand-text hover:underline" href={step.href}>
+                {step.complete ? "Revisar" : step.optional ? "Opcional" : "Continuar"}
               </Link>
             </li>
           ))}
         </ol>
         {!onboarding.readyToActivate && (
           <p className="text-sm text-text-3">
-            La activación se habilita cuando estén completos los pasos obligatorios. Google Calendar puede conectarse después.
+            Solo necesitas completar los pasos esenciales. Horario y Google Calendar pueden configurarse después.
           </p>
         )}
         <OnboardingActivateButton enabled={onboarding.readyToActivate} />
