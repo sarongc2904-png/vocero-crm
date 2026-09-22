@@ -92,7 +92,8 @@ describe("panel comercial de superadmin", () => {
 
     expect(switcher).toContain("organizations.some((organization) =>");
     expect(switcher).toContain("organization.id === activeOrganizationId");
-    expect(switcher).toContain("void switchOrganization(organizations[0].id)");
+    expect(switcher).toContain("const fallbackOrganization = organizations[0]");
+    expect(switcher).toContain("void switchOrganization(fallbackOrganization.id)");
   });
 
   it("evita que clientes creen tenants extra por su cuenta", () => {
