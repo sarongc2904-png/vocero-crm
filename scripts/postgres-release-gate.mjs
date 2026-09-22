@@ -42,6 +42,7 @@ async function verifyUpgradePath() {
     await cp("drizzle", temp, { recursive: true });
     const journalPath = join(temp, "meta", "_journal.json");
     const journal = JSON.parse(await readFile(journalPath, "utf8"));
+    const expectedMigrationCount = journal.entries.length;
     journal.entries = journal.entries.filter((entry) => entry.idx <= 20);
     await writeFile(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
     const partial = postgres(upgradeUrl.toString(), { max: 1, onnotice: () => {} });
@@ -51,7 +52,11 @@ async function verifyUpgradePath() {
     const full = postgres(upgradeUrl.toString(), { max: 1, onnotice: () => {} });
     await migrate(drizzle(full), { migrationsFolder: "drizzle" });
     const rows = await full`select count(*)::int as count from drizzle.__drizzle_migrations`;
-    ok("upgrade 0020 -> HEAD aplica las migraciones forward-only", rows[0].count === 26);
+    ok(
+      "upgrade 0020 -> HEAD aplica las migraciones forward-only",
+      rows[0].count === expectedMigrationCount,
+      `esperadas=${expectedMigrationCount}, reales=${rows[0].count}`
+    );
     await full.end();
   } finally {
     await admin.unsafe(`drop database if exists "${database}" with (force)`).catch(() => {});
@@ -74,8 +79,14 @@ const contactA = `ct_gate_a_${suffix}`;
 const conversationA = `cv_gate_a_${suffix}`;
 
 try {
+  const journal = JSON.parse(await readFile("drizzle/meta/_journal.json", "utf8"));
+  const expectedMigrationCount = journal.entries.length;
   const migrations = await sql`select count(*)::int as count from drizzle.__drizzle_migrations`;
-  ok("base vacía contiene las 26 migraciones", migrations[0].count === 26);
+  ok(
+    `base vacía contiene las ${expectedMigrationCount} migraciones`,
+    migrations[0].count === expectedMigrationCount,
+    `reales=${migrations[0].count}`
+  );
 
   const requiredTables = await sql`
     select table_name from information_schema.tables
