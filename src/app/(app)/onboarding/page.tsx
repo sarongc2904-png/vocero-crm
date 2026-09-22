@@ -28,6 +28,46 @@ export default async function OnboardingPage() {
         <div className="h-2 overflow-hidden rounded-full bg-secondary">
           <div className="h-full bg-brand" style={{ width: `${Math.round((onboarding.completed / onboarding.total) * 100)}%` }} />
         </div>
+
+        {onboarding.nextStep ? (
+          <section className="rounded-xl border border-brand bg-brand-tint p-4">
+            <p className="kicker text-brand-text">Siguiente paso</p>
+            <h2 className="mt-1 text-lg font-bold">{onboarding.nextStep.label}</h2>
+            <p className="mt-1 text-sm text-text-2">
+              Solo necesitas terminar este paso para seguir avanzando.
+            </p>
+            <Link
+              href={onboarding.nextStep.href}
+              className="mt-3 inline-flex items-center justify-center rounded-full bg-brand px-4 py-2 text-sm font-semibold text-brand-fg"
+            >
+              Continuar configuración
+            </Link>
+          </section>
+        ) : onboarding.readyToActivate &&
+          !onboarding.steps.find((step) => step.id === "activation")?.complete ? (
+          <section className="rounded-xl border border-success-soft bg-success-tint p-4">
+            <p className="kicker text-success-text">Todo listo</p>
+            <h2 className="mt-1 text-lg font-bold">Tu CRM está preparado</h2>
+            <p className="mt-1 text-sm text-text-2">
+              Actívalo y entra directamente a tus mensajes.
+            </p>
+            <div className="mt-3">
+              <OnboardingActivateButton enabled />
+            </div>
+          </section>
+        ) : (
+          <section className="rounded-xl border bg-background p-4">
+            <p className="kicker text-brand-text">CRM activo</p>
+            <h2 className="mt-1 text-lg font-bold">Ya puedes operar</h2>
+            <Link
+              href="/inbox"
+              className="mt-3 inline-flex items-center justify-center rounded-full bg-brand px-4 py-2 text-sm font-semibold text-brand-fg"
+            >
+              Ir a mensajes
+            </Link>
+          </section>
+        )}
+
         <ol className="divide-y rounded-xl border bg-background">
           {onboarding.steps.map((step, index) => (
             <li key={step.id} className="flex items-center gap-3 p-4">
@@ -48,7 +88,9 @@ export default async function OnboardingPage() {
             Solo necesitas completar los pasos esenciales. Horario y Google Calendar pueden configurarse después.
           </p>
         )}
-        <OnboardingActivateButton enabled={onboarding.readyToActivate} />
+        {onboarding.nextStep ? null : onboarding.readyToActivate ? null : (
+          <OnboardingActivateButton enabled={false} />
+        )}
       </div>
     </main>
   );
