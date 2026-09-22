@@ -66,7 +66,9 @@ export function OrganizationSwitcher({
       return;
     }
 
-    void switchOrganization(organizations[0].id);
+    const fallbackOrganization = organizations[0];
+    if (!fallbackOrganization) return;
+    void switchOrganization(fallbackOrganization.id);
   }, [activeOrganizationId, organizations, switchOrganization]);
 
   async function createOrganization() {
