@@ -36,6 +36,12 @@ async function persistProgress(input: {
   const completedSteps = input.steps
     .filter((step) => step.complete)
     .map((step) => step.id);
+  const shouldMarkActivation = Boolean(input.alreadyActivated || input.activate);
+  const persistedCompletedSteps = shouldMarkActivation
+    ? completedSteps.includes("activation")
+      ? completedSteps
+      : [...completedSteps, "activation"]
+    : completedSteps.filter((step) => step !== "activation");
   const firstIncompleteIndex = input.steps.findIndex(
     (step) => !step.complete && !step.optional && step.id !== "activation"
   );
@@ -52,20 +58,14 @@ async function persistProgress(input: {
       id: newId("onboardingProgress"),
       organizationId: input.organizationId,
       currentStep,
-      completedSteps:
-        input.readyToActivate && !completedSteps.includes("activation")
-          ? [...completedSteps, "activation"]
-          : completedSteps,
+      completedSteps: persistedCompletedSteps,
       activatedAt,
     })
     .onConflictDoUpdate({
       target: schema.onboardingProgress.organizationId,
       set: {
         currentStep,
-        completedSteps:
-          input.readyToActivate && !completedSteps.includes("activation")
-            ? [...completedSteps, "activation"]
-            : completedSteps,
+        completedSteps: persistedCompletedSteps,
         ...(activatedAt ? { activatedAt } : {}),
         updatedAt: new Date(),
       },
