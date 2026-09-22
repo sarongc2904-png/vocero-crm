@@ -138,6 +138,20 @@ export default async function DashboardPage() {
             icon={Clock3}
           />
           <MetricCard
+            label="Sin próxima acción"
+            value={data.pipeline.leadsWithoutNextAction}
+            detail="Leads abiertos sin seguimiento programado"
+            href="/pipeline"
+            icon={Clock3}
+          />
+          <MetricCard
+            label="Seguimientos vencidos"
+            value={data.pipeline.overdueNextActions}
+            detail="Próximas acciones cuya fecha ya pasó"
+            href="/pipeline"
+            icon={MessageCircleWarning}
+          />
+          <MetricCard
             label="Agente IA"
             value={data.ai.enabled && data.ai.configured ? "Activo" : "Revisar"}
             detail={
@@ -339,15 +353,27 @@ export default async function DashboardPage() {
           </div>
 
           <div className="rounded-xl border bg-background p-4 shadow-sm">
-            <p className="kicker mb-3">Datos todavía no formalizados</p>
+            <p className="kicker mb-3">Seguimiento comercial</p>
             <div className="space-y-3 text-sm">
               <div className="rounded-lg bg-subtle p-3">
-                <p className="font-semibold">Leads calificados</p>
-                <p className="mt-1 text-xs text-text-3">No disponible aún. {data.unavailable.qualifiedLeads}.</p>
+                <p className="font-semibold">Sin próxima acción</p>
+                <p className="mt-1 text-2xl font-bold">{data.pipeline.leadsWithoutNextAction}</p>
+                <p className="mt-1 text-xs text-text-3">
+                  Leads abiertos que todavía no tienen una acción y fecha programadas.
+                </p>
               </div>
               <div className="rounded-lg bg-subtle p-3">
-                <p className="font-semibold">Leads sin próxima acción</p>
-                <p className="mt-1 text-xs text-text-3">No disponible aún. {data.unavailable.nextAction}.</p>
+                <p className="font-semibold">Seguimientos vencidos</p>
+                <p className="mt-1 text-2xl font-bold">{data.pipeline.overdueNextActions}</p>
+                <p className="mt-1 text-xs text-text-3">
+                  Acciones programadas cuya fecha ya pasó y requieren atención.
+                </p>
+              </div>
+              <div className="rounded-lg bg-subtle p-3">
+                <p className="font-semibold">Leads calificados</p>
+                <p className="mt-1 text-xs text-text-3">
+                  No disponible aún. {data.unavailable.qualifiedLeads}.
+                </p>
               </div>
             </div>
           </div>
