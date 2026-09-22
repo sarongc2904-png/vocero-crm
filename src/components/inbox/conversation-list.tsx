@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Search, Sparkles, UserRound, X } from "lucide-react";
+import { Clock3, Search, Sparkles, UserRound, X } from "lucide-react";
 import type { ConversationDto } from "@/lib/types";
 import { CHANNEL_LABEL, type Channel } from "@/lib/channels";
 import { ChannelBadge } from "@/components/channel-badge";
@@ -74,7 +74,7 @@ export function ConversationList({
   onSeeded: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [filter, setFilter] = useState<"all" | "attention" | "unread">("all");
   const [stage, setStage] = useState<string>("all");
   const [inbox, setInbox] = useState<Channel | "all">("all");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -111,8 +111,19 @@ export function ConversationList({
   const inboxCount = (ch: Channel) =>
     searched.filter((c) => c.channel === ch).length;
   const unreadCount = inInbox.filter((c) => c.unreadCount > 0).length;
+  const needsAttention = (conversation: ConversationDto) =>
+    Boolean(
+      conversation.handoffAt ||
+        conversation.needsReply30m ||
+        conversation.nextActionOverdue
+    );
+  const attentionCount = inInbox.filter(needsAttention).length;
   const visible =
-    filter === "unread" ? inInbox.filter((c) => c.unreadCount > 0) : inInbox;
+    filter === "unread"
+      ? inInbox.filter((c) => c.unreadCount > 0)
+      : filter === "attention"
+        ? inInbox.filter(needsAttention)
+        : inInbox;
   // Con un solo canal encendido no hay bandejas que distinguir: ni marca en
   // los renglones ni filtro. La pantalla queda exactamente como antes de 014.
   const multiChannel = channels.length > 1;
@@ -194,6 +205,7 @@ export function ConversationList({
         {(
           [
             { id: "all", label: "Todas", count: inInbox.length },
+            { id: "attention", label: "Requieren atención", count: attentionCount },
             { id: "unread", label: "No leídas", count: unreadCount },
           ] as const
         ).map((f) => (
@@ -326,6 +338,18 @@ export function ConversationList({
                           <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
                             <UserRound className="h-3 w-3" strokeWidth={1.7} />
                             Atención humana
+                          </span>
+                        )}
+                        {!c.handoffAt && c.needsReply30m && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
+                            <Clock3 className="h-3 w-3" strokeWidth={1.7} />
+                            Sin respuesta
+                          </span>
+                        )}
+                        {!c.handoffAt && !c.needsReply30m && c.nextActionOverdue && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
+                            <Clock3 className="h-3 w-3" strokeWidth={1.7} />
+                            Seguimiento vencido
                           </span>
                         )}
                       </span>
