@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus } from "lucide-react";
 
 type OrganizationOption = {
   id: string;
@@ -22,10 +21,8 @@ function statusLabel(status: OrganizationOption["commercialStatus"]) {
 
 export function OrganizationSwitcher({
   activeOrganizationId,
-  canCreate,
 }: {
   activeOrganizationId: string;
-  canCreate: boolean;
 }) {
   const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
   const [busy, setBusy] = useState(false);
@@ -71,19 +68,6 @@ export function OrganizationSwitcher({
     void switchOrganization(fallbackOrganization.id);
   }, [activeOrganizationId, organizations, switchOrganization]);
 
-  async function createOrganization() {
-    const name = window.prompt("Nombre de la nueva organización")?.trim();
-    if (!name) return;
-    setBusy(true);
-    const response = await fetch("/api/organizations", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name }),
-    }).catch(() => null);
-    if (response?.ok) window.location.reload();
-    else setBusy(false);
-  }
-
   if (organizations.length === 0) return null;
 
   return (
@@ -104,18 +88,6 @@ export function OrganizationSwitcher({
           </option>
         ))}
       </select>
-      {canCreate && (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void createOrganization()}
-          className="rounded-sm border bg-background p-1.5 text-text-2 hover:bg-accent disabled:opacity-50"
-          title="Crear organización"
-          aria-label="Crear organización"
-        >
-          <Plus className="h-4 w-4" />
-        </button>
-      )}
     </div>
   );
 }
