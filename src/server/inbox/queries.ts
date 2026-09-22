@@ -51,6 +51,22 @@ export async function listConversations(
         and coalesce(m.wa_timestamp, m.created_at) > ${schema.conversation.lastInboundAt}
     )
   )`;
+  const sendFailedSql = sql<boolean>`exists (
+    select 1
+    from message failed
+    where failed.organization_id = ${schema.conversation.organizationId}
+      and failed.conversation_id = ${schema.conversation.id}
+      and failed.direction = 'out'
+      and failed.status = 'failed'
+      and not exists (
+        select 1
+        from message later
+        where later.organization_id = failed.organization_id
+          and later.conversation_id = failed.conversation_id
+          and later.direction = 'out'
+          and later.created_at > failed.created_at
+      )
+  )`;
 
   const rows = await db
     .select({
@@ -61,6 +77,7 @@ export async function listConversations(
       nextActionType: nextActionTypeSql,
       nextActionAt: nextActionAtSql,
       needsReply30m: needsReply30mSql,
+      sendFailed: sendFailedSql,
     })
     .from(schema.conversation)
     .innerJoin(
@@ -88,7 +105,8 @@ export async function listConversations(
       r.stageName,
       r.nextActionType,
       r.nextActionAt,
-      r.needsReply30m
+      r.needsReply30m,
+      r.sendFailed
     )
   );
 }
@@ -153,7 +171,8 @@ export function serializeConversation(
   stageName: string | null = null,
   nextActionType: string | null = null,
   nextActionAt: Date | null = null,
-  needsReply30m = false
+  needsReply30m = false,
+  sendFailed = false
 ): ConversationDto {
   return {
     id: c.id,
@@ -164,6 +183,7 @@ export function serializeConversation(
     handoffAt: c.handoffAt?.toISOString() ?? null,
     handoffReason: c.handoffReason,
     needsReply30m,
+    sendFailed,
     nextActionType: (
       nextActionType === "llamar" ||
       nextActionType === "whatsapp" ||
