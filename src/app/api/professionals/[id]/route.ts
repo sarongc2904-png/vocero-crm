@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
-import { BeautyCatalogError, updateProfessional } from "@/server/beauty/catalog";
+import { BeautyCatalogError, deleteProfessional, updateProfessional } from "@/server/beauty/catalog";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -29,6 +29,23 @@ export const PATCH = withOrgPermissions(
           body.data
         ),
       });
+    } catch (error) {
+      if (error instanceof BeautyCatalogError) {
+        return apiError(error.code === "not_found" ? 404 : 422, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+);
+
+
+export const DELETE = withOrgPermissions(
+  ["settings.update"],
+  async (session, _req: Request, context: Params) => {
+    const { id } = await context.params;
+    try {
+      await deleteProfessional(session.organizationId, id);
+      return new Response(null, { status: 204 });
     } catch (error) {
       if (error instanceof BeautyCatalogError) {
         return apiError(error.code === "not_found" ? 404 : 422, error.code, error.message);
