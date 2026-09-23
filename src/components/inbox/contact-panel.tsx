@@ -234,7 +234,7 @@ export function ContactPanel({
                 />
                 <p className="text-[11px] leading-relaxed text-warning-text">
                   {aiConfigured
-                    ? "El agente de Vocero no responde por su cuenta. Configura lo básico y enciéndelo (o conecta tu propio bot por la API)."
+                    ? "El agente de Conecta Digital no responde por su cuenta. Configura lo básico y enciéndelo (o conecta tu propio bot por la API)."
                     : "Falta la clave de IA de la instancia (OPENROUTER_API_TOKEN) para que el agente responda, o conecta tu propio bot por la API."}
                   {aiConfigured && (
                     <Link
