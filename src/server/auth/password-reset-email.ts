@@ -21,9 +21,9 @@ export async function sendPasswordResetEmail(input: {
     body: JSON.stringify({
       from,
       to: [input.to],
-      subject: "Restablece tu contraseña",
+      subject: "Conecta Digital — restablece tu contraseña",
       text: [
-        "Recibimos una solicitud para restablecer tu contraseña.",
+        "Recibimos una solicitud para restablecer tu contraseña de Conecta Digital.",
         "",
         "Abre este enlace para crear una nueva contraseña:",
         input.resetUrl,
