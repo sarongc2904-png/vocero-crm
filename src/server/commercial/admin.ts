@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { asc, eq, sql } from "drizzle-orm";
 import { getAuth, runInternalSignup } from "@/lib/auth";
 import { getDb, schema } from "@/lib/db";
@@ -34,7 +35,7 @@ async function recordCommercialAudit(input: {
       after_state,
       created_at
     ) values (
-      ${`caa_${crypto.randomUUID()}`},
+      ${`caa_${randomUUID()}`},
       ${input.actorUserId},
       ${input.action},
       ${input.organizationId ?? null},
