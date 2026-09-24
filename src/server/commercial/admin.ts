@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { getAuth, runInternalSignup } from "@/lib/auth";
 import { getDb, schema } from "@/lib/db";
 import { createOrganizationForOwner } from "@/server/auth/organizations";
@@ -14,6 +14,37 @@ export const COMMERCIAL_ACTIONS = [
 ] as const;
 
 export type CommercialAdminAction = (typeof COMMERCIAL_ACTIONS)[number];
+
+async function recordCommercialAudit(input: {
+  actorUserId: string;
+  action: string;
+  organizationId?: string | null;
+  planId?: string | null;
+  beforeState?: unknown;
+  afterState?: unknown;
+}) {
+  await getDb().execute(sql`
+    insert into commercial_admin_audit (
+      id,
+      actor_user_id,
+      action,
+      organization_id,
+      plan_id,
+      before_state,
+      after_state,
+      created_at
+    ) values (
+      ${`caa_${crypto.randomUUID()}`},
+      ${input.actorUserId},
+      ${input.action},
+      ${input.organizationId ?? null},
+      ${input.planId ?? null},
+      ${JSON.stringify(input.beforeState ?? null)}::jsonb,
+      ${JSON.stringify(input.afterState ?? null)}::jsonb,
+      now()
+    )
+  `);
+}
 
 export async function listCommercialAccounts() {
   const db = getDb();
@@ -89,6 +120,7 @@ export async function updateCommercialAccount(input: {
   action: CommercialAdminAction;
   days?: number;
   planId?: string;
+  actorUserId: string;
 }) {
   const db = getDb();
   const [entitlement] = await db
@@ -99,6 +131,15 @@ export async function updateCommercialAccount(input: {
   if (!entitlement) throw new Error("entitlement_not_found");
 
   const now = new Date();
+  const beforeState = {
+    status: entitlement.status,
+    planId: entitlement.planId,
+    trialStartedAt: entitlement.trialStartedAt?.toISOString() ?? null,
+    trialEndsAt: entitlement.trialEndsAt?.toISOString() ?? null,
+    currentPeriodEndsAt: entitlement.currentPeriodEndsAt?.toISOString() ?? null,
+    suspendedAt: entitlement.suspendedAt?.toISOString() ?? null,
+    cancelledAt: entitlement.cancelledAt?.toISOString() ?? null,
+  };
 
   if (input.action === "extend_trial") {
     const days = Math.max(1, Math.min(365, input.days ?? 1));
@@ -172,13 +213,26 @@ export async function updateCommercialAccount(input: {
     .where(eq(schema.organizationEntitlement.organizationId, input.organizationId))
     .limit(1);
 
-  return updated
+  const result = updated
     ? {
         ...updated,
         trialEndsAt: updated.trialEndsAt?.toISOString() ?? null,
         currentPeriodEndsAt: updated.currentPeriodEndsAt?.toISOString() ?? null,
       }
     : null;
+
+  if (result) {
+    await recordCommercialAudit({
+      actorUserId: input.actorUserId,
+      action: `account.${input.action}`,
+      organizationId: input.organizationId,
+      planId: result.planId,
+      beforeState,
+      afterState: result,
+    });
+  }
+
+  return result;
 }
 
 
@@ -189,6 +243,7 @@ export async function createCommercialClient(input: {
   password: string;
   planId: string;
   trialDays?: number;
+  actorUserId: string;
 }) {
   const db = getDb();
 
@@ -248,7 +303,7 @@ export async function createCommercialClient(input: {
       eq(schema.organizationEntitlement.organizationId, organization.id)
     );
 
-  return {
+  const result = {
     organizationId: organization.id,
     organizationName: organization.name,
     organizationSlug: organization.slug,
@@ -260,16 +315,43 @@ export async function createCommercialClient(input: {
     trialDays,
     trialEndsAt: trialDays > 0 ? trialEndsAt.toISOString() : null,
   };
+
+  await recordCommercialAudit({
+    actorUserId: input.actorUserId,
+    action: "client.create",
+    organizationId: organization.id,
+    planId: plan.id,
+    afterState: result,
+  });
+
+  return result;
 }
 
 export async function updateCommercialPlan(input: {
   planId: string;
   monthlyPriceCents: number;
   trialDays: number;
+  actorUserId: string;
 }) {
   const monthlyPriceCents = Math.max(0, Math.trunc(input.monthlyPriceCents));
   const trialDays = Math.max(0, Math.min(365, Math.trunc(input.trialDays)));
-  const [updated] = await getDb()
+  const db = getDb();
+  const [before] = await db
+    .select({
+      id: schema.commercialPlan.id,
+      code: schema.commercialPlan.code,
+      name: schema.commercialPlan.name,
+      monthlyPriceCents: schema.commercialPlan.monthlyPriceCents,
+      currency: schema.commercialPlan.currency,
+      trialDays: schema.commercialPlan.trialDays,
+      active: schema.commercialPlan.active,
+    })
+    .from(schema.commercialPlan)
+    .where(eq(schema.commercialPlan.id, input.planId))
+    .limit(1);
+  if (!before) throw new Error("plan_not_found");
+
+  const [updated] = await db
     .update(schema.commercialPlan)
     .set({
       monthlyPriceCents,
@@ -287,5 +369,14 @@ export async function updateCommercialPlan(input: {
       active: schema.commercialPlan.active,
     });
   if (!updated) throw new Error("plan_not_found");
+
+  await recordCommercialAudit({
+    actorUserId: input.actorUserId,
+    action: "plan.update",
+    planId: input.planId,
+    beforeState: before,
+    afterState: updated,
+  });
+
   return updated;
 }
