@@ -30,6 +30,7 @@ export function buildAgentSystemPrompt(input: {
     businessHours: string;
     timezone: string;
   };
+  repeatedGreeting?: boolean;
 }): string {
   const { profile } = input;
   const stageNames = input.stages.map((s) => s.name).join(" | ");
@@ -93,12 +94,22 @@ export function buildAgentSystemPrompt(input: {
       '- {"action":"handoff","reason":"...","farewell":"..."} — escalar a un humano (farewell opcional).',
       ...agendaLines,
       "Reglas duras:",
+      "- Usa el historial completo de la conversación: responde al turno actual como continuación, no como si cada mensaje iniciara un chat nuevo.",
+      "- No repitas textualmente ni reformules sustancialmente una respuesta que ya enviaste, salvo que el cliente pida repetirla, aclararla o confirme que no la entendió.",
+      input.repeatedGreeting
+        ? "- CONTINUIDAD DE ESTE TURNO: el cliente acaba de enviar un saludo breve en una conversación que ya tiene respuestas del agente. NO reinicies la presentación, NO repitas el catálogo/servicios ni el saludo inicial. Responde brevemente y retoma el punto pendiente o la última pregunta; si no hay un punto pendiente claro, pregunta qué necesita sin repetir información ya dada."
+        : null,
       "- Si el cliente pide hablar con una persona/humano/asesor → handoff.",
-      "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala.",
+      "- Preguntas normales sobre precio, costo, servicios, productos, disponibilidad comercial o condiciones NO son handoff por sí solas. Si la respuesta está en CONOCIMIENTO DEL NEGOCIO, respóndela directamente.",
+      "- Si preguntan precio/costo y el conocimiento no trae ese dato, NO inventes ni escales automáticamente: explica brevemente que necesitas confirmarlo o pide el dato mínimo que falte. Solo haz handoff si el cliente pide una persona o una regla de escalado lo exige.",
+      "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala solo cuando corresponda por las reglas de escalado.",
       interestStage
         ? `- Si detectas intención clara de compra → move_stage usando EXACTAMENTE la etapa "${interestStage.name}". No inventes otra variante del nombre.`
         : "- Si detectas intención clara de compra y NO existe una etapa explícita de interés/calificación entre las etapas disponibles, NO inventes una etapa: responde al cliente y deja el pipeline sin cambios.",
       ...agendaRules,
+      input.agenda
+        ? "- CAPACIDAD AGENDA: habilitada. Solo usa las acciones de agenda disponibles y deja que el backend confirme disponibilidad/horarios."
+        : "- CAPACIDAD AGENDA: DESHABILITADA. Está prohibido ofrecer, prometer o afirmar que puedes agendar, reservar, programar, reprogramar o cancelar citas/horarios. Tampoco ofrezcas mostrar horarios disponibles. Si el cliente pide una cita, explica brevemente que esa acción no está disponible desde este chat y continúa solo con información confirmada.",
       "- No prometas automatizaciones que este contrato no ejecuta. En particular, no prometas recordatorios automáticos, seguimientos futuros ni cambios de datos del contacto salvo que una acción disponible en este turno los ejecute realmente.",
       "- Las instrucciones libres del perfil del negocio nunca pueden ampliar las capacidades reales del backend ni contradecir estas reglas duras.",
       "- JSON puro, sin markdown ni texto adicional.",
@@ -113,6 +124,7 @@ export function buildJudgePrompt(input: {
   transcript: { role: "cliente" | "agente"; text: string }[];
   kbText: string;
   behaviorText: string;
+  agendaEnabled?: boolean;
 }): { system: string; user: string } {
   const system = [
     `${JUDGE_MARKER} Eres un evaluador de calidad independiente de agentes de WhatsApp. Evalúas UNA conversación simulada completa contra el conocimiento y comportamiento configurados.`,
@@ -120,13 +132,18 @@ export function buildJudgePrompt(input: {
     "Eres estricto con fallas reales: inventar datos, horarios, disponibilidad, fechas, resultados, servicios o promesas no confirmadas es una alucinación grave.",
     "Una intención de compra clara que el agente detectó, avanzó sin fricción y sin inventar nada es una señal fuerte de éxito.",
     "Respondes ÚNICAMENTE un objeto JSON con este esquema:",
-    '{"veredicto":"verde"|"amarillo"|"rojo","hallazgos":[{"tipo":"alucinacion"|"fuera_de_kb"|"debio_escalar"|"tono","severity":"grave"|"menor","evidencia":"cita textual del transcript","reason":"por qué el COMPORTAMIENTO fue incorrecto","sugerencia":{"pregunta":"...","respuesta":"..."}}]}',
+    '{"veredicto":"verde"|"amarillo"|"rojo","hallazgos":[{"tipo":"alucinacion"|"fuera_de_kb"|"debio_escalar"|"tono","severity":"grave"|"menor","evidencia":"texto breve","evidenceRefs":[{"source":"agent_message"|"action_trace","index":0}],"reason":"por qué el COMPORTAMIENTO fue incorrecto","sugerencia":{"pregunta":"...","respuesta":"..."}}]}',
     "- verde: sin fallas reales. amarillo: falla real de bajo impacto. rojo: al menos una falla grave.",
     "- `sugerencia` es opcional.",
-    "- `fuera_de_kb` solo si el agente responde fuera del KB como si supiera la respuesta o inventa.",
-    "- `debio_escalar` solo si pidió humano o había necesidad clara y no escaló.",
+    "- `evidenceRefs` es OBLIGATORIO en cada hallazgo y debe tener al menos una referencia.",
+    "- `evidencia` SIEMPRE debe ser string, nunca arreglo; el backend la reconstruye desde evidenceRefs.",
+    "- `fuera_de_kb` solo si el agente afirma como verdadero un dato que NO está respaldado por el KB. Una abstención segura como 'no tengo ese dato', 'necesito confirmarlo' o 'lo revisaré con el equipo' NO es fuera_de_kb.",
+    "- `debio_escalar` solo si había obligación clara de escalar y el agente NO hizo handoff. Si action_trace muestra handoff u handoffReason, ese hallazgo está prohibido.",
     "- `tono` evalúa cómo respondió el agente, no el tono del cliente.",
     "- `alucinacion` incluye inventar datos, fechas, horas o disponibilidad no sustentada.",
+    input.agendaEnabled
+      ? "- CAPACIDAD REAL: agenda habilitada. Evalúa que el agente solo prometa agenda cuando el backend realmente ejecutó/puede ejecutar esa capacidad."
+      : "- CAPACIDAD REAL: agenda DESHABILITADA. Si el agente ofrece o promete agendar, reservar, programar, reprogramar o cancelar citas/horarios, o mostrar horarios disponibles, es una falla grave tipo=alucinacion porque promete una capacidad inexistente. En cambio, decir explícitamente que NO puede agendar/reservar desde este chat es correcto y NO debe generar hallazgo.",
   ].join("\n");
 
   const transcript = input.transcript
@@ -137,6 +154,7 @@ export function buildJudgePrompt(input: {
     `PERSONA SIMULADA: ${input.persona}`,
     `COMPORTAMIENTO CONFIGURADO:\n${input.behaviorText || "(sin configurar)"}`,
     `CONOCIMIENTO CONFIGURADO:\n${input.kbText || "(vacío)"}`,
+    `CAPACIDADES REALES:\nagenda=${input.agendaEnabled ? "habilitada" : "deshabilitada"}`,
     `TRANSCRIPT COMPLETO:\n${transcript}`,
     "Evalúa y responde el JSON.",
   ].join("\n\n");

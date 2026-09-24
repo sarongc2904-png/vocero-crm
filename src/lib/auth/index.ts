@@ -11,6 +11,7 @@ import {
   resolveActiveOrganizationId,
 } from "@/server/auth/on-signup";
 import { isPublicSignupAllowed } from "@/server/auth/registration";
+import { sendPasswordResetEmail } from "@/server/auth/password-reset-email";
 
 /**
  * Contexto interno del proceso: permite que el alta de cuentas de equipo
@@ -38,7 +39,11 @@ function isInternalSignup(): boolean {
   return internalSignupContext().getStore() === true;
 }
 
-const RATE_LIMITED_PATHS = new Set(["/sign-in/email", "/sign-up/email"]);
+const RATE_LIMITED_PATHS = new Set([
+  "/sign-in/email",
+  "/sign-up/email",
+  "/request-password-reset",
+]);
 const BLOCKED_ORGANIZATION_MUTATIONS = new Set([
   "/organization/create",
   "/organization/update",
@@ -81,6 +86,16 @@ function createAuth() {
       enabled: true,
       requireEmailVerification: false,
       minPasswordLength: 8,
+      resetPasswordTokenExpiresIn: 3600,
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: async ({ user, url }) => {
+        void sendPasswordResetEmail({
+          to: user.email,
+          resetUrl: url,
+        }).catch((error) => {
+          console.error("[auth] no se pudo enviar recuperación de contraseña", error);
+        });
+      },
     },
     plugins: [
       organization({

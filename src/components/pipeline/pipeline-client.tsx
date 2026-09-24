@@ -36,6 +36,21 @@ export type BoardLead = {
   amountCents: number | null;
   currency: string | null;
   priority: PriorityValue | null;
+  nextActionType: "llamar" | "whatsapp" | "cotizacion" | "seguimiento" | "cita" | "otro" | null;
+  nextActionAt: string | null;
+  nextActionNote: string | null;
+};
+
+const NEXT_ACTION_LABEL: Record<
+  Exclude<BoardLead["nextActionType"], null>,
+  string
+> = {
+  llamar: "Llamar",
+  whatsapp: "WhatsApp",
+  cotizacion: "Cotización",
+  seguimiento: "Seguimiento",
+  cita: "Cita",
+  otro: "Otro",
 };
 
 export function PipelineClient() {
@@ -135,6 +150,25 @@ export function PipelineClient() {
     void refetch();
   }
 
+  async function guardarProximaAccion(
+    leadId: string,
+    nextAction: {
+      nextActionType: BoardLead["nextActionType"];
+      nextActionAt: string | null;
+      nextActionNote: string | null;
+    }
+  ) {
+    setLeads((prev) =>
+      prev.map((l) => (l.id === leadId ? { ...l, ...nextAction } : l))
+    );
+    await fetch(`/api/pipeline/leads/${leadId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(nextAction),
+    }).catch(() => null);
+    void refetch();
+  }
+
   async function onDragEnd(event: DragEndEvent) {
     setActiveLead(null);
     const leadId = String(event.active.id);
@@ -228,6 +262,9 @@ export function PipelineClient() {
           onMoveStage={(stageId) => moverDesdeCajon(abierto.id, stageId)}
           onAmount={(cents) => void guardarMonto(abierto.id, cents)}
           onPriority={(p) => void guardarPrioridad(abierto.id, p)}
+          onNextAction={(nextAction) =>
+            void guardarProximaAccion(abierto.id, nextAction)
+          }
         />
       )}
 
@@ -422,6 +459,10 @@ function LeadCard({
   overlay?: boolean;
   onEditAmount?: (lead: BoardLead) => void;
 }) {
+  const nextActionOverdue =
+    Boolean(lead.nextActionAt) &&
+    Date.parse(lead.nextActionAt as string) < Date.now();
+
   return (
     <div
       className={cn(
@@ -441,6 +482,23 @@ function LeadCard({
               ? `Actividad: ${formatTime(lead.lastActivityAt)}`
               : "Sin actividad"}
           </p>
+          {lead.nextActionType && lead.nextActionAt && (
+            <p
+              className={cn(
+                "mt-0.5 text-[11px] font-medium",
+                nextActionOverdue ? "text-warning-text" : "text-text-2"
+              )}
+            >
+              {nextActionOverdue ? "Vencida · " : "Siguiente · "}
+              {NEXT_ACTION_LABEL[lead.nextActionType]} ·{" "}
+              {new Date(lead.nextActionAt).toLocaleString("es-MX", {
+                day: "2-digit",
+                month: "short",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </p>
+          )}
         </div>
         {lead.conversationId && (
           <Link

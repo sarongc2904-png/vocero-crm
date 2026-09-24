@@ -24,6 +24,7 @@ export function AppShell({
   branding,
   userName,
   role,
+  isSuperadmin = false,
   activeOrganizationId,
   theme,
   commit,
@@ -33,6 +34,7 @@ export function AppShell({
   branding: Branding;
   userName: string;
   role: string;
+  isSuperadmin?: boolean;
   activeOrganizationId: string;
   theme: ThemePreference;
   /** Commit resuelto en el servidor (build-arg o variable de la plataforma). */
@@ -75,6 +77,7 @@ export function AppShell({
         commit={commit}
         userName={userName}
         role={role}
+        isSuperadmin={isSuperadmin}
         activeOrganizationId={activeOrganizationId}
         theme={theme}
         agenda={agenda}

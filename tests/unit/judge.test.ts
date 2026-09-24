@@ -7,6 +7,25 @@ vi.mock("@/lib/ai", () => ({
 }));
 
 import { computeScore, judgeCase } from "@/server/lab/judge";
+import { buildJudgePrompt } from "@/server/ai/prompts";
+
+describe("judge prompt contract", () => {
+  it("declara evidenceRefs obligatorio y evidencia como string", () => {
+    const prompt = buildJudgePrompt({
+      persona: "prueba",
+      transcript: [],
+      kbText: "",
+      behaviorText: "",
+      agendaEnabled: false,
+    }).system;
+
+    expect(prompt).toContain('"evidenceRefs"');
+    expect(prompt).toContain("`evidenceRefs` es OBLIGATORIO");
+    expect(prompt).toContain("`evidencia` SIEMPRE debe ser string");
+    expect(prompt).toContain("agenda DESHABILITADA");
+    expect(prompt).toContain("falla grave tipo=alucinacion");
+  });
+});
 
 describe("judgeCase (FR-032)", () => {
   beforeEach(() => chatJson.mockReset());

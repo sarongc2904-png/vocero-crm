@@ -99,6 +99,20 @@ export default async function DashboardPage() {
             icon={MessageCircleWarning}
           />
           <MetricCard
+            label="Sin respuesta >30 min"
+            value={data.conversations.unanswered30m}
+            detail="Conversaciones con entrada pendiente de respuesta"
+            href="/inbox"
+            icon={MessageCircleWarning}
+          />
+          <MetricCard
+            label="Mensajes no enviados"
+            value={data.conversations.failedOutgoing}
+            detail="Últimos intentos de salida que fallaron y requieren revisión"
+            href="/inbox"
+            icon={MessageCircleWarning}
+          />
+          <MetricCard
             label="Leads en pipeline"
             value={data.pipeline.totalLeads}
             detail={`${data.pipeline.newLeads} en la primera etapa abierta`}
@@ -136,6 +150,20 @@ export default async function DashboardPage() {
             detail="Conversaciones todavía sin agente/equipo"
             href="/inbox"
             icon={Clock3}
+          />
+          <MetricCard
+            label="Sin próxima acción"
+            value={data.pipeline.leadsWithoutNextAction}
+            detail="Leads abiertos sin seguimiento programado"
+            href="/pipeline"
+            icon={Clock3}
+          />
+          <MetricCard
+            label="Seguimientos vencidos"
+            value={data.pipeline.overdueNextActions}
+            detail="Próximas acciones cuya fecha ya pasó"
+            href="/pipeline"
+            icon={MessageCircleWarning}
           />
           <MetricCard
             label="Agente IA"
@@ -339,15 +367,27 @@ export default async function DashboardPage() {
           </div>
 
           <div className="rounded-xl border bg-background p-4 shadow-sm">
-            <p className="kicker mb-3">Datos todavía no formalizados</p>
+            <p className="kicker mb-3">Seguimiento comercial</p>
             <div className="space-y-3 text-sm">
               <div className="rounded-lg bg-subtle p-3">
-                <p className="font-semibold">Leads calificados</p>
-                <p className="mt-1 text-xs text-text-3">No disponible aún. {data.unavailable.qualifiedLeads}.</p>
+                <p className="font-semibold">Sin próxima acción</p>
+                <p className="mt-1 text-2xl font-bold">{data.pipeline.leadsWithoutNextAction}</p>
+                <p className="mt-1 text-xs text-text-3">
+                  Leads abiertos que todavía no tienen una acción y fecha programadas.
+                </p>
               </div>
               <div className="rounded-lg bg-subtle p-3">
-                <p className="font-semibold">Leads sin próxima acción</p>
-                <p className="mt-1 text-xs text-text-3">No disponible aún. {data.unavailable.nextAction}.</p>
+                <p className="font-semibold">Seguimientos vencidos</p>
+                <p className="mt-1 text-2xl font-bold">{data.pipeline.overdueNextActions}</p>
+                <p className="mt-1 text-xs text-text-3">
+                  Acciones programadas cuya fecha ya pasó y requieren atención.
+                </p>
+              </div>
+              <div className="rounded-lg bg-subtle p-3">
+                <p className="font-semibold">Leads calificados</p>
+                <p className="mt-1 text-xs text-text-3">
+                  No disponible aún. {data.unavailable.qualifiedLeads}.
+                </p>
               </div>
             </div>
           </div>

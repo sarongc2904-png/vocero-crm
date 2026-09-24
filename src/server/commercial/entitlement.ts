@@ -22,7 +22,9 @@ export function isCommerciallyAllowed(
 ) {
   return (
     status === "active" ||
-    (status === "trial" && Boolean(trialEndsAt) && trialEndsAt!.getTime() > now.getTime())
+    (status === "trial" &&
+      Boolean(trialEndsAt) &&
+      trialEndsAt!.getTime() > now.getTime())
   );
 }
 
@@ -66,4 +68,21 @@ export async function getCommercialAccess(
       trialDays: row.plan.trialDays,
     },
   };
+}
+
+/**
+ * Gate defensivo para procesos sin sesión (webhooks, workers, jobs).
+ * Si el tenant no tiene entitlement válido o el lookup falla, se considera
+ * bloqueado: los datos entrantes pueden persistirse, pero no se ejecutan
+ * funciones premium ni envíos automáticos.
+ */
+export async function hasCommercialAccess(
+  organizationId: string,
+  now = new Date()
+): Promise<boolean> {
+  try {
+    return (await getCommercialAccess(organizationId, now)).allowed;
+  } catch {
+    return false;
+  }
 }

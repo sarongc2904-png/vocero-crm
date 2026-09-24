@@ -31,6 +31,10 @@ const envSchema = z.object({
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api"),
   OPENROUTER_MODEL: z.string().optional(),
   OPENROUTER_JUDGE_MODEL: z.string().optional(),
+  // Correo transaccional para recuperación de contraseña.
+  // Si faltan, la solicitud mantiene respuesta neutra pero no puede enviar correo.
+  RESEND_API_KEY: z.string().optional(),
+  AUTH_EMAIL_FROM: z.string().optional(),
   // 014/017: canales encendidos, separados por coma. WhatsApp siempre esta on.
   // Ej.: CHANNELS=whatsapp,instagram,messenger. Sin ella, la instancia es solo
   // WhatsApp y las superficies de los demas canales responden 404.

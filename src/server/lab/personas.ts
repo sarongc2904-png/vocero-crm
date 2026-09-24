@@ -1,101 +1,144 @@
 /**
- * Las 6 personas GUIONADAS del Laboratorio (FR-030). El cliente simulado no
- * usa LLM: son secuencias fijas — determinismo total del lado del cliente.
- * El agente que responde es el REAL (mismo pipeline de US3).
+ * Escenarios del Laboratorio.
+ *
+ * Los tipos son globales, pero los guiones son configurables por organización.
+ * Nunca deben contener fixtures de una industria concreta.
  */
 
+export const SCENARIO_KEYS = [
+  "comprador_decidido",
+  "pregunton_precios",
+  "cliente_enojado",
+  "fuera_de_kb",
+  "pide_humano",
+  "errores_modismos",
+] as const;
+
+export type ScenarioKey = (typeof SCENARIO_KEYS)[number];
+
 export type Persona = {
-  key: string;
+  key: ScenarioKey;
   label: string;
   description: string;
-  /** Teléfono sintético estable (jamás un número real). */
   phone: string;
   contactName: string;
   script: string[];
 };
 
-export const PERSONAS: Persona[] = [
-  {
+export type ScenarioScripts = Partial<Record<ScenarioKey, string[]>>;
+
+const META: Record<
+  ScenarioKey,
+  Omit<Persona, "script">
+> = {
+  comprador_decidido: {
     key: "comprador_decidido",
     label: "Comprador decidido",
-    description: "Sabe lo que quiere y va directo a comprar.",
+    description: "Sabe lo que quiere y va directo a comprar o contratar.",
     phone: "5210000000001",
     contactName: "[Prueba] Comprador decidido",
-    script: [
-      "Hola, buenas tardes",
-      "¿Tienen taladros inalámbricos disponibles?",
-      "Perfecto, ¿cuánto cuesta el más vendido?",
-      "Me convence, lo compro. ¿Cómo pago?",
-    ],
   },
-  {
+  pregunton_precios: {
     key: "pregunton_precios",
     label: "Preguntón de precios",
-    description: "Pregunta precio tras precio sin decidirse.",
+    description: "Pregunta opciones, precios y condiciones antes de decidir.",
     phone: "5210000000002",
     contactName: "[Prueba] Preguntón de precios",
-    script: [
-      "Hola, ¿qué precio tiene el martillo?",
-      "¿Y el desarmador de cruz?",
-      "¿Cuánto la caja de clavos de 2 pulgadas?",
-      "¿Hay descuento si llevo varias cosas?",
-      "Ok, lo voy a pensar",
-    ],
   },
-  {
+  cliente_enojado: {
     key: "cliente_enojado",
     label: "Cliente enojado",
-    description: "Llega molesto por un problema con su compra.",
+    description: "Llega molesto por un problema y exige solución.",
     phone: "5210000000003",
     contactName: "[Prueba] Cliente enojado",
-    script: [
-      "Oigan, esto es el colmo",
-      "Compré una lijadora la semana pasada y ya no prende, es una porquería",
-      "¿Me van a responder o qué? Quiero una solución YA",
-      "Pues espero que sí porque no pienso perder mi dinero",
-    ],
   },
-  {
+  fuera_de_kb: {
     key: "fuera_de_kb",
     label: "Pregunta fuera del conocimiento",
-    description: "Pregunta algo que el knowledge base no cubre (fuera_de_kb).",
+    description: "Pregunta algo que el knowledge base no cubre.",
     phone: "5210000000004",
     contactName: "[Prueba] Fuera del conocimiento",
-    script: [
-      "Hola, una pregunta",
-      "¿Cuál es su política de garantías y devoluciones?",
-      "¿Y si el producto falla a los dos meses me lo cambian?",
-      "¿Dónde reclamo la garantía?",
-    ],
   },
-  {
+  pide_humano: {
     key: "pide_humano",
     label: "Pide un humano",
-    description: "Quiere ser atendido por una persona (debe escalar).",
+    description: "Solicita expresamente atención de una persona.",
     phone: "5210000000005",
     contactName: "[Prueba] Pide humano",
-    script: [
-      "Hola",
-      "Tengo un asunto delicado con un pedido",
-      "Prefiero que me atienda una persona, quiero hablar con un humano",
-      "Gracias",
-    ],
   },
-  {
+  errores_modismos: {
     key: "errores_modismos",
     label: "Errores y modismos",
-    description: "Escribe con faltas de ortografía y modismos mexicanos.",
+    description: "Escribe con faltas de ortografía y lenguaje coloquial.",
     phone: "5210000000006",
     contactName: "[Prueba] Errores y modismos",
-    script: [
-      "ke onda, si benden pintura?",
-      "oiga y no le sabe si tienen tiner",
-      "cuanto x el galon d pintura blanca pa interiores",
-      "va, orita paso x la tienda, sale",
-    ],
   },
-];
+};
+
+export const DEFAULT_SCENARIO_SCRIPTS: Record<ScenarioKey, string[]> = {
+  comprador_decidido: [
+    "Hola, me interesa lo que ofrecen.",
+    "Ya revisé la información y quiero contratar o comprar la opción que más me convenga.",
+    "¿Cuánto cuesta y qué necesito para empezar?",
+    "Perfecto, quiero avanzar hoy. ¿Cuál es el siguiente paso?",
+  ],
+  pregunton_precios: [
+    "Hola, ¿qué opciones manejan?",
+    "¿Cuánto cuesta cada opción?",
+    "¿Qué incluye cada una?",
+    "¿Tienen algún descuento o condición especial?",
+    "Gracias, lo voy a revisar.",
+  ],
+  cliente_enojado: [
+    "Hola, necesito ayuda con algo que contraté o compré con ustedes.",
+    "Estoy molesto porque tuve un problema y necesito una solución.",
+    "¿Me pueden ayudar o comunicarme con alguien que lo resuelva?",
+  ],
+  fuera_de_kb: [
+    "Hola, tengo una pregunta.",
+    "Quiero saber algo que no aparece en la información que tienen publicada.",
+    "Si no tienen ese dato, prefiero que me lo confirme una persona.",
+  ],
+  pide_humano: [
+    "Hola.",
+    "Tengo una consulta importante.",
+    "Prefiero hablar con una persona, ¿me pueden comunicar con un asesor?",
+    "Gracias.",
+  ],
+  errores_modismos: [
+    "ola, me interesa lo q ofrecen",
+    "me dice cuanto sale y q incluye?",
+    "y como le ago para contratarlo o comprarlo?",
+    "va, gracias",
+  ],
+};
+
+export function buildPersonas(input?: {
+  enabledScenarios?: string[] | null;
+  scenarioScripts?: Record<string, string[]> | null;
+}): Persona[] {
+  const enabled = new Set(
+    input?.enabledScenarios?.filter((key): key is ScenarioKey =>
+      SCENARIO_KEYS.includes(key as ScenarioKey)
+    ) ?? SCENARIO_KEYS
+  );
+
+  return SCENARIO_KEYS.filter((key) => enabled.has(key)).map((key) => {
+    const configured = input?.scenarioScripts?.[key];
+    const script =
+      Array.isArray(configured) && configured.some((line) => line.trim())
+        ? configured.map((line) => line.trim()).filter(Boolean)
+        : DEFAULT_SCENARIO_SCRIPTS[key];
+
+    return {
+      ...META[key],
+      script,
+    };
+  });
+}
+
+export const PERSONAS = buildPersonas();
 
 export const PERSONA_LABELS: Record<string, string> = Object.fromEntries(
-  PERSONAS.map((p) => [p.key, p.label])
+  SCENARIO_KEYS.map((key) => [key, META[key].label])
 );

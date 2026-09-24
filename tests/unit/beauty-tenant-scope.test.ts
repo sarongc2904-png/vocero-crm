@@ -28,4 +28,22 @@ describe("catálogo beauty multi-tenant", () => {
       expect(route).not.toMatch(/organizationId:\s*z\./);
     }
   });
+  it("permite editar y eliminar servicios/profesionales sin salir del tenant", () => {
+    const catalog = source("src/server/beauty/catalog.ts");
+    const serviceRoute = source("src/app/api/services/[id]/route.ts");
+    const professionalRoute = source("src/app/api/professionals/[id]/route.ts");
+    const ui = source("src/components/settings/beauty-settings-client.tsx");
+
+    expect(catalog).toContain("export async function deleteService");
+    expect(catalog).toContain("export async function deleteProfessional");
+    expect(catalog.match(/\.delete\(schema\.(service|professional)\)/g)?.length ?? 0).toBe(2);
+    expect(serviceRoute).toContain("export const DELETE");
+    expect(professionalRoute).toContain("export const DELETE");
+    expect(serviceRoute).toContain("session.organizationId");
+    expect(professionalRoute).toContain("session.organizationId");
+    expect(ui).toContain("Servicio eliminado");
+    expect(ui).toContain("Profesional eliminado");
+    expect(ui).toContain("Guardar cambios");
+  });
+
 });

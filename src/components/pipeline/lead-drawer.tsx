@@ -13,6 +13,18 @@ import { Input } from "@/components/ui/input";
 import { PriorityPicker } from "./priority-picker";
 import type { BoardLead } from "./pipeline-client";
 
+const NEXT_ACTION_OPTIONS: Array<{
+  value: Exclude<BoardLead["nextActionType"], null>;
+  label: string;
+}> = [
+  { value: "llamar", label: "Llamar" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "cotizacion", label: "Enviar cotización" },
+  { value: "seguimiento", label: "Dar seguimiento" },
+  { value: "cita", label: "Agendar" },
+  { value: "otro", label: "Otro" },
+];
+
 /**
  * El trato, abierto, sin salir del tablero.
  *
@@ -29,6 +41,7 @@ export function LeadDrawer({
   onMoveStage,
   onAmount,
   onPriority,
+  onNextAction,
 }: {
   lead: BoardLead;
   stages: StageDto[];
@@ -39,10 +52,23 @@ export function LeadDrawer({
   onMoveStage: (stageId: string) => void;
   onAmount: (cents: number | null) => void;
   onPriority: (value: PriorityValue | null) => void;
+  onNextAction: (value: {
+    nextActionType: BoardLead["nextActionType"];
+    nextActionAt: string | null;
+    nextActionNote: string | null;
+  }) => void;
 }) {
   const [ficha, setFicha] = useState<FichaDto>({});
   const [monto, setMonto] = useState("");
   const [editandoMonto, setEditandoMonto] = useState(false);
+  const [nextActionType, setNextActionType] =
+    useState<BoardLead["nextActionType"]>(lead.nextActionType);
+  const [nextActionAt, setNextActionAt] = useState(
+    lead.nextActionAt ? toLocalDateTimeInput(lead.nextActionAt) : ""
+  );
+  const [nextActionNote, setNextActionNote] = useState(
+    lead.nextActionNote ?? ""
+  );
 
   const contactId = lead.contact.id;
   const moneda = lead.currency ?? currency;
@@ -57,8 +83,19 @@ export function LeadDrawer({
   useEffect(() => {
     setEditandoMonto(false);
     setMonto(lead.amountCents === null ? "" : (lead.amountCents / 100).toFixed(2));
+    setNextActionType(lead.nextActionType);
+    setNextActionAt(
+      lead.nextActionAt ? toLocalDateTimeInput(lead.nextActionAt) : ""
+    );
+    setNextActionNote(lead.nextActionNote ?? "");
     void cargarFicha();
-  }, [cargarFicha, lead.amountCents]);
+  }, [
+    cargarFicha,
+    lead.amountCents,
+    lead.nextActionAt,
+    lead.nextActionNote,
+    lead.nextActionType,
+  ]);
 
   // Escape cierra: un cajón que solo se cierra con el ratón estorba a quien
   // revisa el tablero con el teclado.
@@ -225,6 +262,87 @@ export function LeadDrawer({
             <PriorityPicker value={lead.priority} onChange={onPriority} />
           </section>
 
+          {/* Qué sigue */}
+          <section className="border-b p-4">
+            <p className="kicker">Seguimiento</p>
+            <h4 className="mt-1 text-sm font-bold">¿Qué sigue con este prospecto?</h4>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {NEXT_ACTION_OPTIONS.map((option) => {
+                const selected = nextActionType === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setNextActionType(option.value)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1.5 text-xs font-semibold transition-colors",
+                      selected
+                        ? "border-brand bg-brand text-brand-fg"
+                        : "border-border-strong bg-background text-text-2 hover:border-brand"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {nextActionType && (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-semibold text-text-2">¿Cuándo?</p>
+                <Input
+                  type="datetime-local"
+                  value={nextActionAt}
+                  onChange={(event) => setNextActionAt(event.target.value)}
+                  aria-label="Fecha y hora de próxima acción"
+                />
+                <Input
+                  value={nextActionNote}
+                  onChange={(event) => setNextActionNote(event.target.value)}
+                  maxLength={500}
+                  placeholder="Nota opcional"
+                  aria-label="Nota de próxima acción"
+                />
+              </div>
+            )}
+
+            <div className="mt-3 flex gap-2">
+              <Button
+                size="sm"
+                disabled={!nextActionType || !nextActionAt}
+                onClick={() => {
+                  if (!nextActionType || !nextActionAt) return;
+                  onNextAction({
+                    nextActionType,
+                    nextActionAt: new Date(nextActionAt).toISOString(),
+                    nextActionNote: nextActionNote.trim() || null,
+                  });
+                }}
+              >
+                Guardar seguimiento
+              </Button>
+              {lead.nextActionType && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setNextActionType(null);
+                    setNextActionAt("");
+                    setNextActionNote("");
+                    onNextAction({
+                      nextActionType: null,
+                      nextActionAt: null,
+                      nextActionNote: null,
+                    });
+                  }}
+                >
+                  Quitar
+                </Button>
+              )}
+            </div>
+          </section>
+
           {/* Dónde va */}
           <section className="border-b p-4">
             <p className="mb-2 kicker">
@@ -259,4 +377,11 @@ export function LeadDrawer({
       </aside>
     </>
   );
+}
+
+
+function toLocalDateTimeInput(value: string): string {
+  const date = new Date(value);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }

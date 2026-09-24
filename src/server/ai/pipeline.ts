@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -47,6 +47,8 @@ import {
   type ScheduleScope,
 } from "@/server/agenda/schedule-scope";
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
+import { hasCommercialAccess } from "@/server/commercial/entitlement";
+import { enforceAgentCapabilities } from "@/server/ai/capability-guard";
 
 /**
  * Compatibilidad para callers existentes: el scheduling ahora se persiste en
@@ -85,6 +87,10 @@ export async function runAgentTurn(
   if (!conversation) return;
   const organizationId = conversation.organizationId;
 
+  // Defensa para jobs ya encolados cuando el trial expira entre la ingesta y
+  // la ejecución. El mensaje queda persistido, pero la IA no consume ni envía.
+  if (!conversation.isTest && !(await hasCommercialAccess(organizationId))) return;
+
   if (conversation.handoffAt || !conversation.aiEnabled) return;
 
   const profileRows = await db
@@ -112,13 +118,34 @@ export async function runAgentTurn(
   const lastInbound = [...history].reverse().find((m) => m.direction === "in");
   if (!lastInbound) return;
 
+  const repeatedGreeting = Boolean(
+    lastInbound.text &&
+      isBareGreeting(lastInbound.text) &&
+      history.some(
+        (m) =>
+          m.direction === "out" &&
+          m.createdAt < lastInbound.createdAt &&
+          Boolean(m.text?.trim())
+      )
+  );
+
   if (!conversation.isTest && !isWindowOpen(conversation.lastInboundAt)) {
     await applyHandoff(conversationId, organizationId, "ventana");
     return;
   }
 
   if (lastInbound.text && matchesHandoffIntent(lastInbound.text)) {
-    await applyHandoff(conversationId, organizationId, "cliente");
+    const claimed = await applyHandoff(
+      conversationId,
+      organizationId,
+      "cliente"
+    );
+    if (claimed) {
+      await deliverReply(
+        conversation,
+        "Claro. Voy a pasar tu conversación a un asesor. La IA queda en pausa mientras te atienden."
+      );
+    }
     return;
   }
 
@@ -143,6 +170,8 @@ export async function runAgentTurn(
     .orderBy(asc(schema.pipelineStage.position));
 
   const agenda = agendaEnabled();
+  const safeModelReply = (text: string) =>
+    enforceAgentCapabilities({ text, agenda });
   const agendaContext = agenda
     ? { settings: await getSettings(organizationId), now: new Date() }
     : null;
@@ -201,6 +230,7 @@ export async function runAgentTurn(
         agenda,
         today: todayInfo,
         businessFact,
+        repeatedGreeting,
       }),
     },
     ...history
@@ -389,11 +419,17 @@ export async function runAgentTurn(
         stage.id
       );
       if (moveResult === "lead_missing" || moveResult === "rejected") {
-        await deliverReply(
-          conversation,
-          "Voy a pasar tu solicitud a un asesor para continuar."
+        const claimed = await applyHandoff(
+          conversationId,
+          organizationId,
+          "error"
         );
-        await applyHandoff(conversationId, organizationId, "error");
+        if (claimed) {
+          await deliverReply(
+            conversation,
+            "Voy a pasar tu solicitud a un asesor para continuar."
+          );
+        }
         return;
       }
       if (moveResult === "moved") {
@@ -403,7 +439,7 @@ export async function runAgentTurn(
         });
       }
       if (action.reply) {
-        await deliverReply(conversation, action.reply);
+        await deliverReply(conversation, safeModelReply(action.reply));
       }
       return;
     }
@@ -413,7 +449,7 @@ export async function runAgentTurn(
     case "none":
       return;
     case "reply":
-      await deliverReply(conversation, action.text);
+      await deliverReply(conversation, safeModelReply(action.text));
       return;
     case "update_lead": {
       const updated = await appendLeadNote(
@@ -422,21 +458,36 @@ export async function runAgentTurn(
         action.note
       );
       if (!updated) {
-        await deliverReply(
-          conversation,
-          "Voy a pasar tu solicitud a un asesor para continuar."
+        const claimed = await applyHandoff(
+          conversationId,
+          organizationId,
+          "error"
         );
-        await applyHandoff(conversationId, organizationId, "error");
+        if (claimed) {
+          await deliverReply(
+            conversation,
+            "Voy a pasar tu solicitud a un asesor para continuar."
+          );
+        }
         return;
       }
-      if (action.reply) await deliverReply(conversation, action.reply);
+      if (action.reply) {
+        await deliverReply(conversation, safeModelReply(action.reply));
+      }
       return;
     }
     case "handoff": {
-      if (action.farewell) {
-        await deliverReply(conversation, action.farewell);
+      // La transición se reclama ANTES de enviar el farewell. Si varios jobs
+      // quedaron en cola por mensajes consecutivos, solo uno puede ganar el
+      // handoff y por tanto solo uno envía el mensaje de transferencia.
+      const claimed = await applyHandoff(
+        conversationId,
+        organizationId,
+        "modelo"
+      );
+      if (claimed && action.farewell) {
+        await deliverReply(conversation, safeModelReply(action.farewell));
       }
-      await applyHandoff(conversationId, organizationId, "modelo");
       return;
     }
     case "offer_slots":
@@ -445,6 +496,20 @@ export async function runAgentTurn(
     case "cancel_booking":
       return;
   }
+}
+
+function isBareGreeting(text: string): boolean {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9ñ\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return /^(hola|holi|hey|buenas|buenos dias|buenas tardes|buenas noches)$/.test(
+    normalized
+  );
 }
 
 type Conversation = typeof schema.conversation.$inferSelect;
@@ -470,11 +535,17 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
     console.error(
       `[agente] la cancelación automática falló: ${String(err).slice(0, 500)}`
     );
-    await deliverReply(
-      conversation,
-      "No pude cancelar tu cita automáticamente. Un asesor continuará contigo."
+    const claimed = await applyHandoff(
+      conversation.id,
+      conversation.organizationId,
+      "error"
     );
-    await applyHandoff(conversation.id, conversation.organizationId, "error");
+    if (claimed) {
+      await deliverReply(
+        conversation,
+        "No pude cancelar tu cita automáticamente. Un asesor continuará contigo."
+      );
+    }
   }
 }
 
@@ -538,26 +609,38 @@ export async function applyHandoff(
   conversationId: string,
   organizationId: string,
   reason: "cliente" | "modelo" | "error" | "ventana"
-): Promise<void> {
+): Promise<boolean> {
   const db = getDb();
   const updated = await db
     .update(schema.conversation)
-    .set({ handoffAt: new Date(), handoffReason: reason, updatedAt: new Date() })
+    .set({
+      aiEnabled: false,
+      handoffAt: new Date(),
+      handoffReason: reason,
+      updatedAt: new Date(),
+    })
     .where(
       scoped(
         schema.conversation.organizationId,
         organizationId,
-        eq(schema.conversation.id, conversationId)
+        eq(schema.conversation.id, conversationId),
+        eq(schema.conversation.aiEnabled, true),
+        isNull(schema.conversation.handoffAt)
       )
     )
     .returning();
-  if (!updated[0]) return;
+  if (!updated[0]) return false;
   publish(organizationId, {
     type: "conversation.updated",
     data: {
-      conversation: { id: conversationId, handoffReason: reason },
+      conversation: {
+        id: conversationId,
+        aiEnabled: false,
+        handoffReason: reason,
+      },
     },
   });
+  return true;
 }
 
 type AgentStageMoveResult =

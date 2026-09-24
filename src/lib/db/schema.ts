@@ -326,6 +326,11 @@ export const lead = pgTable(
      */
     priority: text("priority", { enum: ["alta", "media", "baja"] }),
     priorityUpdatedAt: timestamp("priority_updated_at"),
+    nextActionType: text("next_action_type", {
+      enum: ["llamar", "whatsapp", "cotizacion", "seguimiento", "cita", "otro"],
+    }),
+    nextActionAt: timestamp("next_action_at"),
+    nextActionNote: text("next_action_note"),
     lastActivityAt: timestamp("last_activity_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -747,6 +752,22 @@ export const template = pgTable(
       t.language
     ),
   ]
+);
+
+export const labProfile = pgTable(
+  "lab_profile",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    businessContext: text("business_context"),
+    enabledScenarios: jsonb("enabled_scenarios").$type<string[]>(),
+    scenarioScripts: jsonb("scenario_scripts").$type<Record<string, string[]>>(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("lab_profile_org_uq").on(t.organizationId)]
 );
 
 export const agentTestRun = pgTable(

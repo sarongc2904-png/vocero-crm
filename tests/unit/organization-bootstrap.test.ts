@@ -6,7 +6,8 @@ type Table =
   | "pipelineStage"
   | "agentProfile"
   | "organizationEntitlement"
-  | "onboardingProgress";
+  | "onboardingProgress"
+  | "commercialPlan";
 type Row = Record<string, unknown>;
 
 const fake = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const fake = vi.hoisted(() => ({
     agentProfile: [] as Row[],
     organizationEntitlement: [] as Row[],
     onboardingProgress: [] as Row[],
+    commercialPlan: [] as Row[],
   } satisfies Record<Table, Row[]>,
   schema: {
     organization: { table: "organization" as const, id: "id", slug: "slug" },
@@ -32,6 +34,11 @@ const fake = vi.hoisted(() => ({
     agentProfile: { table: "agentProfile" as const },
     organizationEntitlement: { table: "organizationEntitlement" as const },
     onboardingProgress: { table: "onboardingProgress" as const },
+    commercialPlan: {
+      table: "commercialPlan" as const,
+      id: "id",
+      trialDays: "trialDays",
+    },
   },
 }));
 
@@ -73,6 +80,10 @@ import { createOrganizationForOwner } from "@/server/auth/organizations";
 
 beforeEach(() => {
   for (const rows of Object.values(fake.stored)) rows.length = 0;
+  fake.stored.commercialPlan.push({
+    id: "plan_conecta_mx",
+    trialDays: 3,
+  });
 });
 
 describe("bootstrap multi-organización", () => {

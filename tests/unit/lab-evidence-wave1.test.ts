@@ -71,7 +71,7 @@ describe("Wave 1 - evidencia anclada del juez", () => {
     }
   });
 
-  it("acepta action_trace para efectos observados", () => {
+  it("descarta debio_escalar cuando el action_trace demuestra que sí hubo handoff", () => {
     const result = validateAndAnchorVerdict({
       verdict: verdict({
         tipo: "debio_escalar",
@@ -83,8 +83,97 @@ describe("Wave 1 - evidencia anclada del juez", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.verdict.hallazgos[0]!.evidencia).toContain("handoff");
-      expect(result.verdict.hallazgos[0]!.evidencia).toContain("cliente");
+      expect(result.verdict.veredicto).toBe("verde");
+      expect(result.verdict.hallazgos).toEqual([]);
+    }
+  });
+
+  it("descarta debio_escalar aunque el juez cite solo el farewell del agente", () => {
+    const transcriptWithFarewell = [
+      { role: "cliente" as const, text: "Quiero contratar." },
+      {
+        role: "agente" as const,
+        text: "Voy a pasar tu solicitud a un asesor para continuar.",
+      },
+    ];
+    const handoffTrace: AgentActionTrace = [
+      {
+        turn: 1,
+        customerMessage: "Quiero contratar.",
+        agentMessages: ["Voy a pasar tu solicitud a un asesor para continuar."],
+        observedActions: ["reply", "handoff"],
+        result: {
+          handoffReason: "modelo",
+          contactNotesChanged: false,
+          stageChanged: null,
+          bookingCreated: false,
+        },
+      },
+    ];
+
+    const result = validateAndAnchorVerdict({
+      verdict: verdict({
+        tipo: "debio_escalar",
+        evidenceRefs: [{ source: "agent_message", index: 0 }],
+      }),
+      transcript: transcriptWithFarewell,
+      actionTrace: handoffTrace,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.verdict.veredicto).toBe("verde");
+      expect(result.verdict.hallazgos).toEqual([]);
+    }
+  });
+
+  it("descarta fuera_de_kb cuando la evidencia es una abstención segura", () => {
+    const abstentionTranscript = [
+      { role: "cliente" as const, text: "¿Cuánto cuesta?" },
+      {
+        role: "agente" as const,
+        text: "No tengo información sobre precios en este momento. Puedo confirmarlo con el equipo.",
+      },
+    ];
+
+    const result = validateAndAnchorVerdict({
+      verdict: verdict({
+        tipo: "fuera_de_kb",
+        evidenceRefs: [{ source: "agent_message", index: 0 }],
+      }),
+      transcript: abstentionTranscript,
+      actionTrace: [],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.verdict.veredicto).toBe("verde");
+      expect(result.verdict.hallazgos).toEqual([]);
+    }
+  });
+
+  it("conserva fuera_de_kb si la respuesta contiene un dato concreto no confirmado", () => {
+    const unsafeTranscript = [
+      { role: "cliente" as const, text: "¿Cuánto cuesta?" },
+      {
+        role: "agente" as const,
+        text: "No tengo el precio confirmado, pero cuesta $999 MXN.",
+      },
+    ];
+
+    const result = validateAndAnchorVerdict({
+      verdict: verdict({
+        tipo: "fuera_de_kb",
+        evidenceRefs: [{ source: "agent_message", index: 0 }],
+      }),
+      transcript: unsafeTranscript,
+      actionTrace: [],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.verdict.hallazgos).toHaveLength(1);
+      expect(result.verdict.hallazgos[0]!.tipo).toBe("fuera_de_kb");
     }
   });
 

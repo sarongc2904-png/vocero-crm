@@ -75,6 +75,7 @@ export async function getDashboardMetrics(organizationId: string) {
     lossReasonRows,
     sourceRows,
     appointmentCoverageRows,
+    nextActionRows,
   ] = await Promise.all([
     sql<{ name: string }[]>`
       select name
@@ -88,6 +89,8 @@ export async function getDashboardMetrics(organizationId: string) {
       unread_conversations: string | number;
       unread_messages: string | number;
       handoff: string | number;
+      unanswered_30m: string | number;
+      failed_outgoing: string | number;
     }[]>`
       select
         count(*) filter (where is_test = false) as total,
@@ -98,7 +101,39 @@ export async function getDashboardMetrics(organizationId: string) {
         ) as active_24h,
         count(*) filter (where is_test = false and unread_count > 0) as unread_conversations,
         coalesce(sum(unread_count) filter (where is_test = false), 0) as unread_messages,
-        count(*) filter (where is_test = false and handoff_at is not null) as handoff
+        count(*) filter (where is_test = false and handoff_at is not null) as handoff,
+        count(*) filter (
+          where is_test = false
+            and last_inbound_at is not null
+            and last_inbound_at <= now() - interval '30 minutes'
+            and not exists (
+              select 1
+              from message m
+              where m.organization_id = conversation.organization_id
+                and m.conversation_id = conversation.id
+                and m.direction = 'out'
+                and coalesce(m.wa_timestamp, m.created_at) > conversation.last_inbound_at
+            )
+        ) as unanswered_30m,
+        count(*) filter (
+          where is_test = false
+            and exists (
+              select 1
+              from message failed
+              where failed.organization_id = conversation.organization_id
+                and failed.conversation_id = conversation.id
+                and failed.direction = 'out'
+                and failed.status = 'failed'
+                and not exists (
+                  select 1
+                  from message later
+                  where later.organization_id = failed.organization_id
+                    and later.conversation_id = failed.conversation_id
+                    and later.direction = 'out'
+                    and later.created_at > failed.created_at
+                )
+            )
+        ) as failed_outgoing
       from conversation
       where organization_id = ${organizationId}
     `,
@@ -136,20 +171,20 @@ export async function getDashboardMetrics(organizationId: string) {
       select 'member'::text as kind, m.user_id as id, u.name as label, count(*) as assignments
       from conversation_assignment ca
       join member m
-        on m.id = ca.assigned_member_id
+        on m.id = ca.member_id
        and m.organization_id = ca.organization_id
       join "user" u on u.id = m.user_id
       where ca.organization_id = ${organizationId}
-        and ca.assigned_member_id is not null
+        and ca.member_id is not null
       group by m.user_id, u.name
       union all
       select 'team'::text as kind, t.id as id, t.name as label, count(*) as assignments
       from conversation_assignment ca
       join team t
-        on t.id = ca.assigned_team_id
+        on t.id = ca.team_id
        and t.organization_id = ca.organization_id
       where ca.organization_id = ${organizationId}
-        and ca.assigned_team_id is not null
+        and ca.team_id is not null
       group by t.id, t.name
     `,
     sql<{ count: string | number }[]>`
@@ -221,6 +256,27 @@ export async function getDashboardMetrics(organizationId: string) {
        and b.is_test = false
       where l.organization_id = ${organizationId}
     `,
+    sql<{
+      without_next_action: string | number;
+      overdue_next_action: string | number;
+    }[]>`
+      select
+        count(*) filter (
+          where s.kind = 'open'
+            and (l.next_action_type is null or l.next_action_at is null)
+        ) as without_next_action,
+        count(*) filter (
+          where s.kind = 'open'
+            and l.next_action_type is not null
+            and l.next_action_at is not null
+            and l.next_action_at < now()
+        ) as overdue_next_action
+      from lead l
+      join pipeline_stage s
+        on s.id = l.stage_id
+       and s.organization_id = l.organization_id
+      where l.organization_id = ${organizationId}
+    `,
   ]);
 
   const branding = await getBranding(organizationId);
@@ -252,6 +308,7 @@ export async function getDashboardMetrics(organizationId: string) {
   const conversations = conversationRows[0];
   const agent = agentRows[0] ?? null;
   const leadsWithAppointment = n(appointmentCoverageRows[0]?.leads_with_appointment);
+  const nextAction = nextActionRows[0];
 
   return {
     organization: {
@@ -266,6 +323,8 @@ export async function getDashboardMetrics(organizationId: string) {
       unreadConversations: n(conversations?.unread_conversations),
       unreadMessages: n(conversations?.unread_messages),
       humanHandoff: n(conversations?.handoff),
+      unanswered30m: n(conversations?.unanswered_30m),
+      failedOutgoing: n(conversations?.failed_outgoing),
     },
     pipeline: {
       ...pipeline,
@@ -274,7 +333,8 @@ export async function getDashboardMetrics(organizationId: string) {
       appointmentCoverage:
         pipeline.totalLeads === 0 ? null : leadsWithAppointment / pipeline.totalLeads,
       qualifiedLeads: null as number | null,
-      leadsWithoutNextAction: null as number | null,
+      leadsWithoutNextAction: n(nextAction?.without_next_action),
+      overdueNextActions: n(nextAction?.overdue_next_action),
     },
     appointments: {
       today: futureSessions.filter((booking) => booking.date === today).length,
@@ -321,7 +381,7 @@ export async function getDashboardMetrics(organizationId: string) {
     })),
     unavailable: {
       qualifiedLeads: "Requiere el contrato formal de calificación del gate de Pipeline",
-      nextAction: "Requiere el modelo de próxima acción del gate de Pipeline",
+      nextAction: null,
     },
   };
 }

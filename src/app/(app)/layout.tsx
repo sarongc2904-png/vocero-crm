@@ -7,12 +7,21 @@ import { getBranding } from "@/server/branding";
 import { AppShell } from "@/components/app-shell";
 import { resolveBuildCommit } from "@/lib/version";
 import { agendaEnabled } from "@/server/agenda/flag";
+import { getCommercialAccess } from "@/server/commercial/entitlement";
 
 export default async function AppLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const session = await getSessionOrNull();
   if (!session) redirect("/login");
+
+  if (!session.isSuperadmin) {
+    const access = await getCommercialAccess(session.organizationId).catch(
+      () => null
+    );
+    if (!access?.allowed) redirect("/access-required");
+  }
+
   const branding = await getBranding(session.organizationId);
   const authSession = await getAuth().api.getSession({
     headers: await headers(),
@@ -26,6 +35,7 @@ export default async function AppLayout({
       branding={branding}
       userName={authSession?.user.name ?? "Usuario"}
       role={session.role}
+      isSuperadmin={session.isSuperadmin}
       activeOrganizationId={session.organizationId}
       theme={theme}
       // Se resuelve aquí, en el servidor: el cliente no ve `SOURCE_COMMIT`.

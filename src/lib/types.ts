@@ -11,6 +11,20 @@ export type ConversationDto = {
   aiEnabled: boolean;
   handoffAt: string | null;
   handoffReason: string | null;
+  /** Señales operativas para decidir qué conversación atender primero. */
+  needsReply30m: boolean;
+  /** El último intento de salida falló y aún no hubo otro envío posterior. */
+  sendFailed: boolean;
+  nextActionType:
+    | "llamar"
+    | "whatsapp"
+    | "cotizacion"
+    | "seguimiento"
+    | "cita"
+    | "otro"
+    | null;
+  nextActionAt: string | null;
+  nextActionOverdue: boolean;
   lastInboundAt: string | null;
   lastMessageAt: string | null;
   unreadCount: number;

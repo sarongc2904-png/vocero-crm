@@ -80,6 +80,27 @@ export async function updateService(
   return rows[0]!;
 }
 
+
+export async function deleteService(
+  organizationId: string,
+  serviceId: string
+) {
+  const rows = await getDb()
+    .delete(schema.service)
+    .where(
+      scoped(
+        schema.service.organizationId,
+        organizationId,
+        eq(schema.service.id, serviceId)
+      )
+    )
+    .returning({ id: schema.service.id });
+  if (!rows[0]) {
+    throw new BeautyCatalogError("not_found", "Servicio no encontrado");
+  }
+  return rows[0];
+}
+
 function serviceValues(input: ServiceInput) {
   const name = input.name.trim();
   const currency = (input.currency ?? "MXN").trim().toUpperCase();
@@ -250,6 +271,27 @@ export async function updateProfessional(
     }
     return rows[0]!;
   });
+}
+
+
+export async function deleteProfessional(
+  organizationId: string,
+  professionalId: string
+) {
+  const rows = await getDb()
+    .delete(schema.professional)
+    .where(
+      scoped(
+        schema.professional.organizationId,
+        organizationId,
+        eq(schema.professional.id, professionalId)
+      )
+    )
+    .returning({ id: schema.professional.id });
+  if (!rows[0]) {
+    throw new BeautyCatalogError("not_found", "Profesional no encontrado");
+  }
+  return rows[0];
 }
 
 function validateProfessional(input: ProfessionalInput) {

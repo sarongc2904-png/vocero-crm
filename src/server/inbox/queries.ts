@@ -25,6 +25,48 @@ export async function listConversations(
       and s.organization_id = l.organization_id
     limit 1
   )`;
+  const nextActionTypeSql = sql<string | null>`(
+    select l.next_action_type
+    from lead l
+    where l.contact_id = ${schema.contact.id}
+      and l.organization_id = ${schema.contact.organizationId}
+    limit 1
+  )`;
+  const nextActionAtSql = sql<Date | null>`(
+    select l.next_action_at
+    from lead l
+    where l.contact_id = ${schema.contact.id}
+      and l.organization_id = ${schema.contact.organizationId}
+    limit 1
+  )`;
+  const needsReply30mSql = sql<boolean>`(
+    ${schema.conversation.lastInboundAt} is not null
+    and ${schema.conversation.lastInboundAt} <= now() - interval '30 minutes'
+    and not exists (
+      select 1
+      from message m
+      where m.organization_id = ${schema.conversation.organizationId}
+        and m.conversation_id = ${schema.conversation.id}
+        and m.direction = 'out'
+        and coalesce(m.wa_timestamp, m.created_at) > ${schema.conversation.lastInboundAt}
+    )
+  )`;
+  const sendFailedSql = sql<boolean>`exists (
+    select 1
+    from message failed
+    where failed.organization_id = ${schema.conversation.organizationId}
+      and failed.conversation_id = ${schema.conversation.id}
+      and failed.direction = 'out'
+      and failed.status = 'failed'
+      and not exists (
+        select 1
+        from message later
+        where later.organization_id = failed.organization_id
+          and later.conversation_id = failed.conversation_id
+          and later.direction = 'out'
+          and later.created_at > failed.created_at
+      )
+  )`;
 
   const rows = await db
     .select({
@@ -32,6 +74,10 @@ export async function listConversations(
       contact: schema.contact,
       preview: previewSql,
       stageName: stageSql,
+      nextActionType: nextActionTypeSql,
+      nextActionAt: nextActionAtSql,
+      needsReply30m: needsReply30mSql,
+      sendFailed: sendFailedSql,
     })
     .from(schema.conversation)
     .innerJoin(
@@ -52,7 +98,16 @@ export async function listConversations(
     .orderBy(desc(sql`coalesce(${schema.conversation.lastMessageAt}, ${schema.conversation.createdAt})`));
 
   return rows.map((r) =>
-    serializeConversation(r.conversation, r.contact, r.preview, r.stageName)
+    serializeConversation(
+      r.conversation,
+      r.contact,
+      r.preview,
+      r.stageName,
+      r.nextActionType,
+      r.nextActionAt,
+      r.needsReply30m,
+      r.sendFailed
+    )
   );
 }
 
@@ -109,11 +164,21 @@ export async function listMessages(
     .orderBy(schema.message.createdAt);
 }
 
+function toIso(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 export function serializeConversation(
   c: typeof schema.conversation.$inferSelect,
   contact: typeof schema.contact.$inferSelect,
   preview: string | null = null,
-  stageName: string | null = null
+  stageName: string | null = null,
+  nextActionType: string | null = null,
+  nextActionAt: Date | string | null = null,
+  needsReply30m = false,
+  sendFailed = false
 ): ConversationDto {
   return {
     id: c.id,
@@ -121,10 +186,26 @@ export function serializeConversation(
     contact: { id: contact.id, name: contact.name, phone: contact.phone },
     stageName,
     aiEnabled: c.aiEnabled,
-    handoffAt: c.handoffAt?.toISOString() ?? null,
+    handoffAt: toIso(c.handoffAt),
     handoffReason: c.handoffReason,
-    lastInboundAt: c.lastInboundAt?.toISOString() ?? null,
-    lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
+    needsReply30m,
+    sendFailed,
+    nextActionType: (
+      nextActionType === "llamar" ||
+      nextActionType === "whatsapp" ||
+      nextActionType === "cotizacion" ||
+      nextActionType === "seguimiento" ||
+      nextActionType === "cita" ||
+      nextActionType === "otro"
+        ? nextActionType
+        : null
+    ),
+    nextActionAt: toIso(nextActionAt),
+    nextActionOverdue: Boolean(
+      nextActionAt && new Date(nextActionAt).getTime() < Date.now()
+    ),
+    lastInboundAt: toIso(c.lastInboundAt),
+    lastMessageAt: toIso(c.lastMessageAt),
     unreadCount: c.unreadCount,
     windowOpen: isWindowOpen(c.lastInboundAt),
     windowRemainingMs: windowRemainingMs(c.lastInboundAt),

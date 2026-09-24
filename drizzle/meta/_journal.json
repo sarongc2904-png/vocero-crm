@@ -183,6 +183,27 @@
       "when": 1790273455493,
       "tag": "0025_legacy_booking_concurrency",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790360000000,
+      "tag": "0026_lab_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790446400000,
+      "tag": "0027_lead_next_action",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790532800000,
+      "tag": "0028_commercial_admin_audit",
+      "breakpoints": true
     }
   ]
 }
