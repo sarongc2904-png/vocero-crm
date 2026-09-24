@@ -66,7 +66,7 @@ export const POST = withAuthOptions(
     if (!body.ok) return body.response;
 
     try {
-      const client = await createCommercialClient(body.data);
+      const client = await createCommercialClient({ ...body.data, actorUserId: session.userId });
       return Response.json({ client }, { status: 201 });
     } catch (error) {
       const code =
@@ -96,11 +96,11 @@ export const PATCH = withAuthOptions(
 
     try {
       if (body.data.target === "plan") {
-        const plan = await updateCommercialPlan(body.data);
+        const plan = await updateCommercialPlan({ ...body.data, actorUserId: session.userId });
         return Response.json({ plan });
       }
 
-      const account = await updateCommercialAccount(body.data);
+      const account = await updateCommercialAccount({ ...body.data, actorUserId: session.userId });
       if (!account) {
         return apiError(404, "not_found", "No se encontró la cuenta comercial");
       }
