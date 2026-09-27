@@ -9,4 +9,4 @@ echo "Desplegando Conecta Digital CRM commit ${SOURCE_COMMIT}"
 docker compose build app
 docker compose up -d
 
-node scripts/production-smoke.mjs "${BASE_URL}"
+node --env-file=.env scripts/production-smoke.mjs "${BASE_URL}"
