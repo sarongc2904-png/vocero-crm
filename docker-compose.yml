@@ -4,10 +4,14 @@
 # ============================================================
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-}
     restart: unless-stopped
     environment:
       APP_BASE_URL: ${APP_BASE_URL}
+      SOURCE_COMMIT: ${SOURCE_COMMIT:-}
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/vocero
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}

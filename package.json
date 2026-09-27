@@ -22,7 +22,8 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "seed:demo": "esbuild scripts/seed/demo.ts --bundle --platform=node --format=esm --outfile=.tmp-seed-demo.mjs --alias:@=./src --packages=external && node .tmp-seed-demo.mjs"
+    "seed:demo": "esbuild scripts/seed/demo.ts --bundle --platform=node --format=esm --outfile=.tmp-seed-demo.mjs --alias:@=./src --packages=external && node .tmp-seed-demo.mjs",
+    "test:production:smoke": "node scripts/production-smoke.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
