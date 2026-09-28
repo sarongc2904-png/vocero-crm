@@ -119,12 +119,31 @@ export function ConversationList({
         conversation.nextActionOverdue
     );
   const attentionCount = inInbox.filter(needsAttention).length;
-  const visible =
+  const filtered =
     filter === "unread"
       ? inInbox.filter((c) => c.unreadCount > 0)
       : filter === "attention"
         ? inInbox.filter(needsAttention)
         : inInbox;
+
+  // Prioridad operativa: primero lo que bloquea una respuesta o seguimiento,
+  // luego lo no leído y finalmente el resto por actividad reciente.
+  const attentionScore = (conversation: ConversationDto) => {
+    if (conversation.sendFailed) return 500;
+    if (conversation.handoffAt) return 400;
+    if (conversation.needsReply30m) return 300;
+    if (conversation.nextActionOverdue) return 200;
+    if (conversation.unreadCount > 0) return 100;
+    return 0;
+  };
+  const visible = [...filtered].sort((a, b) => {
+    const priority = attentionScore(b) - attentionScore(a);
+    if (priority !== 0) return priority;
+    return (
+      Date.parse(b.lastMessageAt ?? "1970-01-01T00:00:00Z") -
+      Date.parse(a.lastMessageAt ?? "1970-01-01T00:00:00Z")
+    );
+  });
   // Con un solo canal encendido no hay bandejas que distinguir: ni marca en
   // los renglones ni filtro. La pantalla queda exactamente como antes de 014.
   const multiChannel = channels.length > 1;
@@ -145,7 +164,7 @@ export function ConversationList({
     <div className="flex h-full flex-col">
       <header className="border-b px-4 pb-3 pt-4">
         <div className="mb-3 flex items-center gap-2">
-          <h2 className="text-[17px] font-bold tracking-tight">Bandeja</h2>
+          <h2 className="text-[17px] font-bold tracking-tight">Mensajes</h2>
           <span className="font-mono text-[12px] text-text-3">{conversations.length}</span>
           {multiChannel && (
             <div className="ml-auto flex items-center gap-1">
@@ -206,8 +225,8 @@ export function ConversationList({
         {(
           [
             { id: "all", label: "Todas", count: inInbox.length },
-            { id: "attention", label: "Requieren atención", count: attentionCount },
-            { id: "unread", label: "No leídas", count: unreadCount },
+            { id: "attention", label: "Pendientes", count: attentionCount },
+            { id: "unread", label: "Sin leer", count: unreadCount },
           ] as const
         ).map((f) => (
           <button
@@ -277,7 +296,11 @@ export function ConversationList({
                     onClick={() => onSelect(c.id)}
                     className={cn(
                       "flex w-full items-start gap-[11px] px-4 py-[var(--row-py)] text-left transition-colors",
-                      active ? "bg-[var(--bg-active)]" : "hover:bg-subtle"
+                      active
+                        ? "bg-[var(--bg-active)]"
+                        : needsAttention(c)
+                          ? "bg-subtle/70 hover:bg-subtle"
+                          : "hover:bg-subtle"
                     )}
                   >
                     <span className="relative shrink-0">
@@ -348,9 +371,9 @@ export function ConversationList({
                           </span>
                         )}
                         {!c.handoffAt && !c.sendFailed && c.needsReply30m && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] text-warning-text">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-warning-soft bg-warning-tint px-2 py-0.5 text-[11px] font-medium text-warning-text">
                             <Clock3 className="h-3 w-3" strokeWidth={1.7} />
-                            Sin respuesta
+                            Requiere respuesta
                           </span>
                         )}
                         {!c.handoffAt && !c.sendFailed && !c.needsReply30m && c.nextActionOverdue && (
