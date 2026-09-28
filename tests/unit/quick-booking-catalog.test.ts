@@ -17,6 +17,8 @@ describe("agendamiento rápido con catálogo operativo", () => {
     expect(route).toContain('professional.status === "active"');
     expect(route).not.toContain("professional.email");
     expect(route).not.toContain("professional.phone");
+    expect(route).toContain("canConfigureCatalog");
+    expect(route).toContain('"settings.read"');
   });
 
   it("usa servicio y profesional para consultar y crear la cita", () => {
@@ -29,5 +31,15 @@ describe("agendamiento rápido con catálogo operativo", () => {
     expect(dialog).toContain("professionalId,");
     expect(dialog).toContain("Selecciona un servicio");
     expect(dialog).toContain("Selecciona profesional");
+  });
+
+  it("explica cuándo usa la agenda general y enlaza la configuración si procede", () => {
+    const dialog = source("src/components/inbox/quick-booking-dialog.tsx");
+
+    expect(dialog).toContain("Usando agenda general");
+    expect(dialog).toContain("Todavía no hay un servicio y un profesional activos vinculados.");
+    expect(dialog).toContain("catalog.canConfigureCatalog");
+    expect(dialog).toContain('href="/settings/beauty"');
+    expect(dialog).toContain("Configurar servicios y personal");
   });
 });
