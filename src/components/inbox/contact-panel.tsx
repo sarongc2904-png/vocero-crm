@@ -301,7 +301,6 @@ export function ContactPanel({
                 </p>
               </div>
             )}
-          </div>
             </div>
           </details>
         </section>
