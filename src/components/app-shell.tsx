@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu } from "lucide-react";
+import { CalendarDays, Inbox, Kanban, Menu, Users } from "lucide-react";
 import type { Branding } from "@/lib/branding";
 import type { ThemePreference } from "@/lib/theme";
 import { AppNav } from "@/components/app-nav";
@@ -99,6 +100,39 @@ export function AppShell({
         </header>
 
         <main className="min-h-0 min-w-0 flex-1 overflow-hidden">{children}</main>
+
+        <nav
+          aria-label="Navegación principal"
+          className="grid shrink-0 border-t bg-background lg:hidden"
+          style={{ gridTemplateColumns: `repeat(${agenda ? 4 : 3}, minmax(0, 1fr))` }}
+        >
+          {[
+            { href: "/inbox", label: "Mensajes", icon: Inbox },
+            { href: "/pipeline", label: "Prospectos", icon: Kanban },
+            ...(agenda ? [{ href: "/bookings", label: "Citas", icon: CalendarDays }] : []),
+            { href: "/contacts", label: "Clientes", icon: Users },
+          ].map((item) => {
+            const active =
+              pathname === item.href || pathname.startsWith(`${item.href}/`);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`flex min-h-14 flex-col items-center justify-center gap-1 px-1 text-[10.5px] font-semibold transition-colors ${
+                  active
+                    ? "text-brand-text"
+                    : "text-text-3 hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                <item.icon
+                  className={`h-[18px] w-[18px] ${active ? "text-brand" : ""}`}
+                  strokeWidth={1.8}
+                />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
       </div>
     </div>
   );
