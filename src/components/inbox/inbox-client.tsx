@@ -35,7 +35,13 @@ const PANEL_MEDIA_QUERY = "(min-width: 1280px)";
 const isWideEnoughForPanel = () =>
   typeof window !== "undefined" && window.matchMedia(PANEL_MEDIA_QUERY).matches;
 
-export function InboxClient({ channels }: { channels: readonly Channel[] }) {
+export function InboxClient({
+  channels,
+  agenda = false,
+}: {
+  channels: readonly Channel[];
+  agenda?: boolean;
+}) {
   const multiChannel = channels.length > 1;
   const [conversations, setConversations] = useState<ConversationDto[] | null>(
     null
@@ -391,6 +397,7 @@ export function InboxClient({ channels }: { channels: readonly Channel[] }) {
           <div className="h-full w-[320px] max-xl:w-[min(320px,88vw)]">
             <ContactPanel
               conversation={selected}
+              agenda={agenda}
               refreshKey={detailRev}
               onPatchConversation={patchConversation}
               onClose={() => togglePanel(false)}

@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronRight, Kanban, Sparkles, UserRound, Users } from "lucide-react";
+import {
+  CalendarPlus,
+  Check,
+  ChevronRight,
+  Kanban,
+  Sparkles,
+  UserRound,
+  Users,
+} from "lucide-react";
 import type {
   ConversationDto,
   FichaDto,
@@ -15,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { FichaPanel } from "@/components/ficha-panel";
 import { AssignmentControl } from "./assignment-control";
+import { QuickBookingDialog } from "./quick-booking-dialog";
 
 const HANDOFF_LABELS: Record<string, string> = {
   cliente: "El cliente pidió un humano",
@@ -26,11 +35,13 @@ const HANDOFF_LABELS: Record<string, string> = {
 
 export function ContactPanel({
   conversation,
+  agenda = false,
   refreshKey = 0,
   onPatchConversation,
   onClose,
 }: {
   conversation: ConversationDto;
+  agenda?: boolean;
   refreshKey?: number;
   onPatchConversation: (patch: {
     aiEnabled?: boolean;
@@ -47,6 +58,7 @@ export function ContactPanel({
   const [leadId, setLeadId] = useState<string | null>(null);
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(false);
+  const [bookingOpen, setBookingOpen] = useState(false);
 
   const contactId = conversation.contact.id;
   const agentReady = aiConfigured && agentEnabled;
@@ -167,7 +179,17 @@ export function ContactPanel({
             </div>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          {agenda && (
+            <Button
+              className="mt-3 w-full"
+              onClick={() => setBookingOpen(true)}
+            >
+              <CalendarPlus className="mr-1.5 h-4 w-4" strokeWidth={1.8} />
+              Agendar cita
+            </Button>
+          )}
+
+          <div className="mt-2 grid grid-cols-2 gap-2">
             <Link
               href="/pipeline"
               className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-xs font-semibold text-text-2 transition-colors hover:bg-accent hover:text-foreground"
@@ -334,6 +356,16 @@ export function ContactPanel({
           </Button>
         </section>
       </div>
+
+      {bookingOpen && (
+        <QuickBookingDialog
+          conversation={conversation}
+          onClose={() => setBookingOpen(false)}
+          onBooked={() => {
+            void refreshLive();
+          }}
+        />
+      )}
     </div>
   );
 }
