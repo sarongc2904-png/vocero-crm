@@ -1,4 +1,5 @@
 import { withOrgPermissions } from "@/lib/api";
+import { hasOrganizationPermission } from "@/lib/auth/permissions";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { listProfessionals, listServices } from "@/server/beauty/catalog";
 
@@ -19,6 +20,9 @@ export const GET = withOrgPermissions(["appointments.create"], async (session) =
   ]);
 
   return Response.json({
+    canConfigureCatalog: hasOrganizationPermission(session.role, "settings.read", {
+      isSuperadmin: session.isSuperadmin,
+    }),
     services: services
       .filter((service) => service.active)
       .map((service) => ({

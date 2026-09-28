@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Check, Clock3, X } from "lucide-react";
 import type { ConversationDto } from "@/lib/types";
@@ -27,6 +28,7 @@ type BookingProfessional = {
 };
 
 type BookingCatalog = {
+  canConfigureCatalog: boolean;
   services: BookingService[];
   professionals: BookingProfessional[];
 };
@@ -260,6 +262,24 @@ export function QuickBookingDialog({
         ) : (
           <>
             <div className="max-h-[60dvh] overflow-y-auto p-4">
+              {catalog && !structuredBooking && (
+                <div className="mb-4 rounded-lg border border-warning-soft bg-warning-tint px-3 py-3 text-sm text-warning-text">
+                  <p className="font-semibold">Usando agenda general</p>
+                  <p className="mt-1 text-xs">
+                    Todavía no hay un servicio y un profesional activos vinculados.
+                  </p>
+                  {catalog.canConfigureCatalog && (
+                    <Link
+                      href="/settings/beauty"
+                      onClick={onClose}
+                      className="mt-2 inline-flex text-xs font-semibold underline underline-offset-2"
+                    >
+                      Configurar servicios y personal →
+                    </Link>
+                  )}
+                </div>
+              )}
+
               {structuredBooking && (
                 <div className="mb-4 grid gap-3 sm:grid-cols-2">
                   <label className="text-xs font-semibold text-text-2">
