@@ -43,7 +43,7 @@ export function WhatsappWizard() {
     available: false,
   });
   const [loaded, setLoaded] = useState(false);
-  const [showManual, setShowManual] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const refetch = useCallback(async () => {
     const [c, w] = await Promise.all([
@@ -120,24 +120,42 @@ export function WhatsappWizard() {
         </Card>
       )}
 
-      <button
-        type="button"
-        onClick={() => setShowManual((v) => !v)}
-        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ChevronDown
-          className={`h-4 w-4 transition-transform ${showManual ? "rotate-180" : ""}`}
-        />
-        {embeddedSignup.available
-          ? "Conexión manual (avanzado)"
-          : "Conectar con credenciales manuales"}
-      </button>
+      {embeddedSignup.available ? (
+        <div className="rounded-lg border bg-subtle/40 p-4">
+          <p className="text-sm font-medium">Conexión guiada por Meta</p>
+          <p className="mt-1 text-xs text-text-3">
+            No necesitas copiar tokens, IDs ni configurar el webhook manualmente.
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-warning-soft bg-warning-tint p-4 text-sm text-warning-text">
+          La conexión guiada no está disponible en esta instancia. Usa las credenciales manuales.
+        </div>
+      )}
 
-      {(showManual || !embeddedSignup.available) && (
+      {!embeddedSignup.available && (
         <ConnectForm existing={connection} onSaved={() => void refetch()} />
       )}
 
-      {webhook && <WebhookCard webhook={webhook} />}
+      <button
+        type="button"
+        onClick={() => setShowAdvanced((v) => !v)}
+        className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+      >
+        <ChevronDown
+          className={`h-4 w-4 transition-transform ${showAdvanced ? "rotate-180" : ""}`}
+        />
+        Opciones avanzadas
+      </button>
+
+      {showAdvanced && (
+        <div className="space-y-6">
+          {embeddedSignup.available && (
+            <ConnectForm existing={connection} onSaved={() => void refetch()} />
+          )}
+          {webhook && <WebhookCard webhook={webhook} />}
+        </div>
+      )}
     </div>
   );
 }
