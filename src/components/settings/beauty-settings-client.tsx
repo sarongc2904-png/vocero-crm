@@ -95,6 +95,8 @@ export function BeautySettingsClient() {
   );
 
   useEffect(() => {
+    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (detected) setTimezone(detected);
     void refresh();
   }, []);
 
@@ -341,10 +343,10 @@ export function BeautySettingsClient() {
     <div className="max-w-3xl space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Servicios</CardTitle>
+          <CardTitle>1. Servicios</CardTitle>
           <CardDescription>
-            Precio y duración que usarán el CRM y la IA. No se generan desde el
-            texto de una conversación.
+            Agrega lo que ofreces, cuánto dura y cuánto cuesta. Esta información
+            se usará al momento de agendar una cita.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -471,20 +473,29 @@ export function BeautySettingsClient() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Profesionales</CardTitle>
+          <CardTitle>2. Personal</CardTitle>
           <CardDescription>
-            Asigna únicamente los servicios que cada persona puede realizar.
+            Agrega a las personas que atienden y selecciona qué servicios realiza cada una.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3">
             <Field label="Nombre">
-              <Input value={professionalName} onChange={(event) => setProfessionalName(event.target.value)} />
-            </Field>
-            <Field label="Zona horaria">
-              <Input value={timezone} onChange={(event) => setTimezone(event.target.value)} />
+              <Input
+                placeholder="Ej. Ana, recepción, Dra. López"
+                value={professionalName}
+                onChange={(event) => setProfessionalName(event.target.value)}
+              />
             </Field>
           </div>
+          <p className="text-xs text-text-3">
+            La zona horaria se detecta automáticamente en este dispositivo.
+          </p>
+          {activeServices.length === 0 && (
+            <p className="rounded-md border bg-subtle p-3 text-sm text-text-3">
+              Primero agrega al menos un servicio.
+            </p>
+          )}
           <div className="flex flex-wrap gap-3">
             {activeServices.map((service) => (
               <label key={service.id} className="flex items-center gap-2 text-sm">
@@ -506,12 +517,17 @@ export function BeautySettingsClient() {
           <Button disabled={!professionalName.trim() || selectedServices.length === 0} onClick={createProfessional}>
             Agregar profesional
           </Button>
+          {professionals.length === 0 && (
+            <p className="rounded-md border bg-subtle p-3 text-sm text-text-3">
+              Aún no has agregado personal. Crea una persona y asígnale al menos un servicio.
+            </p>
+          )}
           <ul className="divide-y rounded-md border text-sm">
             {professionals.map((professional) => (
               <li key={professional.id} className="p-3">
                 {editingProfessionalId === professional.id && professionalEdit ? (
                   <div className="space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3">
                       <Field label="Nombre">
                         <Input
                           value={professionalEdit.name}
@@ -519,17 +535,6 @@ export function BeautySettingsClient() {
                             setProfessionalEdit({
                               ...professionalEdit,
                               name: event.target.value,
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field label="Zona horaria">
-                        <Input
-                          value={professionalEdit.timezone}
-                          onChange={(event) =>
-                            setProfessionalEdit({
-                              ...professionalEdit,
-                              timezone: event.target.value,
                             })
                           }
                         />
@@ -611,10 +616,10 @@ export function BeautySettingsClient() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Horario, descansos y ausencias</CardTitle>
+          <CardTitle>3. Horarios y ausencias</CardTitle>
           <CardDescription>
-            Los días cerrados y vacaciones se excluyen programáticamente de la
-            disponibilidad real.
+            Define cuándo puede atender cada persona. Los días cerrados y las
+            ausencias dejarán de aparecer como horarios disponibles.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -623,7 +628,7 @@ export function BeautySettingsClient() {
             value={selectedProfessional}
             onChange={(event) => void loadAvailability(event.target.value)}
           >
-            <option value="">Selecciona una profesional</option>
+            <option value="">Selecciona una persona</option>
             {professionals.map((professional) => (
               <option key={professional.id} value={professional.id}>{professional.name}</option>
             ))}
