@@ -361,7 +361,7 @@ export function InboxClient({ channels }: { channels: readonly Channel[] }) {
             <p className="font-serif text-[24px] italic leading-tight text-text-2">
               Elige una conversación para ver el hilo
             </p>
-            <p className="kicker">Bandeja · tiempo real</p>
+            <p className="kicker">Mensajes · tiempo real</p>
           </div>
         )}
       </section>
