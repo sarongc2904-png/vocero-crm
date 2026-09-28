@@ -59,6 +59,6 @@ describe("próxima acción comercial", () => {
     expect(metrics).toContain("unanswered_30m");
     expect(metrics).toContain("interval '30 minutes'");
     expect(metrics).toContain("not exists");
-    expect(page).toContain("Sin respuesta >30 min");
+    expect(page).toContain("Requieren respuesta");
   });
 });
