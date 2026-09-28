@@ -50,7 +50,7 @@ export function BrandTile({
   branding,
   className,
 }: {
-  branding: Pick<Branding, "name">;
+  branding: Pick<Branding, "name"> & Partial<Pick<Branding, "favicon">>;
   className?: string;
 }) {
   return (
@@ -64,7 +64,18 @@ export function BrandTile({
       {isVoceroName(branding.name) ? (
         <BrandMark className="h-[64%] w-[64%]" cyan={BRAND_CYAN_ON_TILE} />
       ) : (
-        <span className="font-bold leading-none">{faviconInitial(branding.name)}</span>
+        branding.favicon ? (
+          // El archivo ya fue validado al subirlo y esta ruta lo sirve con el
+          // MIME correcto. Aquí también funciona ICO, que next/image no acepta.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={`/api/branding/favicon?v=u${branding.favicon.version}`}
+            alt=""
+            className="h-full w-full rounded-[inherit] object-contain"
+          />
+        ) : (
+          <span className="font-bold leading-none">{faviconInitial(branding.name)}</span>
+        )
       )}
     </span>
   );
@@ -95,7 +106,7 @@ export function BrandLogo({
   size = "md",
   className,
 }: {
-  branding: Pick<Branding, "name">;
+  branding: Pick<Branding, "name"> & Partial<Pick<Branding, "favicon">>;
   size?: keyof typeof WORDMARK_SIZE;
   className?: string;
 }) {

@@ -1,9 +1,18 @@
-# HTTPS automático con el dominio de la variable DOMAIN.
-# Para pruebas locales usa DOMAIN=localhost (certificado interno).
+# Existing CRM. Preserve this route.
 {$DOMAIN} {
 	reverse_proxy app:3000 {
-		# SSE: sin buffering ni timeouts cortos en el proxy
 		flush_interval -1
 	}
 	encode gzip
+}
+
+# Vexora Skin assistant.
+vexoraskin.com, www.vexoraskin.com {
+	reverse_proxy vexoraskin-app:8010
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
 }
