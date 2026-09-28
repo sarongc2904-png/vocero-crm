@@ -88,10 +88,10 @@ export function ContactsClient() {
     <div className="flex h-full flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:gap-4 sm:px-6 sm:py-4">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-[17px] font-bold tracking-tight">Contactos</h2>
+          <h2 className="text-[17px] font-bold tracking-tight">Clientes</h2>
           <Button size="sm" onClick={() => setCreando(true)}>
             <UserPlus className="mr-1.5 h-4 w-4" strokeWidth={1.8} />
-            Nuevo contacto
+            Nuevo cliente
           </Button>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
@@ -123,8 +123,8 @@ export function ContactsClient() {
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               ref={inputRef}
-              placeholder="Buscar por nombre o teléfono…"
-              aria-label="Buscar contacto"
+              placeholder="Buscar cliente por nombre o teléfono…"
+              aria-label="Buscar cliente"
               defaultValue=""
               onChange={(e) => setQuery(e.target.value)}
               className="w-full pl-8 sm:w-72"
@@ -148,7 +148,7 @@ export function ContactsClient() {
               </>
             ) : (
               <>
-                <p className="text-sm font-medium">Sin contactos</p>
+                <p className="text-sm font-medium">Sin clientes todavía</p>
                 <p className="max-w-sm text-xs text-muted-foreground">
                   Cada persona que escriba a tu WhatsApp quedará registrada aquí
                   automáticamente.
