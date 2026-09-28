@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronRight, Sparkles, UserRound } from "lucide-react";
+import { Check, ChevronRight, Kanban, Sparkles, UserRound, Users } from "lucide-react";
 import type {
   ConversationDto,
   FichaDto,
@@ -139,7 +139,7 @@ export function ContactPanel({
   return (
     <div className="flex h-full flex-col">
       <header className="sticky top-0 flex items-center justify-between border-b bg-background px-4 py-3">
-        <h3 className="kicker text-text-2">Detalles</h3>
+        <h3 className="kicker text-text-2">Cliente</h3>
         <button
           onClick={onClose}
           aria-label="Ocultar panel"
@@ -165,6 +165,23 @@ export function ContactPanel({
                 {formatPhone(conversation.contact.phone)}
               </p>
             </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Link
+              href="/pipeline"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-xs font-semibold text-text-2 transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Kanban className="h-3.5 w-3.5" strokeWidth={1.8} />
+              Prospectos
+            </Link>
+            <Link
+              href="/contacts"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-xs font-semibold text-text-2 transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Users className="h-3.5 w-3.5" strokeWidth={1.8} />
+              Clientes
+            </Link>
           </div>
 
           <AssignmentControl conversationId={conversation.id} />
@@ -252,7 +269,7 @@ export function ContactPanel({
 
         {stages.length > 0 && leadId && (
           <section className="border-b p-4">
-            <p className="kicker mb-3">Etapa del pipeline</p>
+            <p className="kicker mb-3">Etapa del prospecto</p>
             <ol>
               {stages.map((s, i) => {
                 const done = currentIndex >= 0 && i < currentIndex;
