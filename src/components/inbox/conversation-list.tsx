@@ -126,24 +126,14 @@ export function ConversationList({
         ? inInbox.filter(needsAttention)
         : inInbox;
 
-  // Prioridad operativa: primero lo que bloquea una respuesta o seguimiento,
-  // luego lo no leído y finalmente el resto por actividad reciente.
-  const attentionScore = (conversation: ConversationDto) => {
-    if (conversation.sendFailed) return 500;
-    if (conversation.handoffAt) return 400;
-    if (conversation.needsReply30m) return 300;
-    if (conversation.nextActionOverdue) return 200;
-    if (conversation.unreadCount > 0) return 100;
-    return 0;
-  };
-  const visible = [...filtered].sort((a, b) => {
-    const priority = attentionScore(b) - attentionScore(a);
-    if (priority !== 0) return priority;
-    return (
+  // Las conversaciones se ordenan por actividad reciente. Las señales de
+  // atención siguen visibles como etiquetas y el filtro "Pendientes" permite
+  // aislarlas, pero nunca deben enterrar un mensaje nuevo debajo de hilos viejos.
+  const visible = [...filtered].sort(
+    (a, b) =>
       Date.parse(b.lastMessageAt ?? "1970-01-01T00:00:00Z") -
       Date.parse(a.lastMessageAt ?? "1970-01-01T00:00:00Z")
-    );
-  });
+  );
   // Con un solo canal encendido no hay bandejas que distinguir: ni marca en
   // los renglones ni filtro. La pantalla queda exactamente como antes de 014.
   const multiChannel = channels.length > 1;
