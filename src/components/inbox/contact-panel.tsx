@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   CalendarPlus,
-  Check,
   ChevronRight,
   Kanban,
   Sparkles,
@@ -146,8 +145,6 @@ export function ContactPanel({
     setSavingNotes(false);
   }
 
-  const currentIndex = stages.findIndex((s) => s.id === currentStageId);
-
   return (
     <div className="flex h-full flex-col">
       <header className="sticky top-0 flex items-center justify-between border-b bg-background px-4 py-3">
@@ -189,24 +186,30 @@ export function ContactPanel({
             </Button>
           )}
 
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <Link
-              href="/pipeline"
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-xs font-semibold text-text-2 transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Kanban className="h-3.5 w-3.5" strokeWidth={1.8} />
-              Prospectos
-            </Link>
-            <Link
-              href="/contacts"
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-xs font-semibold text-text-2 transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Users className="h-3.5 w-3.5" strokeWidth={1.8} />
-              Clientes
-            </Link>
+          <div className="mt-3">
+            <p className="kicker mb-2">Responsable</p>
+            <AssignmentControl conversationId={conversation.id} />
           </div>
 
-          <AssignmentControl conversationId={conversation.id} />
+          {stages.length > 0 && leadId && (
+            <div className="mt-3">
+              <label htmlFor="contact-stage" className="kicker mb-2 block">
+                Etapa
+              </label>
+              <select
+                id="contact-stage"
+                value={currentStageId ?? ""}
+                onChange={(e) => void moveToStage(e.target.value)}
+                className="h-10 w-full rounded-md border border-border-strong bg-background px-3 text-sm font-medium"
+              >
+                {stages.map((stage) => (
+                  <option key={stage.id} value={stage.id}>
+                    {stage.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {conversation.handoffAt && (
             <div className="mt-3 rounded-md border border-warning-soft bg-warning-tint p-3">
@@ -228,7 +231,19 @@ export function ContactPanel({
             </div>
           )}
 
-          <div className="mt-3 rounded-md border bg-subtle px-3 py-2.5">
+          <details className="mt-3 rounded-md border bg-subtle">
+            <summary className="cursor-pointer list-none px-3 py-2.5 text-[13px] font-medium">
+              IA y automatización
+              <span className="ml-2 text-[11px] font-normal text-text-3">
+                {conversation.handoffAt
+                  ? "En pausa"
+                  : aiActive
+                    ? "Activa"
+                    : "En pausa"}
+              </span>
+            </summary>
+            <div className="border-t px-3 py-2.5">
+
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-[13px] font-medium">IA en esta conversación</p>
@@ -286,57 +301,40 @@ export function ContactPanel({
                 </p>
               </div>
             )}
-          </div>
+            </div>
+          </details>
         </section>
 
-        {stages.length > 0 && leadId && (
-          <section className="border-b p-4">
-            <p className="kicker mb-3">Etapa del prospecto</p>
-            <ol>
-              {stages.map((s, i) => {
-                const done = currentIndex >= 0 && i < currentIndex;
-                const current = s.id === currentStageId;
-                return (
-                  <li key={s.id} className="relative flex gap-3 pb-4 last:pb-0">
-                    {i < stages.length - 1 && (
-                      <span
-                        className={cn(
-                          "absolute left-[7px] top-4 h-full w-px",
-                          done ? "bg-brand" : "bg-border-strong"
-                        )}
-                      />
-                    )}
-                    <button
-                      onClick={() => void moveToStage(s.id)}
-                      aria-label={`Mover a ${s.name}`}
-                      className={cn(
-                        "relative z-10 mt-0.5 flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full transition-colors",
-                        done && "bg-brand text-brand-fg",
-                        current && "bg-brand ring-4 ring-brand-soft",
-                        !done && !current && "border border-border-strong bg-background hover:border-brand"
-                      )}
-                    >
-                      {done && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
-                    </button>
-                    <button
-                      onClick={() => void moveToStage(s.id)}
-                      className={cn(
-                        "text-left text-[13px]",
-                        current ? "font-[650] text-brand-text" : "text-text-2 hover:text-foreground"
-                      )}
-                    >
-                      {s.name}
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          </section>
-        )}
+        <details className="border-b">
+          <summary className="cursor-pointer list-none px-4 py-3 text-[13px] font-semibold">
+            Datos del cliente
+          </summary>
+          <div className="border-t">
+            <FichaPanel ficha={ficha} onSave={saveFicha} />
+            <div className="grid grid-cols-2 gap-2 px-4 pb-4">
+              <Link
+                href="/pipeline"
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-xs font-semibold text-text-2 hover:bg-accent"
+              >
+                <Kanban className="h-3.5 w-3.5" strokeWidth={1.8} />
+                Prospectos
+              </Link>
+              <Link
+                href="/contacts"
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border-strong bg-background px-3 text-xs font-semibold text-text-2 hover:bg-accent"
+              >
+                <Users className="h-3.5 w-3.5" strokeWidth={1.8} />
+                Clientes
+              </Link>
+            </div>
+          </div>
+        </details>
 
-        <FichaPanel ficha={ficha} onSave={saveFicha} />
-
-        <section className="p-4">
+        <details>
+          <summary className="cursor-pointer list-none px-4 py-3 text-[13px] font-semibold">
+            Notas internas
+          </summary>
+          <section className="border-t p-4">
           <p className="kicker mb-2">Notas</p>
           <Textarea
             rows={5}
@@ -354,7 +352,8 @@ export function ContactPanel({
           >
             {savingNotes ? "Guardando…" : "Guardar notas"}
           </Button>
-        </section>
+          </section>
+        </details>
       </div>
 
       {bookingOpen && (
