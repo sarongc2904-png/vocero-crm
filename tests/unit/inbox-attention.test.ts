@@ -34,6 +34,14 @@ describe("bandeja orientada a atención", () => {
     expect(list).toContain("Atención humana");
   });
 
+  it("ordena las conversaciones por la actividad más reciente", () => {
+    const list = source("src/components/inbox/conversation-list.tsx");
+
+    expect(list).toContain("Date.parse(b.lastMessageAt");
+    expect(list).toContain("Date.parse(a.lastMessageAt");
+    expect(list).not.toContain("attentionScore");
+  });
+
   it("mantiene mensajes como pantalla inicial", () => {
     const home = source("src/app/page.tsx");
     const login = source("src/app/(auth)/login/page.tsx");
