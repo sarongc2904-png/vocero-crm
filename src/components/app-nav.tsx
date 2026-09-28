@@ -33,12 +33,15 @@ type NavItem = {
   badge?: boolean;
 };
 
-const NAV: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/inbox", label: "Bandeja", icon: Inbox, badge: true },
-  { href: "/pipeline", label: "Pipeline", icon: Kanban },
-  { href: "/contacts", label: "Contactos", icon: Users },
-  { href: "/agent", label: "Agente", icon: Sparkles },
+const PRIMARY_NAV: NavItem[] = [
+  { href: "/inbox", label: "Mensajes", icon: Inbox, badge: true },
+  { href: "/pipeline", label: "Prospectos", icon: Kanban },
+  { href: "/contacts", label: "Clientes", icon: Users },
+];
+
+const ADVANCED_NAV: NavItem[] = [
+  { href: "/dashboard", label: "Resumen", icon: LayoutDashboard },
+  { href: "/agent", label: "Agente IA", icon: Sparkles },
   { href: "/lab", label: "Laboratorio", icon: FlaskConical },
 ];
 
@@ -119,19 +122,16 @@ export function AppNav({
 
   const sha = commit || BUILD_COMMIT;
   const settingsActive = pathname.startsWith("/settings");
-  // Citas va después de Pipeline: es el paso siguiente de un trato, no una
-  // sección aparte.
-  const availableItems = role === "agent"
-    ? NAV.filter((item) => item.href !== "/agent" && item.href !== "/lab")
-    : NAV;
-  const pipelineIndex = availableItems.findIndex((item) => item.href === "/pipeline");
-  const items = agenda && pipelineIndex >= 0
+  // El flujo principal sigue el trabajo diario del usuario:
+  // Mensajes → Prospectos → Citas → Clientes.
+  const pipelineIndex = PRIMARY_NAV.findIndex((item) => item.href === "/pipeline");
+  const primaryItems = agenda && pipelineIndex >= 0
     ? [
-        ...availableItems.slice(0, pipelineIndex + 1),
+        ...PRIMARY_NAV.slice(0, pipelineIndex + 1),
         AGENDA_ITEM,
-        ...availableItems.slice(pipelineIndex + 1),
+        ...PRIMARY_NAV.slice(pipelineIndex + 1),
       ]
-    : availableItems;
+    : PRIMARY_NAV;
 
   return (
     <aside
@@ -166,7 +166,7 @@ export function AppNav({
       <OrganizationSwitcher activeOrganizationId={activeOrganizationId} />
 
       <nav className="flex flex-col gap-0.5">
-        {items.map((item) => {
+        {primaryItems.map((item) => {
           const active =
             pathname === item.href || pathname.startsWith(`${item.href}/`);
           return (
@@ -185,6 +185,27 @@ export function AppNav({
           );
         })}
       </nav>
+
+      {role !== "agent" && (
+        <div className="mt-5 border-t pt-4">
+          <p className="kicker mb-1.5 px-2.5 text-text-3">Herramientas</p>
+          <nav className="flex flex-col gap-0.5">
+            {ADVANCED_NAV.map((item) => {
+              const active =
+                pathname === item.href || pathname.startsWith(`${item.href}/`);
+              return (
+                <Link key={item.href} href={item.href} className={navItemClass(active)}>
+                  <item.icon
+                    className={cn("h-[17px] w-[17px]", active ? "text-brand" : "text-text-3")}
+                    strokeWidth={1.8}
+                  />
+                  <span className="flex-1">{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
+      )}
 
       <div className="flex-1" />
 
