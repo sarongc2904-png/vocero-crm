@@ -47,6 +47,7 @@ export function BookingsClient() {
   const [rescheduling, setRescheduling] = useState<string | null>(null);
   const [blockStart, setBlockStart] = useState("");
   const [blockMinutes, setBlockMinutes] = useState(60);
+  const [showBlockForm, setShowBlockForm] = useState(false);
 
   useEffect(() => {
     void refresh();
@@ -123,52 +124,13 @@ export function BookingsClient() {
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <section className="space-y-2">
-        <h3 className="text-sm font-semibold">Bloquear un rango</h3>
-        <p className="text-sm text-text-3">
-          Para compromisos que viven fuera del CRM: ese tiempo deja de
-          ofrecerse.
-        </p>
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="block-start">Inicio</Label>
-            <Input
-              id="block-start"
-              type="datetime-local"
-              value={blockStart}
-              onChange={(e) => setBlockStart(e.target.value)}
-              className="w-56"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="block-min">Minutos</Label>
-            <Input
-              id="block-min"
-              type="number"
-              min={10}
-              max={480}
-              value={blockMinutes}
-              onChange={(e) => setBlockMinutes(Number(e.target.value))}
-              className="w-24"
-            />
-          </div>
-          <Button
-            variant="secondary"
-            onClick={createBlock}
-            disabled={!blockStart}
-          >
-            Bloquear
-          </Button>
-        </div>
-      </section>
-
-      <section className="space-y-2">
         <h3 className="text-sm font-semibold">
           Citas <span className="text-text-3">({bookings.length})</span>
         </h3>
         {bookings.length === 0 && (
           <p className="text-sm text-text-3">
-            Todavía no hay nada agendado. Configura tu horario en Ajustes →
-            Agenda para empezar a recibir citas.
+            Todavía no hay citas. Puedes crear una desde Mensajes → Agendar cita o
+            configurar tu horario en Ajustes → Agenda.
           </p>
         )}
         <ul className="divide-y rounded-md border">
@@ -312,6 +274,54 @@ export function BookingsClient() {
             </li>
           ))}
         </ul>
+      </section>
+      <section className="space-y-2">
+        <button
+          type="button"
+          onClick={() => setShowBlockForm((value) => !value)}
+          className="text-sm font-semibold text-text-2 hover:text-foreground"
+        >
+          {showBlockForm ? "Ocultar bloqueo de horario" : "+ Bloquear un horario"}
+        </button>
+        {showBlockForm && (
+          <div className="rounded-md border bg-subtle/40 p-4">
+            <p className="mb-3 text-sm text-text-3">
+              Úsalo para compromisos externos, comidas o cualquier periodo que no
+              quieras ofrecer como disponible.
+            </p>
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="block-start">Inicio</Label>
+                <Input
+                  id="block-start"
+                  type="datetime-local"
+                  value={blockStart}
+                  onChange={(e) => setBlockStart(e.target.value)}
+                  className="w-56"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="block-min">Duración (min)</Label>
+                <Input
+                  id="block-min"
+                  type="number"
+                  min={10}
+                  max={480}
+                  value={blockMinutes}
+                  onChange={(e) => setBlockMinutes(Number(e.target.value))}
+                  className="w-28"
+                />
+              </div>
+              <Button
+                variant="secondary"
+                onClick={createBlock}
+                disabled={!blockStart}
+              >
+                Bloquear horario
+              </Button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );
