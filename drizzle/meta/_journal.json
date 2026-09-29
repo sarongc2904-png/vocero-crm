@@ -211,6 +211,13 @@
       "when": 1790619200000,
       "tag": "0029_booking_org_scoped_exclusion",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790705600000,
+      "tag": "0030_pending_agenda_action",
+      "breakpoints": true
     }
   ]
 }

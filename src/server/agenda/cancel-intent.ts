@@ -1,14 +1,55 @@
 /**
- * Respaldo determinista para cancelación de citas.
+ * IA-1 — Cancelación SEGURA.
  *
- * Igual que el detector de handoff, corre antes del LLM para que una frase
- * inequívoca no dependa del modelo. Exige una acción de cancelación y una
- * referencia a la cita, salvo pronombres imperativos explícitos como
- * "cancélala" que solo tienen sentido dentro del contexto conversacional.
+ * Antes este detector corría antes del LLM y `handleCancellation` cancelaba la
+ * cita de inmediato: "¿Puedo cancelar mi cita?" o "¿Cuánto cobran si cancelo mi
+ * cita?" **cancelaban una cita real**. Una pregunta informativa no es una orden.
+ *
+ * Ahora el detector separa dos cosas:
+ *  - {@link isCancellationQuestion}: pregunta/hipótesis → informativa, NO muta.
+ *  - {@link matchesCancellationIntent}: orden imperativa → el pipeline abre una
+ *    confirmación pendiente (tabla `pending_agenda_action`) y pide un "sí"
+ *    explícito antes de tocar nada.
  */
-const CANCEL_APPOINTMENT_REGEX =
-  /\b(?:cancel(?:a|ar|en|emos)|anul(?:a|ar|en|emos))\b[\s\S]{0,40}\b(?:mi\s+)?(?:cita|reservaci[oó]n|reserva|turno)\b|\b(?:canc[eé]lala|an[uú]lala)\b/i;
 
+const CANCEL_VERB =
+  /\b(?:cancel(?:a|ar|en|emos|ala|alo|arla|arlo)|anul(?:a|ar|en|emos|ala|alo|arla|arlo))\b/;
+const CANCEL_PRONOUN = /\b(?:cancelala|anulala|cancelalo|anulalo)\b/;
+const APPOINTMENT_REF = /\b(?:cita|citas|reservaci[oó]n|reserva|turno)\b/;
+/** "quiero cancelar" sin referencia explícita sigue siendo una orden. */
+const CANCEL_REQUEST =
+  /\b(?:quiero|deseo|necesito|quisiera|podrias|puedes)\s+(?:cancelar|anular)\b/;
+
+/**
+ * Marcas de pregunta o hipótesis. Si aparecen, el mensaje INFORMA y no ordena,
+ * aunque use el verbo cancelar.
+ */
+const INFORMATIONAL_MARKERS =
+  /[?¿]|\b(?:puedo|podria|podrias|se puede|es posible|hay forma|hay manera|que pasa si|qué pasa si|cuanto|cuánto|cuanto cobran|cobran|cuesta|penalizacion|penalización|politica|política|si me surge|si no puedo|si cancelo|si la cancelo|si lo cancelo|habria|habría|tendria|tendría)\b/;
+
+function normalize(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+/** ¿Es una ORDEN de cancelar (imperativa)? Las preguntas devuelven `false`. */
 export function matchesCancellationIntent(text: string): boolean {
-  return CANCEL_APPOINTMENT_REGEX.test(text);
+  const norm = normalize(text);
+  if (INFORMATIONAL_MARKERS.test(norm)) return false;
+  if (CANCEL_PRONOUN.test(norm)) return true;
+  if (!CANCEL_VERB.test(norm)) return false;
+  return (
+    APPOINTMENT_REF.test(norm) ||
+    CANCEL_REQUEST.test(norm) ||
+    /^cancelar\b/.test(norm.trim())
+  );
+}
+
+/** ¿Pregunta por cancelar sin pedirlo? (informativa: solo se responde). */
+export function isCancellationQuestion(text: string): boolean {
+  const norm = normalize(text);
+  if (!CANCEL_VERB.test(norm) && !CANCEL_PRONOUN.test(norm)) return false;
+  return INFORMATIONAL_MARKERS.test(norm);
 }

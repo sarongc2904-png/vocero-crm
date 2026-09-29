@@ -43,3 +43,24 @@ export function isBareTimeSelection(text: string): boolean {
 export function hasBookingConfirmation(text: string): boolean {
   return BOOKING_CONFIRM.test(normalize(text));
 }
+
+/** Un "sí" al principio del mensaje, sin condicional detrás ("si me surge algo"). */
+const AFFIRMATIVE =
+  /^(?:si|sii+|sip|claro|correcto|exacto|asi es|confirmo|confirmado|confirmar|de acuerdo|ok|okay|vale|dale|va|adelante|hazlo|hazla|por favor|perfecto)\b/;
+
+const CONDITIONAL_AFTER_SI =
+  /\bsi\b\s+(?:me|te|le|nos|no|surge|pasa|puedo|tengo|acaso|es que|fuera|hubiera)\b/;
+
+/**
+ * IA-W2 — ¿Es una CONFIRMACIÓN inequívoca?
+ *
+ * Deliberadamente estricta: "sí", "sí, cancélala", "confirmo", "dale". Un "si"
+ * condicional ("si me surge algo") NO confirma nada, y un mensaje largo con
+ * "sí" dentro tampoco (podría ser una pregunta que empieza igual).
+ */
+export function isAffirmativeConfirmation(text: string): boolean {
+  const norm = normalize(text).trim();
+  if (!AFFIRMATIVE.test(norm)) return false;
+  if (CONDITIONAL_AFTER_SI.test(norm)) return false;
+  return norm.split(/\s+/).length <= 5;
+}

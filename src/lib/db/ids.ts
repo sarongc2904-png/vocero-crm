@@ -45,6 +45,8 @@ const prefixes = {
   automationRule: "aur",
   scheduledAutomation: "sau",
   labProfile: "lbp",
+  // IA-1 / IA-W2 — confirmación pendiente de una acción de agenda
+  pendingAgendaAction: "paa",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

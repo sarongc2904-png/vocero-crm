@@ -1149,6 +1149,45 @@ export const offeredSlot = pgTable(
 );
 
 /**
+ * IA-1 / IA-W1 / IA-W2 — Confirmación pendiente de una acción de agenda.
+ *
+ * Una fila por conversación (índice único): la última acción gana. Una
+ * confirmación sin fila vigente no ejecuta nada, así que el estado es del
+ * backend y nunca del modelo. `organization_id` es NOT NULL y el único es por
+ * conversación, de modo que dos tenants no pueden compartir fila.
+ */
+export const pendingAgendaAction = pgTable(
+  "pending_agenda_action",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversation.id, { onDelete: "cascade" }),
+    /** 'book' | 'reschedule' | 'cancel'. */
+    action: text("action").notNull(),
+    bookingId: text("booking_id").references(() => booking.id, {
+      onDelete: "cascade",
+    }),
+    startUtc: timestamp("start_utc"),
+    serviceId: text("service_id").references(() => service.id, {
+      onDelete: "set null",
+    }),
+    professionalId: text("professional_id").references(() => professional.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    expiresAt: timestamp("expires_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pending_agenda_action_conversation_uq").on(t.conversationId),
+    index("pending_agenda_action_expiry_idx").on(t.expiresAt),
+  ]
+);
+
+/**
  * Credenciales del conector Zoom (app Server-to-Server del propio negocio).
  * Tabla explícita como las de WhatsApp e Instagram: unas credenciales tienen
  * forma fija y conocida, y así conservan tipado e índices. El secreto se cifra

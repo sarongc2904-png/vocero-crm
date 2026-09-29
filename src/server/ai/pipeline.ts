@@ -39,8 +39,14 @@ import {
 import { resolveExpandRequest, type ExpandWindow } from "@/server/agenda/expand";
 import {
   hasBookingConfirmation,
+  isAffirmativeConfirmation,
   isBareTimeSelection,
 } from "@/server/agenda/selection";
+import {
+  clearPendingAction,
+  getPendingAction,
+  setPendingAction,
+} from "@/server/agenda/pending-actions";
 import { getSettings } from "@/server/agenda/settings";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
 import {
@@ -155,12 +161,93 @@ export async function runAgentTurn(
     return;
   }
 
-  if (
-    agendaEnabled() &&
-    lastInbound.text &&
-    matchesCancellationIntent(lastInbound.text)
-  ) {
-    await handleCancellation(conversation);
+  const inboundText = lastInbound.text;
+
+  /**
+   * IA-W2 — Una confirmación explícita SOLO ejecuta la acción pendiente VIGENTE
+   * de esta conversación (tabla `pending_agenda_action`, con expiración y
+   * tenant). Sin fila vigente no se ejecuta nada: el estado es del backend, no
+   * del modelo, y una confirmación vieja nunca puede disparar una acción nueva.
+   */
+  if (agendaEnabled() && inboundText && isAffirmativeConfirmation(inboundText)) {
+    const pending = await getPendingAction(organizationId, conversationId);
+    if (pending) {
+      await clearPendingAction(organizationId, conversationId);
+
+      if (pending.action === "cancel") {
+        await handleCancellation(conversation);
+        return;
+      }
+
+      if (pending.action === "book" && pending.startUtc) {
+        const turn = await bookSlot({
+          organizationId,
+          conversationId,
+          startUtc: pending.startUtc,
+        });
+        await deliverReply(conversation, turn.text);
+        if (turn.ok) {
+          publish(organizationId, {
+            type: "conversation.updated",
+            data: { conversation: { id: conversationId } },
+          });
+        }
+        return;
+      }
+
+      if (pending.action === "reschedule" && pending.startUtc) {
+        try {
+          const moved = await rescheduleForConversation({
+            organizationId,
+            conversationId,
+            startUtc: pending.startUtc,
+          });
+          await deliverReply(
+            conversation,
+            moved.meetingLink
+              ? `¡Listo! Reprogramé tu cita para ${moved.label}.\nEnlace: ${moved.meetingLink}`
+              : `¡Listo! Reprogramé tu cita para ${moved.label}.`
+          );
+        } catch (err) {
+          if (err instanceof BookingError && err.code === "slot_not_offered") {
+            const turn = await offerSlots({
+              organizationId,
+              conversationId,
+              intro: "Ese horario ya no sirve para mover tu cita. Elige otro:",
+            });
+            await deliverReply(conversation, turn.text);
+          } else if (err instanceof BookingError && err.code === "not_found") {
+            await deliverReply(
+              conversation,
+              "No encontré una cita activa para reprogramar."
+            );
+          } else {
+            throw err;
+          }
+        }
+        return;
+      }
+    }
+    // Sin pending vigente la confirmación no habilita nada: sigue el flujo
+    // normal y el modelo responde como cualquier otro turno.
+  }
+
+  /**
+   * IA-1 — Una ORDEN de cancelar NO cancela: abre confirmación pendiente.
+   * `matchesCancellationIntent` ya descarta preguntas e hipótesis, así que
+   * "¿Puedo cancelar mi cita?" cae al flujo normal (informativo) y nunca
+   * llega aquí.
+   */
+  if (agendaEnabled() && inboundText && matchesCancellationIntent(inboundText)) {
+    await setPendingAction({
+      organizationId,
+      conversationId,
+      action: "cancel",
+    });
+    await deliverReply(
+      conversation,
+      "Antes de cancelar necesito tu confirmación: ¿confirmas que quieres cancelar tu cita? Responde «sí» y la cancelo."
+    );
     return;
   }
 
@@ -408,6 +495,14 @@ export async function runAgentTurn(
           if (lastInbound.text && isBareTimeSelection(lastInbound.text)) {
             const chosen = findOffered(ofertas, action.startUtc);
             if (chosen) {
+              // IA-W2: queda pendiente el horario elegido, para que un "sí"
+              // posterior lo reserve sin depender de que el modelo lo recuerde.
+              await setPendingAction({
+                organizationId,
+                conversationId,
+                action: "book",
+                startUtc: action.startUtc,
+              });
               await deliverReply(
                 conversation,
                 `Perfecto. Tengo ${chosen.label} disponible. ¿Quieres que agende tu cita?`
@@ -423,6 +518,27 @@ export async function runAgentTurn(
             startUtc: action.startUtc,
           });
         } else {
+          /**
+           * IA-W1 — Mover una cita también es destructivo: una selección desnuda
+           * abre confirmación pendiente en vez de reprogramar de inmediato, con
+           * el mismo guardarraíl que `book_slot`.
+           */
+          if (lastInbound.text && isBareTimeSelection(lastInbound.text)) {
+            const chosen = findOffered(ofertas, action.startUtc);
+            if (chosen) {
+              await setPendingAction({
+                organizationId,
+                conversationId,
+                action: "reschedule",
+                startUtc: action.startUtc,
+              });
+              await deliverReply(
+                conversation,
+                `Tengo ${chosen.label}. ¿Confirmas que mueva tu cita a ese horario?`
+              );
+              return;
+            }
+          }
           try {
             const moved = await rescheduleForConversation({
               organizationId,
