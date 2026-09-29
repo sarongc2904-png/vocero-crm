@@ -10,6 +10,7 @@ import {
   type DurableJobKind,
 } from "@/server/jobs/queue";
 import { startAutomationWorker } from "@/server/automations/worker";
+import { isPermanentJobError } from "@/server/jobs/error-policy";
 
 type WorkerState = {
   timers?: Partial<Record<DurableJobKind, ReturnType<typeof setInterval>>>;
@@ -40,7 +41,9 @@ async function processJob(job: DurableJob): Promise<void> {
     await executeLabRun(job.runId, job.organizationId);
     await completeLabJob(job);
   } catch (err) {
-    const outcome = await releaseFailedJob(job, err);
+    const outcome = await releaseFailedJob(job, err, {
+      permanent: isPermanentJobError(job.kind, err),
+    });
     console.error(
       JSON.stringify({
         event: outcome === "dead_letter" ? "job.dead_letter" : "job.retry",

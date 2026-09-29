@@ -237,13 +237,14 @@ export function shouldDeadLetter(attempts: number): boolean {
 
 export async function releaseFailedJob(
   job: DurableJob,
-  error: unknown
+  error: unknown,
+  options: { permanent?: boolean } = {}
 ): Promise<"retry" | "dead_letter"> {
   const sql = getSql();
   const dueAt = new Date(Date.now() + retryDelayMs(job.attempts));
   const dueAtIso = dueAt.toISOString();
   const detail = String(error).slice(0, 2000);
-  if (shouldDeadLetter(job.attempts)) {
+  if (options.permanent || shouldDeadLetter(job.attempts)) {
     await sql`
       update durable_job
       set lease_until = null,

@@ -6,6 +6,8 @@ import {
   retryDelayMs,
   shouldDeadLetter,
 } from "@/server/jobs/queue";
+import { SendError } from "@/server/inbox/send";
+import { isPermanentJobError } from "@/server/jobs/error-policy";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8").replace(/\r\n/g, "\n");
@@ -89,6 +91,27 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     const queue = source("src/server/jobs/queue.ts");
     expect(queue).toContain("dead_letter_at is null");
     expect(queue).toContain('return "dead_letter"');
+  });
+
+  it("no reintenta un agent_turn que requiere reconectar WhatsApp", () => {
+    expect(
+      isPermanentJobError(
+        "agent_turn",
+        new SendError("reconnect_required", "token vencido")
+      )
+    ).toBe(true);
+    expect(
+      isPermanentJobError(
+        "agent_turn",
+        new SendError("meta_unavailable", "Meta no disponible")
+      )
+    ).toBe(false);
+    expect(
+      isPermanentJobError(
+        "lab_run",
+        new SendError("reconnect_required", "token vencido")
+      )
+    ).toBe(false);
   });
 
   it("serializa instantes antes de cruzar el boundary postgres-js", () => {
