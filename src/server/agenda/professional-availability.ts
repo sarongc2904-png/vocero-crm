@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import {
@@ -154,7 +154,20 @@ export async function computeProfessionalAvailability(
         scoped(
           schema.booking.organizationId,
           organizationId,
-          eq(schema.booking.professionalId, input.professionalId),
+          /**
+           * QB-02 / IA-W5 — Semántica de ocupación aprobada:
+           *   A) bloqueo general (`professional_id IS NULL`) → bloquea a TODOS
+           *      los profesionales;
+           *   D) cita general de la IA (también NULL) → capacidad total ocupada.
+           * Por eso se restan las filas de ESTE profesional **y** las generales.
+           * No se restan las de otro profesional (B y C son de un solo
+           * profesional), y `availability.ts` —el camino general— ya cuenta toda
+           * la ocupación de la organización.
+           */
+          or(
+            eq(schema.booking.professionalId, input.professionalId),
+            isNull(schema.booking.professionalId)
+          ),
           inArray(schema.booking.status, ["agendada", "realizada"]),
           eq(schema.booking.isTest, false)
         )
@@ -172,7 +185,14 @@ export async function computeProfessionalAvailability(
   }
   const settings = {
     ...baseSettings,
-    weeklyHours,
+    /**
+     * QB-08 — Sin horario propio del profesional se hereda el del negocio: un
+     * profesional recién creado no debe devolver 0 huecos con el negocio
+     * abierto. Si SÍ tiene configuración específica, esa prevalece (nunca una
+     * mezcla parcial de ambas).
+     */
+    weeklyHours:
+      Object.keys(weeklyHours).length > 0 ? weeklyHours : baseSettings.weeklyHours,
     timezone,
     slotMinutes: context.service.durationMinutes,
     bufferMinutes:

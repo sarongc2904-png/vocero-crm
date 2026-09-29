@@ -29,6 +29,16 @@ export const WEEKDAYS: WeekdayKey[] = [
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+/**
+ * QB-09 — `24:00` es un FIN válido (cierre a medianoche), pero nunca un inicio.
+ *
+ * La API de disponibilidad por profesional acepta `endMinute: 1440`, que
+ * `minuteLabel` convierte en "24:00". Antes eso no pasaba `HHMM`, así que el
+ * intervalo entero se descartaba EN SILENCIO y el día desaparecía de la
+ * disponibilidad por haber configurado justo el cierre del día.
+ */
+const HHMM_END = /^(?:[01]\d|2[0-3]):[0-5]\d|24:00$/;
+
 export function isValidInterval(iv: unknown): iv is Interval {
   if (typeof iv !== "object" || iv === null) return false;
   const { start, end } = iv as { start?: unknown; end?: unknown };
@@ -36,7 +46,7 @@ export function isValidInterval(iv: unknown): iv is Interval {
     typeof start === "string" &&
     typeof end === "string" &&
     HHMM.test(start) &&
-    HHMM.test(end) &&
+    HHMM_END.test(end) &&
     start < end
   );
 }
@@ -96,12 +106,17 @@ export function zonedWallClockToUtc(
   tz: string
 ): Date | null {
   const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayISODate);
-  if (!day || !HHMM.test(hhmm)) return null;
-  const [h, m] = hhmm.split(":").map(Number) as [number, number];
+  if (!day) return null;
+  // QB-09: "24:00" es el cierre del día ⇒ medianoche del día siguiente.
+  const endOfDay = hhmm === "24:00";
+  if (!endOfDay && !HHMM.test(hhmm)) return null;
+  const [h, m] = endOfDay
+    ? [0, 0]
+    : (hhmm.split(":").map(Number) as [number, number]);
   const guess = Date.UTC(
     Number(day[1]),
     Number(day[2]) - 1,
-    Number(day[3]),
+    Number(day[3]) + (endOfDay ? 1 : 0),
     h,
     m
   );
