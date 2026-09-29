@@ -236,6 +236,9 @@ export async function createSessionBooking(input: {
       "Ese horario ya no está disponible",
       await refreshOffer(input.organizationId, input.conversationId, {
         now,
+        serviceId: input.serviceId ?? null,
+        professionalId: input.professionalId ?? null,
+        replace: input.requireOffer,
       })
     );
   }
@@ -295,6 +298,9 @@ export async function createSessionBooking(input: {
         "Ese horario acaba de ocuparse",
         await refreshOffer(input.organizationId, input.conversationId, {
           now,
+          serviceId: input.serviceId ?? null,
+          professionalId: input.professionalId ?? null,
+          replace: input.requireOffer,
         })
       );
     }
@@ -344,7 +350,12 @@ export async function createSessionBooking(input: {
     booking: delivered,
     meetingLink: delivered.meetingLink,
     linkPending: delivered.linkPending,
-    label: labelInTz(slot.startUtc, settings.timezone),
+    /**
+     * QB-10 — La timezone PERSISTIDA en la cita es la fuente de verdad: si la
+     * profesional tiene zona distinta a la del negocio, la etiqueta que recibe
+     * el cliente tiene que leerse en la zona en la que se guardó la cita.
+     */
+    label: labelInTz(slot.startUtc, delivered.timezone),
   };
 }
 
@@ -727,7 +738,9 @@ async function deliverMeeting(
             topic: contactName ? `Cita — ${contactName}` : "Cita",
             startUtc: booking.scheduledAt.toISOString(),
             durationMinutes: booking.durationMinutes,
-            timezone: settings.timezone,
+            // QB-10: el evento externo se crea en la zona de la CITA, no en la
+            // del negocio — son distintas cuando la profesional tiene otra zona.
+            timezone: booking.timezone,
             notes: booking.notes ?? undefined,
             videoCall: settings.videoCall,
           });
@@ -821,7 +834,17 @@ async function withConnector(
 async function refreshOffer(
   organizationId: string,
   conversationId: string | null | undefined,
-  opts: { now?: Date }
+  opts: {
+    now?: Date;
+    serviceId?: string | null;
+    professionalId?: string | null;
+    /**
+     * QB-12 — `false` calcula alternativas para MOSTRAR sin tocar la oferta
+     * guardada. El camino del operador (`requireOffer: false`) no debe destruir
+     * la oferta contextual del bot solo porque un hueco ya estaba ocupado.
+     */
+    replace?: boolean;
+  }
 ): Promise<OfferedSlot[]> {
   let fresh: AvailableSlot[] = [];
   try {
@@ -833,11 +856,29 @@ async function refreshOffer(
     console.warn(`[agenda] no pude calcular alternativas: ${err}`);
     return [];
   }
+
+  /**
+   * QB-12 — Se preserva el contexto de la oferta vigente (servicio y
+   * profesional): reescribir la oferta sin él degradaba la selección del bot y
+   * hacía que una reserva posterior fallara con `slot_not_offered` aunque el
+   * cliente aceptara un hueco que se le acababa de ofrecer.
+   */
+  const existing =
+    conversationId && opts.serviceId === undefined
+      ? await getOffers(organizationId, conversationId).catch(() => [])
+      : [];
+  const serviceId = opts.serviceId ?? existing[0]?.serviceId ?? null;
+  const professionalId =
+    opts.professionalId ?? existing[0]?.professionalId ?? null;
+
   const offers: OfferedSlot[] = fresh.map((s) => ({
     startUtc: s.startUtc,
     label: s.label,
+    serviceId,
+    professionalId,
   }));
-  if (conversationId && offers.length > 0) {
+
+  if (opts.replace !== false && conversationId && offers.length > 0) {
     await replaceOffers(organizationId, conversationId, offers).catch((err) => {
       console.warn(`[agenda] no pude registrar la nueva oferta: ${err}`);
     });
