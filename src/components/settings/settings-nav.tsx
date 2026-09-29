@@ -16,7 +16,7 @@ const TABS: Tab[] = [
 ];
 
 /** 015 — "Agenda" solo existe si esta instancia encendió la bandera. */
-const AGENDA_TAB: Tab = { href: "/settings/calendar", label: "Agenda" };
+const AGENDA_TAB: Tab = { href: "/settings/calendar", label: "Agenda general" };
 
 /** 016 — Igual con "Anuncios" y la bandera ATRIBUCION. */
 const ADS_TAB: Tab = { href: "/settings/ads", label: "Anuncios" };
