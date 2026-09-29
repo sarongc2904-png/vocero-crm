@@ -3,6 +3,7 @@ import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { isAiConfigured } from "@/lib/env";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -48,5 +49,14 @@ export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request
     .where(scoped(schema.agentProfile.organizationId, session.organizationId))
     .returning();
   if (!updated[0]) return apiError(404, "not_found", "Perfil no encontrado");
+  // SEC-V6c: cambiar las instrucciones cambia lo que el bot le dice a clientes
+  // reales. Se audita QUÉ campos se tocaron, no su contenido: el log de
+  // auditoría no es el sitio del texto del negocio.
+  await auditPrivilegedAction(session, {
+    action: "agent.profile.update",
+    targetType: "agent_profile",
+    targetId: session.organizationId,
+    metadata: { fields: Object.keys(body.data) },
+  });
   return Response.json({ ok: true });
 });

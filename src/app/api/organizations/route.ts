@@ -4,6 +4,7 @@ import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getAuth } from "@/lib/auth";
 import { getDb, schema } from "@/lib/db";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import { createOrganizationForOwner } from "@/server/auth/organizations";
 
 export const dynamic = "force-dynamic";
@@ -77,6 +78,16 @@ export const POST = withAuth(async (session, req: Request) => {
     session.userId,
     body.data.name
   );
+  // SEC-V6a: provisionar un tenant completo con su cuenta owner es una acción
+  // privilegiada y no dejaba rastro (el camino equivalente de administración
+  // comercial sí audita `client.create`). El tenant es nuevo, así que ninguna
+  // fila por-tenant podía registrar esto.
+  await auditPrivilegedAction(session, {
+    action: "organization.create",
+    targetType: "organization",
+    targetId: organization.id,
+    metadata: { name: body.data.name },
+  });
   await getAuth().api.setActiveOrganization({
     headers: await headers(),
     body: { organizationId: organization.id },

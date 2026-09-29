@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { isEmbeddedSignupConfigured } from "@/lib/env";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
   getCredentialsByOrg,
   saveCredentials,
@@ -61,6 +62,22 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
   });
 
   await subscribeAppToWaba(body.data.wabaId, body.data.token);
+
+  // SEC-V6b: rotar las credenciales del canal es el camino del secuestro
+  // silencioso (el token viejo se invalida en la misma escritura). Se audita sin
+  // el token: solo identificadores y los últimos 4 caracteres.
+  const tokenLast4Value = tokenLast4(body.data.token);
+  await auditPrivilegedAction(session, {
+    action: "settings.whatsapp.update",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: {
+      channel: "whatsapp",
+      wabaId: body.data.wabaId,
+      phoneNumberId: body.data.phoneNumberId,
+      tokenLast4: tokenLast4Value,
+    },
+  });
 
   return Response.json({
     ok: true,

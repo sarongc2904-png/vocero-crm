@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
   getInstagramCredentialsByOrg,
   saveInstagramCredentials,
@@ -63,6 +64,22 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
     username: check.username ?? data.username ?? null,
     token: data.token,
     webhookSecret: data.webhookSecret ?? null,
+  });
+
+  // SEC-V6b: rotar credenciales de canal sin rastro permitía redirigir el flujo
+  // del cliente de forma invisible. Token y webhookSecret NO se auditan.
+  const tokenLast4Value = tokenLast4(data.token);
+  await auditPrivilegedAction(session, {
+    action: "settings.instagram.update",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: {
+      channel: "instagram",
+      source: data.source,
+      igUserId: data.igUserId,
+      accountRef: data.accountRef ?? null,
+      tokenLast4: tokenLast4Value,
+    },
   });
 
   return Response.json({ ok: true, username: check.username ?? null });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { graphRequest, MetaApiError } from "@/lib/meta/client";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
   getMessengerCredentialsByOrg,
   saveMessengerCredentials,
@@ -67,6 +68,22 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
     accountRef: data.accountRef ?? null,
     token: data.token,
     webhookSecret: data.webhookSecret ?? null,
+  });
+
+  // SEC-V6b: rotar credenciales de canal sin rastro. Token y webhookSecret NO
+  // se auditan.
+  const tokenLast4Value = tokenLast4(data.token);
+  await auditPrivilegedAction(session, {
+    action: "settings.messenger.update",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: {
+      channel: "messenger",
+      source: data.source,
+      pageId: data.pageId ?? null,
+      accountRef: data.accountRef ?? null,
+      tokenLast4: tokenLast4Value,
+    },
   });
 
   return Response.json({ ok: true, pageName: check.pageName });

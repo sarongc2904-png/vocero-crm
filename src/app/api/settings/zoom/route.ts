@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import { zoomConnector } from "@/server/agenda/connectors/zoom";
 import {
   deleteZoomCredentials,
@@ -46,10 +47,24 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
     ...body.data,
   });
 
+  // SEC-V6b: rotar el conector de Zoom deja rastro (sin secretos).
+  const secretLast4Value = secretLast4(body.data.clientSecret);
+  await auditPrivilegedAction(session, {
+    action: "settings.zoom.update",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: {
+      connector: "zoom",
+      accountId: body.data.accountId,
+      clientId: body.data.clientId,
+      secretLast4: secretLast4Value,
+    },
+  });
+
   return Response.json({
     connection: {
       status: "connected",
-      secretLast4: secretLast4(body.data.clientSecret),
+      secretLast4: secretLast4Value,
       fields: { accountId: body.data.accountId, clientId: body.data.clientId },
     },
   });
@@ -58,5 +73,11 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
 export const DELETE = withOrgPermissions(["settings.update"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   await deleteZoomCredentials(session.organizationId);
+  await auditPrivilegedAction(session, {
+    action: "settings.zoom.delete",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: { connector: "zoom" },
+  });
   return Response.json({ ok: true });
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
   atribucionDisabledResponse,
   atribucionEnabled,
@@ -53,11 +54,25 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
     return apiError(422, "etapa_invalida", "Esa etapa no es de este negocio");
   }
 
+  const tokenProvided = Boolean(body.data.token);
   await saveCapiSettings({
     organizationId: session.organizationId,
     datasetId: body.data.datasetId,
     token,
     qualifiedStageId,
+  });
+  // SEC-V6b: el token de CAPI se audita solo como "vino o se reusó", nunca su
+  // valor.
+  await auditPrivilegedAction(session, {
+    action: "settings.capi.update",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: {
+      channel: "capi",
+      datasetId: body.data.datasetId,
+      qualifiedStageId,
+      tokenProvided,
+    },
   });
   return Response.json({ ok: true });
 });
@@ -65,5 +80,11 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
 export const DELETE = withOrgPermissions(["settings.update"], async (session) => {
   if (!atribucionEnabled()) return atribucionDisabledResponse();
   await deleteCapiSettings(session.organizationId);
+  await auditPrivilegedAction(session, {
+    action: "settings.capi.delete",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: { channel: "capi" },
+  });
   return Response.json({ ok: true });
 });

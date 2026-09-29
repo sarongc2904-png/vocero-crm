@@ -1,4 +1,5 @@
 import { withOrgPermissions } from "@/lib/api";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import { getBotApiKeyInfo, issueBotApiKey } from "@/server/bot/api-keys";
 
 export const dynamic = "force-dynamic";
@@ -27,5 +28,14 @@ export const GET = withOrgPermissions(["bot_api.manage"], async (session) => {
  */
 export const POST = withOrgPermissions(["bot_api.manage"], async (session) => {
   const { key, last4 } = await issueBotApiKey(session.organizationId);
+  // SEC-V6b: la clave da control total de `/api/bot/*` del tenant y al rotarla
+  // se invalida la anterior — el rastro de quién y cuándo es obligatorio. Se
+  // audita solo el last4; la clave cruda nunca toca el log.
+  await auditPrivilegedAction(session, {
+    action: "bot_api.key.rotate",
+    targetType: "bot_api_key",
+    targetId: session.organizationId,
+    metadata: { keyLast4: last4 },
+  });
   return Response.json({ key, keyLast4: last4 }, { status: 201 });
 });

@@ -3,6 +3,7 @@ import { parseBody, withOrgPermissions } from "@/lib/api";
 import { getSessionOrNull } from "@/lib/auth/session";
 import { isValidHex, resolveAccentSet } from "@/lib/branding";
 import { CURRENCIES } from "@/lib/money";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import { getBranding, saveBranding } from "@/server/branding";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,17 @@ export const PUT = withOrgPermissions(["branding.manage"], async (session, req: 
   await saveBranding(session.organizationId, {
     ...body.data,
     favicon: actual.favicon,
+  });
+  // SEC-V6c: la marca (nombre y moneda del negocio) se muestra al cliente final.
+  await auditPrivilegedAction(session, {
+    action: "settings.branding.update",
+    targetType: "branding",
+    targetId: session.organizationId,
+    metadata: {
+      name: body.data.name,
+      accent: body.data.accent,
+      currency: body.data.currency,
+    },
   });
   return Response.json({ ok: true });
 });

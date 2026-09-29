@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import { googleConnector } from "@/server/agenda/connectors/google";
 import {
   deleteGoogleCredentials,
@@ -52,10 +53,25 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
     calendarId,
   });
 
+  // SEC-V6b: rotar el conector de calendario del tenant deja rastro (sin
+  // secretos: solo last4 y los identificadores no sensibles).
+  const secretLast4Value = secretLast4(body.data.clientSecret);
+  await auditPrivilegedAction(session, {
+    action: "settings.google.update",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: {
+      connector: "google",
+      calendarId,
+      clientId: body.data.clientId,
+      secretLast4: secretLast4Value,
+    },
+  });
+
   return Response.json({
     connection: {
       status: "connected",
-      secretLast4: secretLast4(body.data.clientSecret),
+      secretLast4: secretLast4Value,
       fields: { clientId: body.data.clientId, calendarId },
     },
   });
@@ -64,5 +80,11 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
 export const DELETE = withOrgPermissions(["settings.update"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   await deleteGoogleCredentials(session.organizationId);
+  await auditPrivilegedAction(session, {
+    action: "settings.google.delete",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: { connector: "google" },
+  });
   return Response.json({ ok: true });
 });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgRoles } from "@/lib/api";
 import { isEmbeddedSignupConfigured } from "@/lib/env";
+import { auditPrivilegedAction } from "@/server/auth/audit";
 import { saveCredentials } from "@/server/whatsapp/credentials";
 import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
 import {
@@ -68,6 +69,19 @@ export const POST = withOrgRoles(["owner", "admin"], async (session, req: Reques
   });
 
   await subscribeAppToWaba(body.data.wabaId, token);
+
+  // SEC-V6b: conectar el canal por Embedded Signup rota las credenciales del
+  // tenant. El `code` y el token NUNCA entran al log.
+  await auditPrivilegedAction(session, {
+    action: "settings.whatsapp.embedded_signup",
+    targetType: "channel_credentials",
+    targetId: session.organizationId,
+    metadata: {
+      channel: "whatsapp",
+      wabaId: body.data.wabaId,
+      phoneNumberId: body.data.phoneNumberId,
+    },
+  });
 
   return Response.json({ ok: true, displayPhoneNumber: check.displayPhoneNumber });
 });
