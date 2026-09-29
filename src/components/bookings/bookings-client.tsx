@@ -30,7 +30,19 @@ type Booking = {
   notes: string | null;
 };
 
-type Slot = { startUtc: string; label: string };
+type Slot = { startUtc: string; label: string; dayIso?: string };
+
+/** Suma días a un `YYYY-MM-DD` sin depender de la zona del navegador. */
+function shiftIsoDay(iso: string, delta: number): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(Date.UTC(year!, month! - 1, day!));
+  date.setUTCDate(date.getUTCDate() + delta);
+  return date.toISOString().slice(0, 10);
+}
+
+function slotDay(slot: Slot): string {
+  return slot.dayIso ?? slot.startUtc.slice(0, 10);
+}
 
 const STATUS_LABEL: Record<Booking["status"], string> = {
   agendada: "Agendada",
@@ -41,10 +53,18 @@ const STATUS_LABEL: Record<Booking["status"], string> = {
 
 export function BookingsClient() {
   const [bookings, setBookings] = useState<Booking[] | null>(null);
-  const [slots, setSlots] = useState<Slot[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rescheduling, setRescheduling] = useState<string | null>(null);
+  /**
+   * QB-06: la disponibilidad de reprogramación es POR CITA. Antes se usaba la
+   * rejilla general para todas, así que mover una cita con profesional ofrecía
+   * huecos que el servidor revalidaba contra el calendario de ese profesional y
+   * respondía 409 sobre un horario que la propia UI acababa de mostrar libre.
+   */
+  const [rescheduleSlots, setRescheduleSlots] = useState<Slot[] | null>(null);
+  const [rescheduleDay, setRescheduleDay] = useState<string | null>(null);
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null);
   const [blockStart, setBlockStart] = useState("");
   const [blockMinutes, setBlockMinutes] = useState(60);
   const [showBlockForm, setShowBlockForm] = useState(false);
@@ -57,19 +77,14 @@ export function BookingsClient() {
   useEvents({ onBookingUpdated: () => void refresh() });
 
   async function refresh() {
-    const [list, avail] = await Promise.all([
-      fetch("/api/bookings").catch(() => null),
-      fetch("/api/calendar/availability").catch(() => null),
-    ]);
+    // QB-06: la vista ya NO precarga una rejilla general —la disponibilidad se
+    // pide por cita al abrir "Reprogramar"—, así que aquí solo se lista.
+    const list = await fetch("/api/bookings").catch(() => null);
     if (list?.ok) {
       const data = (await list.json()) as { bookings: Booking[] };
       setBookings(data.bookings);
     } else {
       setBookings([]);
-    }
-    if (avail?.ok) {
-      const data = (await avail.json()) as { slots: Slot[] };
-      setSlots(data.slots.slice(0, 12));
     }
   }
 
@@ -91,6 +106,61 @@ export function BookingsClient() {
     }
     setRescheduling(null);
     await refresh();
+  }
+
+  /**
+   * QB-06 — Disponibilidad DERIVADA DE LA CITA.
+   *
+   * Si la cita tiene servicio y profesional, se consulta ESA combinación (el
+   * servidor revalida contra el calendario del profesional y aplica los
+   * bloqueos y la duración del servicio). Una cita general —sin profesional—
+   * usa la rejilla general, que es su caso legítimo.
+   */
+  async function loadRescheduleSlots(booking: Booking, day: string | null) {
+    setRescheduleSlots(null);
+    setRescheduleError(null);
+
+    const params = new URLSearchParams();
+    if (booking.service?.id && booking.professional?.id) {
+      params.set("serviceId", booking.service.id);
+      params.set("professionalId", booking.professional.id);
+    }
+    if (day) {
+      params.set("from", day);
+      params.set("to", day);
+    }
+
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    const res = await fetch(`/api/calendar/availability${query}`).catch(
+      () => null
+    );
+    if (!res?.ok) {
+      setRescheduleSlots([]);
+      setRescheduleError("No se pudo consultar la disponibilidad de esta cita.");
+      return;
+    }
+
+    const data = (await res.json()) as { slots: Slot[] };
+    if (!day) {
+      const first = data.slots[0];
+      if (!first) {
+        setRescheduleSlots([]);
+        return;
+      }
+      const firstDay = slotDay(first);
+      setRescheduleDay(firstDay);
+      setRescheduleSlots(
+        data.slots.filter((slot) => slotDay(slot) === firstDay)
+      );
+      return;
+    }
+    setRescheduleSlots(data.slots);
+  }
+
+  function openReschedule(booking: Booking) {
+    setRescheduling(booking.id);
+    setRescheduleDay(null);
+    void loadRescheduleSlots(booking, null);
   }
 
   async function createBlock() {
@@ -206,7 +276,9 @@ export function BookingsClient() {
                     variant="secondary"
                     disabled={busy === b.id}
                     onClick={() =>
-                      setRescheduling((r) => (r === b.id ? null : b.id))
+                      rescheduling === b.id
+                        ? setRescheduling(null)
+                        : openReschedule(b)
                     }
                   >
                     Reprogramar
@@ -247,13 +319,60 @@ export function BookingsClient() {
               )}
 
               {rescheduling === b.id && (
-                <div className="space-y-1 rounded-sm bg-subtle p-2">
-                  {slots.length === 0 && (
+                <div className="space-y-2 rounded-sm bg-subtle p-2">
+                  <p className="text-xs text-text-3">
+                    {b.professional
+                      ? `Horarios de ${b.professional.name}${
+                          b.service ? ` · ${b.service.name}` : ""
+                        }`
+                      : "Horarios generales del negocio"}
+                  </p>
+
+                  {rescheduleDay && (
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = shiftIsoDay(rescheduleDay, -1);
+                          setRescheduleDay(next);
+                          void loadRescheduleSlots(b, next);
+                        }}
+                        className="text-xs font-semibold text-text-3 hover:text-foreground"
+                      >
+                        ← Día anterior
+                      </button>
+                      <span className="text-xs font-semibold">{rescheduleDay}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = shiftIsoDay(rescheduleDay, 1);
+                          setRescheduleDay(next);
+                          void loadRescheduleSlots(b, next);
+                        }}
+                        className="text-xs font-semibold text-text-3 hover:text-foreground"
+                      >
+                        Día siguiente →
+                      </button>
+                    </div>
+                  )}
+
+                  {rescheduleSlots === null && (
+                    <p className="text-sm text-text-3">
+                      Consultando disponibilidad…
+                    </p>
+                  )}
+
+                  {rescheduleSlots?.length === 0 && !rescheduleError && (
                     <p className="text-sm text-text-3">
                       No hay huecos libres para mover esta cita.
                     </p>
                   )}
-                  {slots.map((s) => (
+
+                  {rescheduleError && (
+                    <p className="text-sm text-destructive">{rescheduleError}</p>
+                  )}
+
+                  {rescheduleSlots?.map((s) => (
                     <button
                       key={s.startUtc}
                       type="button"
