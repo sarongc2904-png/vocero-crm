@@ -25,13 +25,31 @@ import type { WeeklyHours } from "@/server/agenda/settings";
  * decisión tomada ANTES de que el texto del modelo importe.
  */
 
-/** Palabras que indican que el cliente quiere ver horarios/reservar, no solo saber si se trabaja. */
-const AVAILABILITY_WORDS =
-  /\b(cita|citas|agendar|agenda|reserv|espacio|espacios|hueco|huecos|disponib|cupo|cupos)\b/;
-
-/** Palabras de la pregunta "¿se trabaja ese día?" sin pedir explícitamente horarios. */
+/**
+ * IA-2 — Preguntas de APERTURA/CIERRE: piden el horario comercial, no huecos.
+ *
+ * `horario/horarios` estaba antes en esta lista y no entre las palabras de
+ * disponibilidad, así que "¿Qué horarios tienen el viernes?" —la forma más
+ * común de pedir disponibilidad en WhatsApp MX— se respondía con "abrimos de
+ * 09:00 a 17:00" y sin un solo hueco: un callejón sin salida en el punto de
+ * máxima intención.
+ *
+ * La distinción correcta no es la palabra "horario", sino si la pregunta es de
+ * apertura/cierre. Estas frases SÍ son de horario comercial:
+ * "¿A qué hora abren el viernes?", "¿Cuál es su horario de atención?",
+ * "¿Hasta qué hora atienden?".
+ */
 const HOURS_ONLY_WORDS =
-  /\b(abren|abierto|abiertos|abierta|cerrado|cerrados|cerrada|trabajan|atienden|horario|horarios)\b/;
+  /\b(abren|abierto|abiertos|abierta|cerrado|cerrados|cerrada|atienden|cierra|cierran|trabajan|horario de atenci[oó]n|horario comercial|horario laboral|a qu[eé] hora|hasta qu[eé] hora|desde qu[eé] hora)\b/;
+
+/**
+ * Pedido EXPLÍCITO de huecos. Deliberadamente SIN "horario(s)": esa palabra es
+ * la que hay que desambiguar, y quien decide es `HOURS_ONLY_WORDS`. "¿Qué
+ * horarios tienen el viernes?" no cae en ninguna frase de apertura/cierre, así
+ * que termina en disponibilidad; "¿cuál es su horario de atención?" sí.
+ */
+const EXPLICIT_SLOT_WORDS =
+  /\b(cita|citas|agendar|agenda|reserv|espacio|espacios|hueco|huecos|disponib|cupo|cupos|lugar|lugares)\b/;
 
 function normalize(text: string): string {
   return text
@@ -90,8 +108,14 @@ export function resolveScheduleIntent(input: {
 
   const fact = businessHoursFact(scope.date, input.weeklyHours, input.timezone);
   const norm = normalize(input.text);
-  const pideDisponibilidad = AVAILABILITY_WORDS.test(norm);
-  const soloPreguntaHorario = !pideDisponibilidad && HOURS_ONLY_WORDS.test(norm);
+  const pideHuecos = EXPLICIT_SLOT_WORDS.test(norm);
+  /**
+   * IA-2 — La pregunta de apertura/cierre gana SOLO si no se están pidiendo
+   * huecos explícitamente. Antes bastaba con que apareciera "horario" para caer
+   * en el modo comercial, que es justo la forma habitual de pedir
+   * disponibilidad ("¿qué horarios tienen el viernes?").
+   */
+  const soloPreguntaHorario = !pideHuecos && HOURS_ONLY_WORDS.test(norm);
 
   return {
     kind: "date_mentioned",
