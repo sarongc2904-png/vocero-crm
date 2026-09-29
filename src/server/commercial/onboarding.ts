@@ -115,7 +115,7 @@ export async function getOnboardingState(organizationId: string) {
     },
     {
       id: "timezone",
-      label: "Horario y zona del negocio",
+      label: "Configura la agenda general",
       complete: Boolean(fact.timezone),
       optional: true,
       href: "/settings/calendar",
@@ -129,7 +129,7 @@ export async function getOnboardingState(organizationId: string) {
     },
     {
       id: "test",
-      label: "Haz una prueba",
+      label: "Prueba una conversación",
       complete: Boolean(fact.test),
       href: "/lab",
     },

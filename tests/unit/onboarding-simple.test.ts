@@ -13,7 +13,7 @@ describe("onboarding simple para negocio general", () => {
     expect(onboarding).toContain('label: "Datos del negocio"');
     expect(onboarding).toContain('label: "Conecta WhatsApp"');
     expect(onboarding).toContain('label: "Enséñale a la IA sobre tu negocio"');
-    expect(onboarding).toContain('label: "Haz una prueba"');
+    expect(onboarding).toContain('label: "Prueba una conversación"');
 
     expect(onboarding).not.toContain('{ id: "services", label: "Servicios"');
     expect(onboarding).not.toContain('{ id: "professionals", label: "Profesionales"');
@@ -24,7 +24,7 @@ describe("onboarding simple para negocio general", () => {
     const onboarding = source("src/server/commercial/onboarding.ts");
 
     expect(onboarding).toContain('id: "timezone"');
-    expect(onboarding).toContain('label: "Horario y zona del negocio"');
+    expect(onboarding).toContain('label: "Configura la agenda general"');
     expect(onboarding).toContain('id: "calendar"');
     expect(onboarding).toContain("optional: true");
   });

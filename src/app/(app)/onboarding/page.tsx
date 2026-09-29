@@ -22,11 +22,11 @@ export default async function OnboardingPage() {
             Vamos paso a paso. Completa lo esencial y deja lo opcional para después.
           </p>
           <p className="mt-1 text-xs text-text-3">
-            {onboarding.completed} de {onboarding.total} pasos completos · Plan {subscription.plan.name} por {new Intl.NumberFormat("es-MX", { style: "currency", currency: subscription.plan.currency, maximumFractionDigits: 0 }).format(subscription.plan.monthlyPriceCents / 100)} al mes.
+            {onboarding.requiredCompleted} de {onboarding.requiredTotal} pasos esenciales completos · Plan {subscription.plan.name} por {new Intl.NumberFormat("es-MX", { style: "currency", currency: subscription.plan.currency, maximumFractionDigits: 0 }).format(subscription.plan.monthlyPriceCents / 100)} al mes.
           </p>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-secondary">
-          <div className="h-full bg-brand" style={{ width: `${Math.round((onboarding.completed / onboarding.total) * 100)}%` }} />
+          <div className="h-full bg-brand" style={{ width: `${Math.round((onboarding.requiredCompleted / onboarding.requiredTotal) * 100)}%` }} />
         </div>
 
         {onboarding.nextStep ? (
