@@ -1,4 +1,4 @@
-import { apiError, withAuth } from "@/lib/api";
+import { apiError, withOrgPermissions } from "@/lib/api";
 import { getConversation } from "@/server/inbox/queries";
 import { SendError, sendMediaMessage } from "@/server/inbox/send";
 import { MediaValidationError } from "@/server/whatsapp/media";
@@ -21,51 +21,58 @@ const SEND_ERROR_STATUS: Record<SendError["code"], number> = {
  * 008 — Envía un adjunto de archivo por la conversación (multipart):
  * `file` (binario, requerido) + `caption` (opcional). La validación de tipo y
  * tamaño ocurre ANTES de tocar Graph (413/415 con el límite en el mensaje).
+ *
+ * INB-4: exige `conversations.reply`, igual que el envío de texto. Antes usaba
+ * `withAuth` a secas, así que un rol sin permiso de respuesta podía enviar
+ * adjuntos por una puerta lateral.
  */
-export const POST = withAuth(async (session, req: Request, ctx: Params) => {
-  const { id } = await ctx.params;
-  const conv = await getConversation(session.organizationId, id);
-  if (!conv) return apiError(404, "not_found", "Conversación no encontrada");
+export const POST = withOrgPermissions(
+  ["conversations.reply"],
+  async (session, req: Request, ctx: Params) => {
+    const { id } = await ctx.params;
+    const conv = await getConversation(session.organizationId, id);
+    if (!conv) return apiError(404, "not_found", "Conversación no encontrada");
 
-  const form = await req.formData().catch(() => null);
-  if (!form) {
-    return apiError(400, "invalid", "Se esperaba multipart/form-data");
-  }
-  const file = form.get("file");
-  if (!(file instanceof File)) {
-    return apiError(422, "invalid", "Falta el archivo (campo `file`)");
-  }
-  const captionRaw = form.get("caption");
-  const caption =
-    typeof captionRaw === "string" && captionRaw.trim()
-      ? captionRaw.trim().slice(0, 1024)
-      : undefined;
-
-  const data = Buffer.from(await file.arrayBuffer());
-
-  try {
-    const result = await sendMediaMessage({
-      conversationId: id,
-      organizationId: session.organizationId,
-      file: {
-        data,
-        mimeType: file.type || "application/octet-stream",
-        fileName: file.name || undefined,
-      },
-      caption,
-    });
-    return Response.json({ messageId: result.messageId }, { status: 201 });
-  } catch (err) {
-    if (err instanceof MediaValidationError) {
-      return apiError(
-        err.code === "too_large" ? 413 : 415,
-        err.code,
-        err.message
-      );
+    const form = await req.formData().catch(() => null);
+    if (!form) {
+      return apiError(400, "invalid", "Se esperaba multipart/form-data");
     }
-    if (err instanceof SendError) {
-      return apiError(SEND_ERROR_STATUS[err.code], err.code, err.message);
+    const file = form.get("file");
+    if (!(file instanceof File)) {
+      return apiError(422, "invalid", "Falta el archivo (campo `file`)");
     }
-    throw err;
+    const captionRaw = form.get("caption");
+    const caption =
+      typeof captionRaw === "string" && captionRaw.trim()
+        ? captionRaw.trim().slice(0, 1024)
+        : undefined;
+
+    const data = Buffer.from(await file.arrayBuffer());
+
+    try {
+      const result = await sendMediaMessage({
+        conversationId: id,
+        organizationId: session.organizationId,
+        file: {
+          data,
+          mimeType: file.type || "application/octet-stream",
+          fileName: file.name || undefined,
+        },
+        caption,
+      });
+      return Response.json({ messageId: result.messageId }, { status: 201 });
+    } catch (err) {
+      if (err instanceof MediaValidationError) {
+        return apiError(
+          err.code === "too_large" ? 413 : 415,
+          err.code,
+          err.message
+        );
+      }
+      if (err instanceof SendError) {
+        return apiError(SEND_ERROR_STATUS[err.code], err.code, err.message);
+      }
+      throw err;
+    }
   }
-});
+);

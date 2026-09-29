@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiError, parseBody, withAuth } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { SendError } from "@/server/inbox/send";
 import {
   sendTemplate,
@@ -18,28 +18,36 @@ const bodySchema = z.object({
   variable: z.string().trim().max(500).optional(),
 });
 
-export const POST = withAuth(async (session, req: Request, ctx: Params) => {
-  const { id } = await ctx.params;
-  const body = await parseBody(req, bodySchema);
-  if (!body.ok) return body.response;
+/**
+ * INB-4: exige `conversations.reply`, igual que el envío de texto. Antes usaba
+ * `withAuth` a secas, así que un rol sin permiso de respuesta podía mandar
+ * plantillas por una puerta lateral.
+ */
+export const POST = withOrgPermissions(
+  ["conversations.reply"],
+  async (session, req: Request, ctx: Params) => {
+    const { id } = await ctx.params;
+    const body = await parseBody(req, bodySchema);
+    if (!body.ok) return body.response;
 
-  try {
-    const result = await sendTemplate({
-      organizationId: session.organizationId,
-      conversationId: id,
-      templateId: body.data.templateId,
-      variables:
-        body.data.variables ??
-        (body.data.variable === undefined ? undefined : [body.data.variable]),
-    });
-    return Response.json({ messageId: result.messageId });
-  } catch (err) {
-    if (err instanceof TemplateError) {
-      return apiError(templateErrorStatus(err), err.code, err.message);
+    try {
+      const result = await sendTemplate({
+        organizationId: session.organizationId,
+        conversationId: id,
+        templateId: body.data.templateId,
+        variables:
+          body.data.variables ??
+          (body.data.variable === undefined ? undefined : [body.data.variable]),
+      });
+      return Response.json({ messageId: result.messageId });
+    } catch (err) {
+      if (err instanceof TemplateError) {
+        return apiError(templateErrorStatus(err), err.code, err.message);
+      }
+      if (err instanceof SendError) {
+        return apiError(403, err.code, err.message);
+      }
+      throw err;
     }
-    if (err instanceof SendError) {
-      return apiError(403, err.code, err.message);
-    }
-    throw err;
   }
-});
+);

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
+import { hasOrganizationPermission } from "@/lib/auth/permissions";
 import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
   createTeam,
@@ -10,8 +11,17 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * SEC-V9 — `teams.read` (que sí tiene un agent) no debe entregar el correo de
+ * los compañeros: eso es el directorio, y para eso está `users.read`.
+ */
 export const GET = withOrgPermissions(["teams.read"], async (session) => {
-  return Response.json({ teams: await listTeams(session.organizationId) });
+  const includeEmail = hasOrganizationPermission(session.role, "users.read", {
+    isSuperadmin: session.isSuperadmin,
+  });
+  return Response.json({
+    teams: await listTeams(session.organizationId, { includeEmail }),
+  });
 });
 
 const createSchema = z.object({

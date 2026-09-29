@@ -8,12 +8,25 @@ export type TeamRow = {
     memberId: string;
     userId: string;
     name: string;
-    email: string;
+    /**
+     * SEC-V9 — `null` cuando quien consulta no tiene `users.read`. El correo de
+     * los compañeros no es necesario para asignar una conversación y sí es
+     * material de phishing/organigrama.
+     */
+    email: string | null;
     role: string;
   }>;
 };
 
-export async function listTeams(organizationId: string): Promise<TeamRow[]> {
+/**
+ * SEC-V9 — mínimo privilegio: `teams.read` basta para listar equipos y asignar,
+ * pero el correo de cada miembro se entrega solo con `users.read`.
+ */
+export async function listTeams(
+  organizationId: string,
+  options: { includeEmail?: boolean } = {}
+): Promise<TeamRow[]> {
+  const includeEmail = options.includeEmail !== false;
   const sql = getSql();
   const teams = await sql<{ id: string; name: string }[]>`
     select id, name
@@ -28,10 +41,12 @@ export async function listTeams(organizationId: string): Promise<TeamRow[]> {
     member_id: string;
     user_id: string;
     name: string;
-    email: string;
+    email: string | null;
     role: string;
   }[]>`
-    select tm.team_id, m.id as member_id, m.user_id, u.name, u.email, m.role
+    select tm.team_id, m.id as member_id, m.user_id, u.name,
+           case when ${includeEmail} then u.email else null end as email,
+           m.role
     from team_member tm
     join team t
       on t.id = tm.team_id

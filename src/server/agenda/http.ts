@@ -1,3 +1,4 @@
+import type { OrganizationPermission } from "@/lib/auth/permissions";
 import { BookingError, type BookingResult } from "@/server/agenda/service";
 
 /**
@@ -59,3 +60,26 @@ export function bookingErrorResponse(err: unknown): Response {
     { status: bookingErrorStatus(err.code) }
   );
 }
+
+/**
+ * SEC-V5 — Permiso exigido por cada acción de `PATCH /api/bookings/[id]`.
+ *
+ * Vive aquí (y no dentro del `route.ts`) para poder probarlo: Next solo admite
+ * handlers como exports de una ruta, así que un mapa dentro del archivo sería
+ * intestable. No se inventan permisos: se reutilizan los cuatro existentes de
+ * `appointments.*`.
+ */
+export type BookingPatchAction = "reschedule" | "cancel" | "status" | "retry_link";
+
+export const BOOKING_PATCH_PERMISSION: Record<
+  BookingPatchAction,
+  OrganizationPermission
+> = {
+  reschedule: "appointments.reschedule",
+  cancel: "appointments.cancel",
+  // Marcar realizada/no_show cierra el ciclo de una cita existente; no existe
+  // `appointments.update`, así que se usa la mutación de cita ya declarada.
+  status: "appointments.reschedule",
+  // Reintentar el enlace re-entrega el recurso de la cita (camino de creación).
+  retry_link: "appointments.create",
+};
