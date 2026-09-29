@@ -96,9 +96,25 @@ try {
   ok("tablas críticas presentes", requiredTables.length === 5);
 
   const exclusion = await sql`
-    select conname from pg_constraint where conname = 'booking_professional_active_time_excl'
+    select conname, pg_get_constraintdef(oid) as def
+    from pg_constraint
+    where conrelid = 'booking'::regclass and contype = 'x'
   `;
-  ok("exclusion constraint de double booking presente", exclusion.length === 1);
+  ok("exclusion constraint de double booking presente", exclusion.length >= 1);
+  // SEC-V2: la protección anti doble-reserva debe ser POR TENANT. La versión de
+  // la 0021 indexaba solo (professional_id, rango): con la FK global, un id
+  // ajeno acoplaba la agenda de dos organizaciones.
+  ok(
+    "la exclusion constraint incluye organization_id (aislamiento por tenant)",
+    exclusion.some((row) => String(row.def).includes("organization_id")),
+    exclusion.map((row) => row.conname).join(", ")
+  );
+  ok(
+    "la constraint previa sin organización ya no existe",
+    !exclusion.some(
+      (row) => row.conname === "booking_professional_active_time_excl"
+    )
+  );
 
   const legacyGuard = await sql`
     select tgname from pg_trigger
@@ -161,6 +177,20 @@ try {
     insertBooking(`bk_other_tenant_${suffix}`, orgB, professionalB),
   ]);
   ok("profesional distinto, slot no superpuesto y tenant distinto coexisten", true);
+
+  // SEC-V2 — El caso que la constraint de la 0021 no cubría: MISMO
+  // professional_id y MISMO rango en dos organizaciones distintas. Con la
+  // constraint org-agnóstica, la segunda fila fallaba con 23P01 y el tenant B
+  // veía `slot_taken` sobre una agenda que no era la suya.
+  const crossTenant = await Promise.allSettled([
+    insertBooking(`bk_same_pro_a_${suffix}`, orgA, professionalA, "2031-01-20T16:00:00.000Z"),
+    insertBooking(`bk_same_pro_b_${suffix}`, orgB, professionalA, "2031-01-20T16:00:00.000Z"),
+  ]);
+  ok(
+    "dos tenants con profesional y rango equivalentes no se interfieren",
+    crossTenant.every((result) => result.status === "fulfilled"),
+    crossTenant.find((result) => result.status === "rejected")?.reason?.code
+  );
 
   await sql`
     insert into contact (id, organization_id, wa_identity, name)
