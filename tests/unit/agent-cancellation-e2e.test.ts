@@ -1,5 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * IA-1 — Cancelación SEGURA desde la conversación.
+ *
+ * Contrato anterior (bug): "Cancela mi cita" cancelaba de inmediato, y una
+ * PREGUNTA como "¿Puedo cancelar mi cita?" también. Contrato nuevo:
+ *   - imperativo → abre confirmación pendiente y NO cancela;
+ *   - "sí" con pending vigente → cancela;
+ *   - "sí" sin pending (o con pending expirado) → no cancela nada;
+ *   - pregunta → informativa, sigue el flujo normal del modelo.
+ */
+
 const cancelBookingForConversation = vi.fn();
 const chatJson = vi.fn();
 const updates: Record<string, unknown>[] = [];
@@ -26,7 +37,13 @@ vi.mock("@/lib/db", () => {
       insert: () => ({
         values: (values: Record<string, unknown>) => {
           inserts.push(values);
-          return Promise.resolve([values]);
+          const value: Record<string, unknown> = {};
+          value.onConflictDoUpdate = () => Promise.resolve([]);
+          value.onConflictDoNothing = () => value;
+          value.returning = () => Promise.resolve([values]);
+          value.then = (resolve: (rows: unknown[]) => void) =>
+            Promise.resolve([values]).then(resolve);
+          return value;
         },
       }),
       update: () => ({
@@ -37,6 +54,7 @@ vi.mock("@/lib/db", () => {
           },
         }),
       }),
+      delete: () => ({ where: () => Promise.resolve([]) }),
     }),
     schema: new Proxy(
       {},
@@ -66,19 +84,35 @@ const profile = {
   greeting: null,
 };
 
-function queueTurn(text: string) {
+/** Cola de `select`: conversación, perfil, historial, pending (y lo que siga). */
+function queueTurn(text: string, ...rest: unknown[][]) {
   selectQueue.push(
     [conversation],
     [profile],
-    [{ id: "m_1", direction: "in", text, createdAt: new Date() }]
+    [{ id: "m_1", direction: "in", text, createdAt: new Date() }],
+    ...rest
   );
+}
+
+function pendingRow(expiresInMs: number) {
+  return [
+    {
+      id: "paa_1",
+      action: "cancel",
+      bookingId: "bk_1",
+      startUtc: null,
+      serviceId: null,
+      professionalId: null,
+      expiresAt: new Date(Date.now() + expiresInMs),
+    },
+  ];
 }
 
 function outboundText() {
   return [...inserts].reverse().find((row) => row.direction === "out")?.text;
 }
 
-describe("cancelación automática desde conversación", () => {
+describe("IA-1 — cancelación segura desde la conversación", () => {
   beforeEach(() => {
     selectQueue.length = 0;
     inserts.length = 0;
@@ -89,12 +123,27 @@ describe("cancelación automática desde conversación", () => {
     vi.stubEnv("AGENDA", "on");
   });
 
-  it("'Cancela mi cita' cancela y confirma sin consultar al LLM ni hacer handoff", async () => {
+  it("'Cancela mi cita' NO cancela: abre confirmación pendiente sin consultar al LLM", async () => {
+    queueTurn("Cancela mi cita");
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_1", "org_1");
+
+    expect(cancelBookingForConversation).not.toHaveBeenCalled();
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(outboundText()).toContain("Antes de cancelar necesito tu confirmación");
+    expect(inserts.some((row) => row.action === "cancel")).toBe(true);
+    expect(updates).not.toContainEqual(
+      expect.objectContaining({ handoffAt: expect.anything() })
+    );
+  });
+
+  it("'sí' con pending vigente cancela y confirma", async () => {
     cancelBookingForConversation.mockResolvedValueOnce({
       bookingId: "bk_1",
       label: "domingo, 20 de septiembre a las 10:20",
     });
-    queueTurn("Cancela mi cita");
+    queueTurn("sí", pendingRow(60_000));
 
     const { runAgentTurn } = await import("@/server/ai/pipeline");
     await runAgentTurn("cv_1", "org_1");
@@ -107,21 +156,55 @@ describe("cancelación automática desde conversación", () => {
       "Listo, cancelé tu cita: domingo, 20 de septiembre a las 10:20."
     );
     expect(chatJson).not.toHaveBeenCalled();
-    expect(updates).not.toContainEqual(expect.objectContaining({ handoffAt: expect.anything() }));
   });
 
-  it("sin cita activa responde sin handoff", async () => {
-    const { BookingError } = await import("@/server/agenda/service");
+  it("'sí' SIN pending no cancela nada", async () => {
+    chatJson.mockResolvedValueOnce({ ok: true, data: { action: "none" } });
+    queueTurn("sí", [], [], []);
+
     const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_1", "org_1");
+
+    expect(cancelBookingForConversation).not.toHaveBeenCalled();
+  });
+
+  it("'sí' con pending EXPIRADO no cancela", async () => {
+    chatJson.mockResolvedValueOnce({ ok: true, data: { action: "none" } });
+    queueTurn("sí", pendingRow(-60_000), [], []);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_1", "org_1");
+
+    expect(cancelBookingForConversation).not.toHaveBeenCalled();
+  });
+
+  it("una PREGUNTA informativa no cancela y sigue el flujo normal", async () => {
+    chatJson.mockResolvedValueOnce({
+      ok: true,
+      data: { reply: "...", action: "reply", text: "Puedes cancelar avisando con 24 h." },
+    });
+    queueTurn("¿Puedo cancelar mi cita?", [], []);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_1", "org_1");
+
+    expect(cancelBookingForConversation).not.toHaveBeenCalled();
+    expect(chatJson).toHaveBeenCalled();
+  });
+
+  it("sin cita activa, la confirmación responde sin handoff", async () => {
+    const { BookingError } = await import("@/server/agenda/service");
     cancelBookingForConversation.mockRejectedValueOnce(
       new BookingError("not_found", "No hay una cita activa")
     );
-    queueTurn("Cancela mi cita");
+    queueTurn("sí", pendingRow(60_000));
 
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
     await runAgentTurn("cv_1", "org_1");
 
     expect(outboundText()).toBe("No encontré una cita activa para cancelar.");
-    expect(chatJson).not.toHaveBeenCalled();
-    expect(updates).not.toContainEqual(expect.objectContaining({ handoffAt: expect.anything() }));
+    expect(updates).not.toContainEqual(
+      expect.objectContaining({ handoffAt: expect.anything() })
+    );
   });
 });

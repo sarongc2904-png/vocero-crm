@@ -105,6 +105,7 @@ vi.mock("@/lib/db", () => ({
         inserts.push({ table, values });
         const chain = {
           onConflictDoNothing: () => chain,
+          onConflictDoUpdate: () => chain,
           returning: () => Promise.resolve([values]),
           then: (resolve: (v: unknown) => void) => Promise.resolve([values]).then(resolve),
         };
