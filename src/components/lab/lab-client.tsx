@@ -160,7 +160,7 @@ export function LabClient() {
       const data = (await res.json().catch(() => null)) as {
         error?: { message?: string };
       } | null;
-      setError(data?.error?.message ?? "No se pudo lanzar la corrida");
+      setError(data?.error?.message ?? "No se pudo iniciar la prueba");
       return;
     }
     const data = (await res.json()) as { runId: string };
@@ -179,9 +179,8 @@ export function LabClient() {
             Configura tu proveedor de IA para usar el Laboratorio
           </p>
           <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-            El Laboratorio necesita el agente activo: agrega{" "}
-            <code className="rounded bg-secondary px-1">OPENROUTER_API_TOKEN</code> a la
-            instancia y vuelve aquí.
+            Cuando la conexión de IA esté disponible podrás probar aquí cómo responde
+            el agente antes de usarlo con clientes reales.
           </p>
         </div>
       </div>
@@ -204,9 +203,9 @@ export function LabClient() {
       {configOpen && profile && (
         <div className="mx-4 mt-4 rounded-lg border bg-card p-4 sm:mx-6">
           <div className="mb-4">
-            <h3 className="text-sm font-semibold">Configuración de pruebas de este cliente</h3>
+            <h3 className="text-sm font-semibold">Configuración de la prueba</h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              Esta configuración pertenece solo a la organización activa. Cambiar de cliente carga otro perfil.
+              Elige qué situaciones quieres simular y qué contexto debe usar la prueba.
             </p>
           </div>
 
@@ -282,7 +281,7 @@ export function LabClient() {
       {running && progress && (
         <div className="mx-6 mt-4 rounded-lg border bg-card p-4">
           <div className="mb-2 flex items-center justify-between text-sm">
-            <span className="font-medium">Evaluando personas…</span>
+            <span className="font-medium">Probando conversaciones…</span>
             <span className="text-muted-foreground">
               {progress.done} / {progress.total}
             </span>
@@ -307,8 +306,8 @@ export function LabClient() {
         ) : (
           <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
             {runs.length === 0
-              ? `Corre tu primera evaluación: ${profile?.enabledScenarios.length ?? SCENARIOS.length} escenarios simulados conversarán con tu agente y un juez calificará cada conversación.`
-              : "Elige una corrida del historial."}
+              ? `Haz tu primera prueba: ${profile?.enabledScenarios.length ?? SCENARIOS.length} situaciones simuladas conversarán con tu agente y evaluarán sus respuestas.`
+              : "Elige una prueba del historial."}
           </div>
         )}
       </div>
@@ -333,19 +332,19 @@ function Header({
     <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-6 sm:py-4">
       <div>
         <h2 className="flex items-center gap-2 text-[17px] font-bold tracking-tight">
-          <FlaskConical className="h-4 w-4 text-primary" /> Laboratorio
+          <FlaskConical className="h-4 w-4 text-primary" /> Prueba del agente
         </h2>
         <p className="text-xs text-muted-foreground">
-          Sandbox interno — no envía mensajes reales
+          Simulación interna — no envía mensajes reales
         </p>
       </div>
       <div className="flex gap-2">
         <Button variant="outline" onClick={onConfigure} disabled={running}>
-          <Settings2 className="h-4 w-4" /> Configurar pruebas
+          <Settings2 className="h-4 w-4" /> Configurar
         </Button>
         <Button onClick={onLaunch} disabled={disabled || running || launching}>
           <Play className="h-4 w-4" />
-          {running ? "Corrida en curso…" : "Correr evaluación"}
+          {running ? "Prueba en curso…" : "Probar agente"}
         </Button>
       </div>
     </header>
@@ -367,7 +366,7 @@ function HistoryList({
         Historial
       </p>
       {runs.length === 0 && (
-        <p className="text-xs text-muted-foreground">Sin corridas todavía.</p>
+        <p className="text-xs text-muted-foreground">Sin pruebas todavía.</p>
       )}
       {runs.map((run) => (
         <button
@@ -414,7 +413,7 @@ function ScoreBadge({ run }: { run: Run }) {
   if (run.status === "failed") return <Badge variant="destructive">Fallida</Badge>;
   const score = run.score ?? 0;
   const variant = score >= 80 ? "success" : score >= 50 ? "warning" : "destructive";
-  return <Badge variant={variant}>Score {score}</Badge>;
+  return <Badge variant={variant}>Resultado {score}</Badge>;
 }
 
 function Report({
@@ -430,12 +429,12 @@ function Report({
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>Reporte</CardTitle>
+            <CardTitle>Resultado de la prueba</CardTitle>
             <ScoreBadge run={run} />
           </div>
           {run.status === "failed" && (
             <p className="text-sm text-destructive">
-              La corrida falló: {run.error ?? "error desconocido"}. Vuelve a
+              La prueba falló: {run.error ?? "error desconocido"}. Vuelve a
               intentarlo.
             </p>
           )}
@@ -510,7 +509,7 @@ function CaseCard({ testCase, onApplied }: { testCase: Case; onApplied: () => vo
           ))}
           <div className="rounded-md border bg-background p-3">
             <p className="mb-2 kicker">
-              Transcript
+              Conversación
             </p>
             <div className="space-y-1.5 text-sm">
               {c.transcript.map((t, i) => (
@@ -607,7 +606,7 @@ function HallazgoCard({
               onClick={() => void apply()}
               disabled={saving || !pregunta.trim() || !respuesta.trim()}
             >
-              {saving ? "Guardando…" : "Guardar en el KB"}
+              {saving ? "Guardando…" : "Guardar en conocimiento"}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
               Cancelar
