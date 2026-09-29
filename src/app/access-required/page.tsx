@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { requireSession } from "@/lib/auth/session";
+import { getSessionState } from "@/lib/auth/session";
 import { getCommercialAccess } from "@/server/commercial/entitlement";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +28,17 @@ const STATUS_COPY = {
 } as const;
 
 export default async function AccessRequiredPage() {
-  const session = await requireSession();
+  /**
+   * AUTH-2 — Antes esto llamaba a `requireSession()` a secas: una cuenta
+   * autenticada SIN organización hacía que la página lanzara `ForbiddenError`,
+   * es decir un error 500 en la única pantalla pensada para explicar el
+   * bloqueo. Ahora cada estado va a donde corresponde.
+   */
+  const state = await getSessionState();
+  if (state.status === "anonymous") redirect("/login");
+  if (state.status === "no_organization") redirect("/organization-required");
+
+  const session = state.session;
   const access = await getCommercialAccess(session.organizationId).catch(
     () => null
   );

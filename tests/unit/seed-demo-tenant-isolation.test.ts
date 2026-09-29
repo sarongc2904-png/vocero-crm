@@ -25,7 +25,17 @@ const mocked = vi.hoisted(() => {
       agentTestCase: table("agentTestCase", ["id", "organizationId"]),
       agentTestRun: table("agentTestRun", ["id", "organizationId"]),
       pipelineStage: table("pipelineStage", ["id", "organizationId"]),
-      agentProfile: table("agentProfile", ["id", "organizationId"]),
+      agentProfile: table("agentProfile", [
+        "id",
+        "organizationId",
+        // ONB-1: el guard de la demo lee la personalidad del agente para saber
+        // si alguien ya lo configuró (el seed la sobrescribe).
+        "name",
+        "tone",
+        "instructions",
+        "escalationRules",
+        "greeting",
+      ]),
     },
     nextId: 0,
   };

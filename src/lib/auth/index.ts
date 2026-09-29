@@ -11,7 +11,7 @@ import {
   resolveActiveOrganizationId,
 } from "@/server/auth/on-signup";
 import { isPublicSignupAllowed } from "@/server/auth/registration";
-import { sendPasswordResetEmail } from "@/server/auth/password-reset-email";
+import { sendResetPasswordForUser } from "@/server/auth/send-reset-password";
 
 /**
  * Contexto interno del proceso: permite que el alta de cuentas de equipo
@@ -88,14 +88,13 @@ function createAuth() {
       minPasswordLength: 8,
       resetPasswordTokenExpiresIn: 3600,
       revokeSessionsOnPasswordReset: true,
-      sendResetPassword: async ({ user, url }) => {
-        void sendPasswordResetEmail({
-          to: user.email,
-          resetUrl: url,
-        }).catch((error) => {
-          console.error("[auth] no se pudo enviar recuperación de contraseña", error);
-        });
-      },
+      /**
+       * AUTH-1 — El envío y la propagación de errores viven en
+       * `sendResetPasswordForUser` (probado en tests/unit/auth-recovery.test.ts).
+       * Antes esto era `void ... .catch(console.error)`, que convertía cualquier
+       * fallo en un falso "revisa tu correo".
+       */
+      sendResetPassword: sendResetPasswordForUser,
     },
     plugins: [
       organization({

@@ -74,7 +74,8 @@ if (!session.ok()) {
 
 // Demo (409 si ya hay datos: no pasa nada), número de prueba por el mock y la
 // marca tal cual sale de la caja.
-await call("/api/seed/demo", { method: "POST" });
+// ONB-1: el endpoint exige confirmación explícita; ya no basta un POST vacío.
+await call("/api/seed/demo", { method: "POST", data: { confirm: true } });
 await call("/api/settings/whatsapp", {
   method: "PUT",
   data: { wabaId: "waba-demo", phoneNumberId: "pn-demo-001", token: "token-demo" },

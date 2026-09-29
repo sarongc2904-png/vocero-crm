@@ -26,8 +26,18 @@ export class UnauthorizedError extends Error {
   }
 }
 
+/**
+ * AUTH-2 — Motivo del bloqueo. `no_membership` significa "la cuenta es válida
+ * pero no pertenece a ninguna organización"; es un estado terminal que el
+ * usuario debe VER explicado, no un "no autenticado" que lo devuelva al login.
+ */
+export type ForbiddenReason = "no_membership" | "suspended" | "generic";
+
 export class ForbiddenError extends Error {
-  constructor(message = "Sin acceso a una organización") {
+  constructor(
+    message = "Sin acceso a una organización",
+    readonly reason: ForbiddenReason = "generic"
+  ) {
     super(message);
     this.name = "ForbiddenError";
   }
@@ -72,13 +82,19 @@ export async function requireSession(): Promise<SessionContext> {
     activeOrganizationId
   );
   if (!membership) {
-    throw new ForbiddenError("El usuario no pertenece a ninguna organización");
+    throw new ForbiddenError(
+      "El usuario no pertenece a ninguna organización",
+      "no_membership"
+    );
   }
 
   if (await isMemberSuspended(membership.organizationId, session.user.id)) {
     const fallback = await firstUnsuspendedMembership(session.user.id);
     if (!fallback) {
-      throw new ForbiddenError("El acceso a esta organización está suspendido");
+      throw new ForbiddenError(
+        "El acceso a esta organización está suspendido",
+        "suspended"
+      );
     }
     await auth.api.setActiveOrganization({
       headers: requestHeaders,
@@ -114,5 +130,36 @@ export async function getSessionOrNull(): Promise<SessionContext | null> {
     return await requireSession();
   } catch {
     return null;
+  }
+}
+
+/**
+ * AUTH-2 — Estado de sesión SIN perder el motivo.
+ *
+ * `getSessionOrNull()` colapsaba dos situaciones muy distintas en un mismo
+ * `null`: "no hay sesión" y "hay sesión pero la cuenta no tiene organización".
+ * El layout de `(app)` mandaba ambas a `/login`, así que un usuario autenticado
+ * sin organización quedaba en un bucle login → inbox → login sin ver nunca una
+ * explicación.
+ *
+ * Este helper separa los tres estados para que cada uno reciba la respuesta
+ * correcta. Un error inesperado (por ejemplo la base de datos caída) NO se
+ * disfraza de "sin acceso": se relanza, porque ocultarlo convertiría una avería
+ * en un bucle de login.
+ */
+export type SessionState =
+  | { status: "ok"; session: SessionContext }
+  | { status: "anonymous" }
+  | { status: "no_organization"; reason: ForbiddenReason };
+
+export async function getSessionState(): Promise<SessionState> {
+  try {
+    return { status: "ok", session: await requireSession() };
+  } catch (error) {
+    if (error instanceof UnauthorizedError) return { status: "anonymous" };
+    if (error instanceof ForbiddenError) {
+      return { status: "no_organization", reason: error.reason };
+    }
+    throw error;
   }
 }

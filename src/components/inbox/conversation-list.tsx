@@ -21,18 +21,90 @@ const STAGE_DOT: Record<string, string> = {
 };
 const STAGE_DOT_FALLBACK = "#8391aa";
 
+/**
+ * ONB-1 — Cargar la demo ya no es un clic inocuo.
+ *
+ * Este botón vivía en el estado vacío de la Bandeja como si solo "mostrara
+ * ejemplos", pero del otro lado el seed borra la base de conocimiento, borra
+ * las corridas del Laboratorio y reemplaza la identidad del agente. Ahora:
+ *   1. el servidor rechaza la carga si algo se perdería (409 con el detalle),
+ *   2. exige `confirm: true`,
+ *   3. aquí se explica ANTES, en un diálogo, qué se va a crear y qué se
+ *      reemplazaría, y no se envía nada hasta que la persona confirma.
+ */
 function EmptyState({ onSeeded }: { onSeeded: () => void }) {
+  const [confirming, setConfirming] = useState(false);
   const [seeding, setSeeding] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function seed() {
     setSeeding(true);
-    const res = await fetch("/api/seed/demo", { method: "POST" }).catch(
-      () => null
-    );
+    setError(null);
+
+    const res = await fetch("/api/seed/demo", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // Confirmación explícita: el endpoint la exige.
+      body: JSON.stringify({ confirm: true }),
+    }).catch(() => null);
+
     setSeeding(false);
-    if (res?.ok) onSeeded();
-    else setFailed(true);
+
+    if (res?.ok) {
+      setConfirming(false);
+      onSeeded();
+      return;
+    }
+
+    // 409 = la organización ya tiene datos que la demo reemplazaría. Se
+    // muestra el motivo real del servidor en vez de un "falló" mudo.
+    const body = await res?.json().catch(() => null);
+    setError(
+      body?.error?.message ??
+        "No se pudo cargar la demo. Intenta de nuevo más tarde."
+    );
+  }
+
+  if (confirming) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="font-serif text-[19px] italic leading-tight text-foreground">
+          ¿Cargar los datos de demostración?
+        </p>
+        <div className="max-w-xs rounded-lg border border-border-strong bg-card p-3 text-left text-xs leading-5 text-text-3">
+          <p className="font-medium text-foreground">Se van a crear</p>
+          <p>8 contactos falsos con conversaciones, conocimiento de ejemplo y una corrida del Laboratorio.</p>
+          <p className="mt-2 font-medium text-foreground">Se va a reemplazar</p>
+          <p>La identidad del agente (nombre, tono, instrucciones y saludo).</p>
+          <p className="mt-2">
+            Solo se permite si la organización está vacía: si ya tienes
+            contactos, conocimiento o pruebas del Laboratorio, el servidor
+            rechaza la carga y no se borra nada.
+          </p>
+        </div>
+        {error ? (
+          <p role="alert" className="max-w-xs text-xs text-danger-text">
+            {error}
+          </p>
+        ) : null}
+        <div className="flex items-center gap-2">
+          <Button size="sm" disabled={seeding} onClick={() => void seed()}>
+            {seeding ? "Cargando demo…" : "Sí, cargar la demo"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={seeding}
+            onClick={() => {
+              setConfirming(false);
+              setError(null);
+            }}
+          >
+            Cancelar
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -44,17 +116,17 @@ function EmptyState({ onSeeded }: { onSeeded: () => void }) {
         Cuando alguien escriba a tu número de WhatsApp, su conversación
         aparecerá aquí en tiempo real.
       </p>
-      {!failed && (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={seeding}
-          onClick={() => void seed()}
-        >
-          <Sparkles className="h-4 w-4" strokeWidth={1.7} />
-          {seeding ? "Cargando demo…" : "Cargar datos de demostración"}
-        </Button>
-      )}
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => setConfirming(true)}
+      >
+        <Sparkles className="h-4 w-4" strokeWidth={1.7} />
+        Cargar datos de demostración
+      </Button>
+      <p className="max-w-[260px] text-[11px] leading-4 text-text-3">
+        Solo en organizaciones vacías. Pide confirmación antes de escribir nada.
+      </p>
     </div>
   );
 }

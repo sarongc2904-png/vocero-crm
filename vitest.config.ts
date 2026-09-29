@@ -2,6 +2,10 @@ import { defineConfig } from "vitest/config";
 import path from "node:path";
 
 export default defineConfig({
+  // Next compila JSX con el runtime automático (sin `import React` en cada
+  // archivo). Sin esto, esbuild usa el runtime clásico y cualquier prueba que
+  // renderice un componente o layout falla con "React is not defined".
+  esbuild: { jsx: "automatic" },
   test: {
     include: ["tests/unit/**/*.test.ts"],
     environment: "node",

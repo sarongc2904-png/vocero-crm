@@ -31,8 +31,13 @@ const envSchema = z.object({
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api"),
   OPENROUTER_MODEL: z.string().optional(),
   OPENROUTER_JUDGE_MODEL: z.string().optional(),
-  // Correo transaccional para recuperación de contraseña.
-  // Si faltan, la solicitud mantiene respuesta neutra pero no puede enviar correo.
+  // Correo transaccional para recuperación de contraseña (AUTH-1).
+  // Se definen LAS DOS o NINGUNA: con una sola, el envío es imposible.
+  // La validación cruzada vive en `getPasswordResetEmailConfig()`
+  // (src/server/auth/password-reset-email.ts) y NO es fatal a propósito: una
+  // variable opcional mal puesta no debe impedir el arranque de todo el CRM.
+  // En ambos casos ("ausentes" o "incompletas") el endpoint de recuperación
+  // responde un error operacional genérico, nunca un falso éxito.
   RESEND_API_KEY: z.string().optional(),
   AUTH_EMAIL_FROM: z.string().optional(),
   // 014/017: canales encendidos, separados por coma. WhatsApp siempre esta on.

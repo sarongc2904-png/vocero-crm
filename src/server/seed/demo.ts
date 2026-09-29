@@ -413,15 +413,144 @@ export async function seedDemo(
   return { contacts: DEMO_CONTACTS.length, kbEntries: DEMO_KB.length };
 }
 
-/** true si la organización aún no tiene datos de dominio (para el botón). */
-export async function isDomainEmpty(
+/**
+ * ONB-1 — Lo que el seed demo DESTRUYE si se ejecuta.
+ *
+ * El botón "Cargar datos de demostración" del Inbox se ofrecía como una acción
+ * inocua, pero el seed:
+ *   - borra TODA la base de conocimiento de la organización,
+ *   - borra TODAS las corridas y casos del Laboratorio,
+ *   - SOBREESCRIBE nombre, tono, instrucciones, reglas de escalamiento y
+ *     saludo del agente,
+ *   - inserta 8 contactos falsos con sus conversaciones.
+ *
+ * Nada de eso es aceptable por accidente en la cuenta de un cliente real, así
+ * que la lista de bloqueos se calcula ANTES de tocar nada y el endpoint la usa
+ * como puerta. Antes solo se miraban los contactos: una organización con su
+ * conocimiento y sus pruebas del Laboratorio ya cargados pero sin contactos
+ * (el caso normal de quien configura antes de conectar WhatsApp) perdía todo
+ * con un clic.
+ */
+export type DemoSeedBlocker =
+  | "contacts"
+  | "conversations"
+  | "kb"
+  | "lab"
+  | "agent_profile";
+
+/** Texto para explicar el bloqueo sin jerga de base de datos. */
+export const DEMO_SEED_BLOCKER_LABEL: Record<DemoSeedBlocker, string> = {
+  contacts: "contactos",
+  conversations: "conversaciones con mensajes",
+  kb: "conocimiento cargado (base de conocimiento)",
+  lab: "corridas y casos del Laboratorio",
+  agent_profile: "la personalidad e instrucciones del agente",
+};
+
+/**
+ * Valores con los que nace un perfil de agente recién creado
+ * (`src/server/auth/organizations.ts` inserta el perfil sin textos).
+ * Cualquier desviación significa que alguien ya lo configuró.
+ */
+const PRISTINE_AGENT_NAME = "Asistente";
+
+/** true si la organización todavía no ha configurado a su agente. */
+function isAgentProfilePristine(profile: {
+  name: string | null;
+  tone: string | null;
+  instructions: string | null;
+  escalationRules: string | null;
+  greeting: string | null;
+}): boolean {
+  const filled = (value: string | null) =>
+    typeof value === "string" && value.trim().length > 0;
+
+  return (
+    (profile.name ?? PRISTINE_AGENT_NAME) === PRISTINE_AGENT_NAME &&
+    !filled(profile.tone) &&
+    !filled(profile.instructions) &&
+    !filled(profile.escalationRules) &&
+    !filled(profile.greeting)
+  );
+}
+
+/**
+ * Qué perdería esta organización si se cargara la demo. Lista vacía = seguro.
+ *
+ * Toda consulta va con `scoped(...)`: la respuesta de una organización jamás
+ * puede depender de los datos de otra.
+ */
+export async function getDemoSeedBlockers(
   db: Db,
   organizationId: string
-): Promise<boolean> {
-  const rows = await db
+): Promise<DemoSeedBlocker[]> {
+  const blockers: DemoSeedBlocker[] = [];
+
+  const [contact] = await db
     .select({ id: schema.contact.id })
     .from(schema.contact)
     .where(scoped(schema.contact.organizationId, organizationId))
     .limit(1);
-  return rows.length === 0;
+  if (contact) blockers.push("contacts");
+
+  const [conversation] = await db
+    .select({ id: schema.conversation.id })
+    .from(schema.conversation)
+    .where(scoped(schema.conversation.organizationId, organizationId))
+    .limit(1);
+  if (conversation) blockers.push("conversations");
+
+  const [message] = await db
+    .select({ id: schema.message.id })
+    .from(schema.message)
+    .where(scoped(schema.message.organizationId, organizationId))
+    .limit(1);
+  if (message && !blockers.includes("conversations")) {
+    blockers.push("conversations");
+  }
+
+  const [kb] = await db
+    .select({ id: schema.kbEntry.id })
+    .from(schema.kbEntry)
+    .where(scoped(schema.kbEntry.organizationId, organizationId))
+    .limit(1);
+  if (kb) blockers.push("kb");
+
+  const [run] = await db
+    .select({ id: schema.agentTestRun.id })
+    .from(schema.agentTestRun)
+    .where(scoped(schema.agentTestRun.organizationId, organizationId))
+    .limit(1);
+  const [testCase] = await db
+    .select({ id: schema.agentTestCase.id })
+    .from(schema.agentTestCase)
+    .where(scoped(schema.agentTestCase.organizationId, organizationId))
+    .limit(1);
+  if (run || testCase) blockers.push("lab");
+
+  const [profile] = await db
+    .select({
+      name: schema.agentProfile.name,
+      tone: schema.agentProfile.tone,
+      instructions: schema.agentProfile.instructions,
+      escalationRules: schema.agentProfile.escalationRules,
+      greeting: schema.agentProfile.greeting,
+    })
+    .from(schema.agentProfile)
+    .where(scoped(schema.agentProfile.organizationId, organizationId))
+    .limit(1);
+  if (profile && !isAgentProfilePristine(profile)) {
+    blockers.push("agent_profile");
+  }
+
+  return blockers;
+}
+
+/** true si la organización aún no tiene NADA que la demo fuera a destruir. */
+export async function isDomainEmpty(
+  db: Db,
+  organizationId: string
+): Promise<boolean> {
+  const blockers = await getDemoSeedBlockers(db, organizationId);
+  return blockers.length === 0;
 }

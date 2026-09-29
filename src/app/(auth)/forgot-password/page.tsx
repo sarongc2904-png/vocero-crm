@@ -12,17 +12,34 @@ export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
+  const [operationalError, setOperationalError] = useState<string | null>(null);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setLoading(true);
+    setOperationalError(null);
 
-    await authClient.requestPasswordReset({
+    /**
+     * AUTH-1 — El cliente de better-auth devuelve `{ data, error }` en vez de
+     * lanzar. Antes se ignoraba con `.catch(() => null)` y SIEMPRE se pintaba
+     * "recibirás un enlace", incluso si el correo no se había enviado.
+     *
+     * Mensaje deliberadamente genérico: no revela si la cuenta existe.
+     */
+    const { error } = await authClient.requestPasswordReset({
       email,
       redirectTo: `${window.location.origin}/reset-password`,
-    }).catch(() => null);
+    }).catch(() => ({ error: { message: "" } }));
 
     setLoading(false);
+
+    if (error) {
+      setOperationalError(
+        "No pudimos procesar la recuperación en este momento. Intenta de nuevo más tarde."
+      );
+      return;
+    }
+
     setSent(true);
   }
 
@@ -58,6 +75,14 @@ export default function ForgotPasswordPage() {
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Enviando…" : "Enviar enlace"}
             </Button>
+            {operationalError ? (
+              <p
+                role="alert"
+                className="rounded-md border border-danger-soft bg-danger-tint px-3 py-2 text-sm text-danger-text"
+              >
+                {operationalError}
+              </p>
+            ) : null}
             <Link href="/login" className="block text-center text-sm text-text-3 hover:underline">
               Volver
             </Link>

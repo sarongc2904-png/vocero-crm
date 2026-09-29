@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
 import { getAuth } from "@/lib/auth";
-import { getSessionOrNull } from "@/lib/auth/session";
+import { getSessionState } from "@/lib/auth/session";
 import { normalizeThemePreference, THEME_COOKIE } from "@/lib/theme";
 import { getBranding } from "@/server/branding";
 import { AppShell } from "@/components/app-shell";
@@ -12,8 +12,22 @@ import { getCommercialAccess } from "@/server/commercial/entitlement";
 export default async function AppLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const session = await getSessionOrNull();
-  if (!session) redirect("/login");
+  /**
+   * AUTH-2 — Tres estados, tres respuestas distintas.
+   *
+   * Antes `getSessionOrNull()` devolvía `null` tanto para "no hay sesión" como
+   * para "hay sesión pero la cuenta no tiene organización", y ambos caían en
+   * `redirect("/login")`. Con credenciales correctas y sin organización el
+   * usuario rebotaba login → inbox → login para siempre, sin ningún mensaje.
+   *
+   * Ahora "sin organización" tiene su propia pantalla terminal, que explica la
+   * situación y ofrece cerrar sesión. No se crea ningún tenant.
+   */
+  const state = await getSessionState();
+  if (state.status === "anonymous") redirect("/login");
+  if (state.status === "no_organization") redirect("/organization-required");
+
+  const session = state.session;
 
   if (!session.isSuperadmin) {
     const access = await getCommercialAccess(session.organizationId).catch(
