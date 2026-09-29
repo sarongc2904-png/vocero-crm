@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, Check, Clock3, X } from "lucide-react";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, X } from "lucide-react";
 import type { ConversationDto } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 
 type Slot = {
   startUtc: string;
   label?: string;
+  dayIso?: string;
   dayLabel?: string;
   time?: string;
 };
@@ -33,6 +34,33 @@ type BookingCatalog = {
   professionals: BookingProfessional[];
 };
 
+/** Cuántos días hacia adelante busca el botón "siguiente día disponible". */
+const MAX_DAY_SEARCH = 30;
+
+/** Suma días a un `YYYY-MM-DD` sin depender de la zona del navegador. */
+function shiftIsoDay(iso: string, delta: number): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(Date.UTC(year!, month! - 1, day!));
+  date.setUTCDate(date.getUTCDate() + delta);
+  return date.toISOString().slice(0, 10);
+}
+
+/** Día en palabras ("viernes, 3 de octubre"). */
+function dayLabelFor(iso: string): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day!)).toLocaleDateString("es-MX", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  });
+}
+
+/** El día (en la zona del negocio) al que pertenece un slot. */
+function slotDay(slot: Slot): string {
+  return slot.dayIso ?? slot.startUtc.slice(0, 10);
+}
+
 export function QuickBookingDialog({
   conversation,
   onClose,
@@ -46,9 +74,19 @@ export function QuickBookingDialog({
   const [serviceId, setServiceId] = useState("");
   const [professionalId, setProfessionalId] = useState("");
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  /** QB-07: día mostrado (YYYY-MM-DD). `null` = descubrir el primero con huecos. */
+  const [day, setDay] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * QB-01: el error de creación es independiente del de carga. Antes ambos eran
+   * el mismo estado y el `refreshSlots()` posterior al 409 lo borraba en el
+   * mismo tick, así que el operador nunca veía por qué falló.
+   */
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [noMoreDays, setNoMoreDays] = useState(false);
   const [done, setDone] = useState(false);
 
   const schedulableServices = useMemo(
@@ -119,6 +157,7 @@ export function QuickBookingDialog({
     if (hasStructuredCatalog && (!serviceId || !professionalId)) {
       setSlots([]);
       setSelected(null);
+      setDay(null);
       return;
     }
 
@@ -133,6 +172,12 @@ export function QuickBookingDialog({
         params.set("serviceId", serviceId);
         params.set("professionalId", professionalId);
       }
+      // QB-07: con un día elegido se consulta SOLO ese día; sin él, la ventana
+      // por defecto sirve para descubrir el primer día con huecos.
+      if (day) {
+        params.set("from", day);
+        params.set("to", day);
+      }
       const query = params.size > 0 ? `?${params.toString()}` : "";
       const res = await fetch(`/api/calendar/availability${query}`).catch(
         () => null
@@ -146,17 +191,33 @@ export function QuickBookingDialog({
       }
 
       const data = (await res.json()) as { slots: Slot[] };
-      setSlots(data.slots.slice(0, 12));
+      if (cancelled) return;
+
+      if (!day) {
+        const first = data.slots[0];
+        if (!first) {
+          setSlots([]);
+          return;
+        }
+        const firstDay = slotDay(first);
+        setDay(firstDay);
+        setSlots(data.slots.filter((slot) => slotDay(slot) === firstDay));
+        return;
+      }
+
+      setSlots(data.slots);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [catalog, professionalId, schedulableServices.length, serviceId]);
+  }, [catalog, day, professionalId, schedulableServices.length, serviceId]);
 
   function chooseService(nextServiceId: string) {
     setServiceId(nextServiceId);
     setProfessionalId("");
+    setDay(null);
+    setActionError(null);
 
     const matching =
       catalog?.professionals.filter((professional) =>
@@ -165,18 +226,70 @@ export function QuickBookingDialog({
     if (matching.length === 1) setProfessionalId(matching[0]!.id);
   }
 
+  function chooseProfessional(nextProfessionalId: string) {
+    setProfessionalId(nextProfessionalId);
+    setDay(null);
+    setActionError(null);
+  }
+
+  /** QB-07: navegar a un día concreto (anterior/siguiente o búsqueda). */
+  function selectDay(next: string) {
+    setSelected(null);
+    setActionError(null);
+    setNoMoreDays(false);
+    setDay(next);
+  }
+
+  /** QB-07: avanzar hasta el primer día con huecos, acotado. */
+  async function findNextAvailableDay() {
+    if (!day || searching) return;
+    setSearching(true);
+    setActionError(null);
+
+    const base = new URLSearchParams();
+    if (structuredBooking) {
+      base.set("serviceId", serviceId);
+      base.set("professionalId", professionalId);
+    }
+
+    for (let offset = 1; offset <= MAX_DAY_SEARCH; offset += 1) {
+      const candidate = shiftIsoDay(day, offset);
+      const params = new URLSearchParams(base);
+      params.set("from", candidate);
+      params.set("to", candidate);
+      const res = await fetch(
+        `/api/calendar/availability?${params.toString()}`
+      ).catch(() => null);
+      if (res?.ok) {
+        const data = (await res.json()) as { slots: Slot[] };
+        if (data.slots.length > 0) {
+          setSearching(false);
+          selectDay(candidate);
+          return;
+        }
+      }
+    }
+
+    setSearching(false);
+    setNoMoreDays(true);
+  }
+
   async function refreshSlots() {
     if (!catalog) return;
     if (structuredBooking && (!serviceId || !professionalId)) return;
 
-    setSlots(null);
+    // QB-01: NO se limpia `actionError` aquí. Un 409 debe seguir visible
+    // después de refrescar la lista de huecos.
     setSelected(null);
-    setError(null);
 
     const params = new URLSearchParams();
     if (structuredBooking) {
       params.set("serviceId", serviceId);
       params.set("professionalId", professionalId);
+    }
+    if (day) {
+      params.set("from", day);
+      params.set("to", day);
     }
     const query = params.size > 0 ? `?${params.toString()}` : "";
     const res = await fetch(`/api/calendar/availability${query}`).catch(
@@ -190,13 +303,14 @@ export function QuickBookingDialog({
     }
 
     const data = (await res.json()) as { slots: Slot[] };
-    setSlots(data.slots.slice(0, 12));
+    setSlots(day ? data.slots : data.slots.slice(0, 12));
   }
 
   async function confirm() {
     if (!selected || busy) return;
     setBusy(true);
     setError(null);
+    setActionError(null);
 
     const res = await fetch("/api/bookings", {
       method: "POST",
@@ -219,9 +333,14 @@ export function QuickBookingDialog({
 
     if (res?.status !== 201) {
       const data = (await res?.json().catch(() => null)) as {
-        error?: { message?: string };
+        error?: { code?: string; message?: string };
       } | null;
-      setError(data?.error?.message ?? "No se pudo crear la cita.");
+      // QB-01: ante un choque de hueco el operador tiene que entender qué pasó.
+      setActionError(
+        res?.status === 409 || data?.error?.code === "slot_taken"
+          ? "Ese horario acaba de ocuparse. Elige otro."
+          : data?.error?.message ?? "No se pudo crear la cita."
+      );
       void refreshSlots();
       return;
     }
@@ -229,6 +348,10 @@ export function QuickBookingDialog({
     setDone(true);
     onBooked();
   }
+
+  const visibleError = actionError ?? error;
+  const canPickSlot =
+    !structuredBooking || Boolean(serviceId && professionalId);
 
   return (
     <div
@@ -315,7 +438,7 @@ export function QuickBookingDialog({
                     <select
                       value={professionalId}
                       disabled={!serviceId}
-                      onChange={(e) => setProfessionalId(e.target.value)}
+                      onChange={(e) => chooseProfessional(e.target.value)}
                       className="mt-1.5 h-10 w-full rounded-md border border-border-strong bg-background px-3 text-sm disabled:opacity-50"
                     >
                       <option value="">
@@ -334,13 +457,42 @@ export function QuickBookingDialog({
               <div className="mb-3 flex items-center gap-2 text-sm text-text-2">
                 <CalendarDays className="h-4 w-4 text-brand" strokeWidth={1.8} />
                 <span>
-                  {structuredBooking && (!serviceId || !professionalId)
+                  {!canPickSlot
                     ? "Elige servicio y profesional"
-                    : "Elige un horario disponible"}
+                    : day
+                      ? "Elige un horario de ese día"
+                      : "Elige un horario disponible"}
                 </span>
               </div>
 
-              {catalog === null && !error && (
+              {/* QB-07: navegación por día, sin volcar la semana completa. */}
+              {canPickSlot && day && (
+                <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border bg-subtle px-2 py-2">
+                  <button
+                    type="button"
+                    onClick={() => selectDay(shiftIsoDay(day, -1))}
+                    aria-label="Día anterior"
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-text-3 hover:bg-accent hover:text-foreground"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" strokeWidth={2} />
+                    Anterior
+                  </button>
+                  <span className="text-xs font-semibold capitalize">
+                    {dayLabelFor(day)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => selectDay(shiftIsoDay(day, 1))}
+                    aria-label="Día siguiente"
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-text-3 hover:bg-accent hover:text-foreground"
+                  >
+                    Siguiente
+                    <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
+                  </button>
+                </div>
+              )}
+
+              {catalog === null && !visibleError && (
                 <p className="rounded-lg bg-subtle p-4 text-sm text-text-3">
                   Cargando agenda…
                 </p>
@@ -352,13 +504,39 @@ export function QuickBookingDialog({
                 </p>
               )}
 
-              {slots?.length === 0 &&
-                !error &&
-                (!structuredBooking || (serviceId && professionalId)) && (
-                  <p className="rounded-lg bg-subtle p-4 text-sm text-text-3">
-                    No hay horarios disponibles en este momento.
-                  </p>
-                )}
+              {slots?.length === 0 && !visibleError && canPickSlot && (
+                <div className="rounded-lg bg-subtle p-4 text-sm text-text-3">
+                  {day ? (
+                    <>
+                      <p className="font-semibold text-text-2">
+                        Sin disponibilidad este día.
+                      </p>
+                      <p className="mt-1 text-xs">
+                        No hay horarios libres para {dayLabelFor(day)}.
+                      </p>
+                      {noMoreDays ? (
+                        <p className="mt-2 text-xs font-semibold">
+                          No encontré más días con disponibilidad en el rango
+                          configurado.
+                        </p>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={searching}
+                          onClick={() => void findNextAvailableDay()}
+                          className="mt-2 text-xs font-semibold underline underline-offset-2 disabled:opacity-50"
+                        >
+                          {searching
+                            ? "Buscando el siguiente día…"
+                            : "Buscar el siguiente día disponible"}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    "No hay horarios disponibles en este momento."
+                  )}
+                </div>
+              )}
 
               {slots && slots.length > 0 && (
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -393,9 +571,9 @@ export function QuickBookingDialog({
                 </div>
               )}
 
-              {error && (
+              {visibleError && (
                 <div className="mt-3 rounded-lg border border-danger-soft bg-danger-tint px-3 py-2.5 text-sm text-danger-text">
-                  {error}
+                  {visibleError}
                 </div>
               )}
             </div>
@@ -403,7 +581,7 @@ export function QuickBookingDialog({
             <footer className="flex items-center justify-between gap-2 border-t px-4 py-3">
               <button
                 type="button"
-                disabled={structuredBooking && (!serviceId || !professionalId)}
+                disabled={!canPickSlot}
                 onClick={() => void refreshSlots()}
                 className="text-xs font-semibold text-text-3 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
               >
