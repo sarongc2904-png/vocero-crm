@@ -94,6 +94,7 @@ vi.mock("@/lib/db", () => ({
         },
       }),
     }),
+    delete: () => ({ where: () => Promise.resolve([]) }),
     update: () => ({
       set: (v: Record<string, unknown>) => ({
         where: () => ({

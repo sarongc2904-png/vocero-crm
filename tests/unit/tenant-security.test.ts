@@ -55,7 +55,8 @@ const fakeDb = {
       return chain;
     },
   }),
-  update: () => ({
+  delete: () => ({ where: () => Promise.resolve([]) }),
+    update: () => ({
     set: () => ({
       where: () => ({
         returning: () => Promise.resolve([{}]),

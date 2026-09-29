@@ -37,7 +37,8 @@ vi.mock("@/lib/db", () => {
   return {
     getDb: () => ({
       select: () => chain(selectQueue.shift() ?? []),
-      update: () => ({
+      delete: () => ({ where: () => Promise.resolve([]) }),
+    update: () => ({
         set: (values: Record<string, unknown>) => ({
           where: () => {
             updateSets.push(values);

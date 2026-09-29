@@ -55,6 +55,7 @@ vi.mock("@/lib/db", () => ({
         }),
       }),
     }),
+    delete: () => ({ where: () => Promise.resolve([]) }),
     update: () => ({
       set: (v: Partial<Row>) => ({
         where: (cond: Cond) => {

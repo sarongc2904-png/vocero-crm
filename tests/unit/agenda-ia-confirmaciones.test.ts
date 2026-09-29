@@ -127,6 +127,7 @@ vi.mock("@/lib/db", () => ({
         return chain;
       },
     }),
+    delete: () => ({ where: () => Promise.resolve([]) }),
     update: () => ({
       set: () => ({
         where: () => ({
