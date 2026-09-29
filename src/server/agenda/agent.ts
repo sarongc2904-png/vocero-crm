@@ -117,44 +117,60 @@ function timeMinutes(time: string): number {
   return (h ?? 0) * 60 + (m ?? 0);
 }
 
-/** Selecciona la ventana pedida para una ampliación, sin salirse del catálogo real. */
+/**
+ * IA-3 — Ventana de ampliación, con CURSOR.
+ *
+ * `cursor` es el índice de ventana ya avanzado por el pipeline (0 = primera
+ * ventana de ese criterio). Antes `next_day` devolvía siempre `days[1]`, así que
+ * pedir "otros horarios" dos veces mostraba el mismo bloque.
+ */
 function windowSlots(
   slots: SpreadSlot[],
   window: ExpandWindow,
-  timezone: string
+  timezone: string,
+  cursor = 0
 ): SpreadSlot[] {
   const days = distinctDays(slots);
-  switch (window) {
-    case "afternoon":
-      for (const day of days) {
-        const found = slots.filter(
-          (s) => s.dayIso === day && timeMinutes(s.time) >= 12 * 60
-        );
-        if (found.length > 0) return found.slice(0, COMPACT_PRESENTATION.expandSlots);
-      }
-      return [];
-    case "morning":
-      for (const day of days) {
-        const found = slots.filter(
-          (s) => s.dayIso === day && timeMinutes(s.time) < 12 * 60
-        );
-        if (found.length > 0) return found.slice(0, COMPACT_PRESENTATION.expandSlots);
-      }
-      return [];
-    case "weekend":
-      for (const day of days) {
-        const weekday = weekdayKeyOf(day, timezone);
-        if (weekday === "sat" || weekday === "sun") {
-          return slots.filter((s) => s.dayIso === day).slice(0, COMPACT_PRESENTATION.expandSlots);
-        }
-      }
-      return [];
-    case "next_day": {
-      const second = days[1];
-      if (!second) return [];
-      return slots.filter((s) => s.dayIso === second).slice(0, COMPACT_PRESENTATION.expandSlots);
-    }
+  const limit = COMPACT_PRESENTATION.expandSlots;
+  const inDaypart = (day: string) =>
+    slots.some(
+      (s) =>
+        s.dayIso === day &&
+        (window === "afternoon"
+          ? timeMinutes(s.time) >= 12 * 60
+          : timeMinutes(s.time) < 12 * 60)
+    );
+  const isWeekendDay = (day: string) => {
+    const weekday = weekdayKeyOf(day, timezone);
+    return weekday === "sat" || weekday === "sun";
+  };
+
+  if (window === "next_day") {
+    // El día 0 es el de la oferta base; el cursor empieza en el siguiente.
+    const target = days[1 + cursor];
+    if (!target) return [];
+    return slots.filter((s) => s.dayIso === target).slice(0, limit);
   }
+
+  // morning / afternoon / weekend: la (cursor)-ésima jornada que cumple el
+  // criterio, para que también avancen en vez de repetirse.
+  const matchingDays = days.filter((day) =>
+    window === "weekend" ? isWeekendDay(day) : inDaypart(day)
+  );
+  const target = matchingDays[cursor];
+  if (!target) return [];
+  if (window === "weekend") {
+    return slots.filter((s) => s.dayIso === target).slice(0, limit);
+  }
+  return slots
+    .filter(
+      (s) =>
+        s.dayIso === target &&
+        (window === "afternoon"
+          ? timeMinutes(s.time) >= 12 * 60
+          : timeMinutes(s.time) < 12 * 60)
+    )
+    .slice(0, limit);
 }
 
 function expandIntro(window: ExpandWindow): string {
@@ -190,6 +206,8 @@ export async function offerSlots(input: {
   day?: string;
   /** Ampliación explícita (otro día / más tarde / tarde / mañana / fin de semana). */
   expand?: ExpandWindow;
+  /** IA-3: índice de ventana ya avanzado por el pipeline (0 = la primera). */
+  cursor?: number;
   businessFact?: { businessOpen: boolean; businessHours: string; dateLabel: string };
 }): Promise<AgendaTurn> {
   const settings = await getSettings(input.organizationId);
@@ -233,7 +251,12 @@ export async function offerSlots(input: {
   // Ampliación solicitada explícitamente: se muestra el siguiente conjunto
   // relevante, nunca la agenda completa.
   if (input.expand) {
-    const window = windowSlots(spread, input.expand, settings.timezone);
+    const window = windowSlots(
+      spread,
+      input.expand,
+      settings.timezone,
+      input.cursor ?? 0
+    );
     if (window.length === 0) {
       return { ok: false, text: expandEmptyText(input.expand) };
     }

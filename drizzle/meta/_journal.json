@@ -218,6 +218,13 @@
       "when": 1790705600000,
       "tag": "0030_pending_agenda_action",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790792000000,
+      "tag": "0031_agenda_offer_cursor",
+      "breakpoints": true
     }
   ]
 }

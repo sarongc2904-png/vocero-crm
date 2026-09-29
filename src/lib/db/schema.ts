@@ -1188,6 +1188,27 @@ export const pendingAgendaAction = pgTable(
 );
 
 /**
+ * IA-3 — Cursor de expansión de disponibilidad.
+ *
+ * Una fila por conversación con el modo (`next_day` | `morning` | `afternoon` |
+ * `weekend`) y el índice de ventana ya mostrado. Cambiar de modo reinicia la
+ * ventana; `expiresAt` impide que un cursor viejo gobierne una conversación
+ * retomada más tarde.
+ */
+export const agendaOfferCursor = pgTable("agenda_offer_cursor", {
+  conversationId: text("conversation_id")
+    .primaryKey()
+    .references(() => conversation.id, { onDelete: "cascade" }),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  mode: text("mode").notNull().default("next_day"),
+  cursor: integer("cursor").notNull().default(0),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+});
+
+/**
  * Credenciales del conector Zoom (app Server-to-Server del propio negocio).
  * Tabla explícita como las de WhatsApp e Instagram: unas credenciales tienen
  * forma fija y conocida, y así conservan tipado e índices. El secreto se cifra

@@ -47,6 +47,10 @@ import {
   getPendingAction,
   setPendingAction,
 } from "@/server/agenda/pending-actions";
+import {
+  advanceOfferCursor,
+  resetOfferCursor,
+} from "@/server/agenda/offer-cursor";
 import { getSettings } from "@/server/agenda/settings";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
 import {
@@ -394,6 +398,9 @@ export async function runAgentTurn(
     (action.action === "reply" || action.action === "offer_slots")
   ) {
     try {
+      // IA-3: una oferta base (rango/general/próxima) reinicia el cursor de
+      // expansión: la siguiente ampliación vuelve a empezar por la ventana 0.
+      await resetOfferCursor(organizationId, conversationId);
       const turn =
         scheduleScope.type === "date_range"
           ? await offerRange({
@@ -429,10 +436,21 @@ export async function runAgentTurn(
     (action.action === "reply" || action.action === "offer_slots")
   ) {
     try {
+      /**
+       * IA-3: cada "otros horarios" avanza la ventana. El modo viene del tipo
+       * de ampliación, así que cambiar a "más tarde"/"fin de semana" reinicia
+       * el cursor de ese criterio en vez de arrastrar el anterior.
+       */
+      const cursor = await advanceOfferCursor({
+        organizationId,
+        conversationId,
+        mode: expandRequest,
+      });
       const turn = await offerSlots({
         organizationId,
         conversationId,
         expand: expandRequest,
+        cursor,
       });
       await deliverReply(conversation, turn.text);
       if (turn.ok) {
@@ -471,6 +489,8 @@ export async function runAgentTurn(
       try {
         let turn;
         if (action.action === "offer_slots") {
+          // IA-3: una oferta base reinicia el cursor de expansión.
+          await resetOfferCursor(organizationId, conversationId);
           turn = await offerSlots({
             organizationId,
             conversationId,
