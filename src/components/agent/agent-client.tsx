@@ -73,7 +73,7 @@ export function AgentClient() {
   return (
     <div className="h-full overflow-y-auto">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-6 sm:py-4">
-        <h2 className="text-[17px] font-bold tracking-tight">Agente de IA</h2>
+        <h2 className="text-[17px] font-bold tracking-tight">Agente IA</h2>
         <div className="flex items-center gap-3">
           {saved && <span className="text-xs text-primary">Guardado ✓</span>}
           <span className="text-sm text-muted-foreground">
@@ -108,12 +108,10 @@ export function AgentClient() {
       {!aiConfigured && (
         <div className="mx-4 mt-4 rounded-lg border border-brand-soft bg-brand-tint p-5 text-center sm:mx-6 sm:mt-6 sm:p-6">
           <Sparkles className="mx-auto mb-2 h-8 w-8 text-primary" />
-          <p className="font-medium">Configura tu proveedor de IA para activar el agente</p>
+          <p className="font-medium">La IA todavía no está conectada</p>
           <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-            Agrega <code className="rounded bg-secondary px-1">OPENROUTER_API_TOKEN</code> y{" "}
-            <code className="rounded bg-secondary px-1">OPENROUTER_MODEL</code> a las variables
-            de entorno de la instancia y reiníciala. Mientras tanto puedes dejar listo el
-            comportamiento y el conocimiento aquí abajo.
+            Puedes dejar listo cómo debe responder y qué debe saber. Cuando la conexión de IA
+            esté disponible, podrás encender el agente desde esta misma pantalla.
           </p>
         </div>
       )}
@@ -173,11 +171,11 @@ function ProfileSection({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="agent-escalation">Reglas de escalado</Label>
+          <Label htmlFor="agent-escalation">Cuándo pasar a una persona</Label>
           <Textarea
             id="agent-escalation"
             rows={3}
-            placeholder="Cuándo pasar la conversación a un humano…"
+            placeholder="Ej. cuando pidan hablar con alguien, haya una queja o el agente no tenga una respuesta segura…"
             value={form.escalationRules ?? ""}
             onChange={(e) => setForm({ ...form, escalationRules: e.target.value })}
           />
@@ -243,10 +241,10 @@ function KbSection({
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle>Knowledge base</CardTitle>
+            <CardTitle>Conocimiento del negocio</CardTitle>
             <CardDescription>
-              La única fuente de verdad del agente: lo que no está aquí, no lo
-              afirma.
+              Agrega aquí la información que el agente puede usar para responder:
+              horarios, precios, políticas y preguntas frecuentes.
             </CardDescription>
           </div>
           {kbSize && (
@@ -257,14 +255,14 @@ function KbSection({
         </div>
         {kbSize?.warning && (
           <p className="text-xs text-warning-text">
-            El conocimiento se acerca al límite del contexto del modelo (v1 lo
-            inyecta completo en cada turno). Considera depurar entradas.
+            Hay mucha información guardada. Conviene eliminar contenido repetido
+            o que ya no uses para mantener respuestas claras.
           </p>
         )}
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2 rounded-md border p-3">
-          <p className="text-sm font-medium">Nueva pregunta / respuesta</p>
+          <p className="text-sm font-medium">Pregunta frecuente</p>
           <Input
             placeholder="Pregunta (p. ej. ¿Hacen envíos?)"
             value={question}
@@ -281,12 +279,12 @@ function KbSection({
             onClick={() => void addQa()}
             disabled={!question.trim() || !answer.trim()}
           >
-            <Plus className="h-4 w-4" /> Agregar P/R
+            <Plus className="h-4 w-4" /> Agregar respuesta
           </Button>
         </div>
 
         <div className="space-y-2 rounded-md border p-3">
-          <p className="text-sm font-medium">Nuevo bloque de texto libre</p>
+          <p className="text-sm font-medium">Información adicional</p>
           <Textarea
             placeholder="Horarios, direcciones, políticas…"
             rows={3}
@@ -294,7 +292,7 @@ function KbSection({
             onChange={(e) => setBlock(e.target.value)}
           />
           <Button size="sm" onClick={() => void addBlock()} disabled={!block.trim()}>
-            <Plus className="h-4 w-4" /> Agregar bloque
+            <Plus className="h-4 w-4" /> Agregar información
           </Button>
         </div>
 
