@@ -212,8 +212,9 @@ export function ContactsClient() {
                     <Send className="h-4 w-4" />
                   </Button>
                   <Link href={`/inbox?contact=${c.id}`}>
-                    <Button variant="ghost" size="icon" aria-label="Abrir conversación">
-                      <MessageSquareText className="h-4 w-4" />
+                    <Button variant="secondary" size="sm">
+                      <MessageSquareText className="mr-1.5 h-4 w-4" />
+                      Abrir conversación
                     </Button>
                   </Link>
                   <Button
@@ -314,7 +315,7 @@ function EditDialog({
         className="max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-lg border bg-card p-5 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="mb-4 font-semibold">Editar contacto</h3>
+        <h3 className="mb-4 font-semibold">Editar cliente</h3>
         <div className="space-y-3">
           <div className="space-y-1.5">
             <label className="text-sm font-medium" htmlFor="edit-name">
