@@ -2,6 +2,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { recordLeadCreated } from "@/server/leads/stage-history";
+import { requireTenantStage } from "@/server/tenant/ownership";
 import type { StageChangeSource } from "@/lib/types";
 
 /**
@@ -56,7 +57,13 @@ export async function createLeadForContact(input: {
   const db = getDb();
 
   let stageId = input.stageId;
-  if (!stageId) {
+  if (stageId) {
+    // SEC-V1: la FK de `lead.stage_id` es global, así que un id ajeno se
+    // escribía tal cual — y entonces el tenant dueño de esa etapa no podía
+    // borrarla (su DELETE no cuenta leads de otro tenant) y el embudo del que
+    // la inyectó quedaba con una tarjeta fuera de sus etapas.
+    await requireTenantStage(input.organizationId, stageId);
+  } else {
     const firstStage = await db
       .select({ id: schema.pipelineStage.id })
       .from(schema.pipelineStage)

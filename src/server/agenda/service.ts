@@ -34,6 +34,11 @@ import {
   scheduleBookingAutomations,
   scheduleReviewRequests,
 } from "@/server/automations/queue";
+import {
+  requireTenantContact,
+  requireTenantProfessional,
+  TenantReferenceError,
+} from "@/server/tenant/ownership";
 
 /**
  * 015 — Ciclo de vida de la cita y las dos reglas INNEGOCIABLES:
@@ -164,6 +169,22 @@ export async function createSessionBooking(input: {
 
   if (!contactId) {
     throw new BookingError("invalid", "La cita necesita un contacto");
+  }
+  // SEC-V4: la pertenencia del contacto se valida SIEMPRE, no solo cuando llega
+  // `conversationId`. La FK de `booking.contact_id` es global, así que sin esta
+  // comprobación un contactId ajeno se persistía en una cita propia — y como
+  // esa FK es ON DELETE CASCADE, el día que el tenant dueño borrara su contacto
+  // desaparecía la cita del otro.
+  try {
+    await requireTenantContact(input.organizationId, contactId);
+  } catch (err) {
+    if (err instanceof TenantReferenceError) {
+      throw new BookingError(
+        "not_found",
+        "El contacto no pertenece a esta organización"
+      );
+    }
+    throw err;
   }
   contactName = await getContactName(input.organizationId, contactId);
 
@@ -336,6 +357,25 @@ export async function createBlock(input: {
 }): Promise<BookingRow> {
   if (Number.isNaN(Date.parse(input.startUtc))) {
     throw new BookingError("invalid", "Instante inválido");
+  }
+  // SEC-V2: el profesional debe ser del tenant. La FK es global y la exclusion
+  // constraint (ahora org-scoped, migración 0029) indexa por organización, pero
+  // ninguna de las dos comprueba que la fila referenciada sea de esta
+  // organización: sin esto un tenant escribía una fila propia apuntando al
+  // profesional de otro y le bloqueaba su agenda (invisible para la víctima,
+  // que no puede ni diagnosticarlo).
+  if (input.professionalId) {
+    try {
+      await requireTenantProfessional(input.organizationId, input.professionalId);
+    } catch (err) {
+      if (err instanceof TenantReferenceError) {
+        throw new BookingError(
+          "not_found",
+          "El profesional no pertenece a esta organización"
+        );
+      }
+      throw err;
+    }
   }
   const db = getDb();
   try {

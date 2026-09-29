@@ -8,6 +8,10 @@ import { normalizeMx } from "@/lib/meta/client";
 import { digitsOnly, normalizeText } from "@/lib/search";
 import { serializeContact } from "@/server/contacts";
 import { createLeadForContact } from "@/server/inbox/lead-activity";
+import {
+  requireTenantStage,
+  TenantReferenceError,
+} from "@/server/tenant/ownership";
 
 export const dynamic = "force-dynamic";
 
@@ -103,6 +107,21 @@ const createSchema = z.object({
 export const POST = withOrgPermissions(["contacts.create"], async (session, req: Request) => {
   const body = await parseBody(req, createSchema);
   if (!body.ok) return body.response;
+
+  // SEC-V1: la etapa se comprueba ANTES de escribir nada. Un id de otro tenant
+  // (o inexistente) responde 404 y no crea contacto ni lead — antes se escribía
+  // el id ajeno tal cual, porque la FK es global y el JOIN de la etapa no se
+  // miraba; el tenant dueño de la etapa quedaba además sin poder borrarla.
+  if (body.data.stageId) {
+    try {
+      await requireTenantStage(session.organizationId, body.data.stageId);
+    } catch (err) {
+      if (err instanceof TenantReferenceError) {
+        return apiError(404, "not_found", "La etapa no pertenece a esta organización");
+      }
+      throw err;
+    }
+  }
 
   const db = getDb();
   const phone = normalizeMx(body.data.phone);

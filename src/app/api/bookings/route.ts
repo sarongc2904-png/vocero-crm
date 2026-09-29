@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { parseBody, withOrgPermissions } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { listBookings } from "@/server/agenda/queries";
 import { createBlock, createSessionBooking } from "@/server/agenda/service";
 import { bookingErrorResponse, bookingPayload } from "@/server/agenda/http";
+import { BeautyCatalogError } from "@/server/beauty/catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,17 @@ export const POST = withOrgPermissions(
         { status: 201 }
       );
     } catch (err) {
+      // SEC-V2: un servicio o profesional ajeno (o inexistente) se resuelve con
+      // 404, no con el 500 que producía el error de catálogo sin mapear. Un
+      // código distinto para "no es tuyo" y "no existe" sería un oráculo de
+      // existencia; ambos responden igual.
+      if (err instanceof BeautyCatalogError) {
+        return apiError(
+          404,
+          "not_found",
+          "El servicio o el profesional no pertenecen a esta organización"
+        );
+      }
       return bookingErrorResponse(err);
     }
   }
