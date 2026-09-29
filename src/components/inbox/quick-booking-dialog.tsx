@@ -51,9 +51,16 @@ export function QuickBookingDialog({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  const structuredBooking = Boolean(
-    catalog && catalog.services.length > 0 && catalog.professionals.length > 0
+  const schedulableServices = useMemo(
+    () =>
+      catalog?.services.filter((service) =>
+        catalog.professionals.some((professional) =>
+          professional.serviceIds.includes(service.id)
+        )
+      ) ?? [],
+    [catalog]
   );
+  const structuredBooking = schedulableServices.length > 0;
 
   const availableProfessionals = useMemo(
     () =>
@@ -84,8 +91,13 @@ export function QuickBookingDialog({
 
       setCatalog(data);
 
-      if (data.services.length === 1) {
-        const onlyService = data.services[0]!;
+      const schedulable = data.services.filter((service) =>
+        data.professionals.some((professional) =>
+          professional.serviceIds.includes(service.id)
+        )
+      );
+      if (schedulable.length === 1) {
+        const onlyService = schedulable[0]!;
         setServiceId(onlyService.id);
         const matching = data.professionals.filter((professional) =>
           professional.serviceIds.includes(onlyService.id)
@@ -102,8 +114,7 @@ export function QuickBookingDialog({
   useEffect(() => {
     if (!catalog) return;
 
-    const hasStructuredCatalog =
-      catalog.services.length > 0 && catalog.professionals.length > 0;
+    const hasStructuredCatalog = schedulableServices.length > 0;
 
     if (hasStructuredCatalog && (!serviceId || !professionalId)) {
       setSlots([]);
@@ -141,7 +152,7 @@ export function QuickBookingDialog({
     return () => {
       cancelled = true;
     };
-  }, [catalog, serviceId, professionalId]);
+  }, [catalog, professionalId, schedulableServices.length, serviceId]);
 
   function chooseService(nextServiceId: string) {
     setServiceId(nextServiceId);
@@ -264,9 +275,10 @@ export function QuickBookingDialog({
             <div className="max-h-[60dvh] overflow-y-auto p-4">
               {catalog && !structuredBooking && (
                 <div className="mb-4 rounded-lg border border-warning-soft bg-warning-tint px-3 py-3 text-sm text-warning-text">
-                  <p className="font-semibold">Usando agenda general</p>
+                  <p className="font-semibold">Cita general</p>
                   <p className="mt-1 text-xs">
-                    Todavía no hay un servicio y un profesional activos vinculados.
+                    No hay un servicio con profesional disponible. La cita se
+                    guardará sin asignar servicio ni profesional.
                   </p>
                   {catalog.canConfigureCatalog && (
                     <Link
@@ -290,7 +302,7 @@ export function QuickBookingDialog({
                       className="mt-1.5 h-10 w-full rounded-md border border-border-strong bg-background px-3 text-sm"
                     >
                       <option value="">Selecciona un servicio</option>
-                      {catalog!.services.map((service) => (
+                      {schedulableServices.map((service) => (
                         <option key={service.id} value={service.id}>
                           {service.name}
                         </option>
