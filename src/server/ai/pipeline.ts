@@ -32,9 +32,12 @@ import {
 } from "@/server/agenda/service";
 import {
   currentOffers,
+  findOffered,
   getOffers,
   mapaDeHuecosParaModelo,
 } from "@/server/agenda/offers";
+import { resolveExpandRequest, type ExpandWindow } from "@/server/agenda/expand";
+import { isBareTimeSelection } from "@/server/agenda/selection";
 import { getSettings } from "@/server/agenda/settings";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
 import {
@@ -188,6 +191,7 @@ export async function runAgentTurn(
   let scheduleIntent: ScheduleIntent = { kind: "none" };
   let scheduleScope: ScheduleScope | null = null;
   let schedulingSignal = false;
+  let expandRequest: ExpandWindow | null = null;
   let businessFact: Parameters<typeof buildAgentSystemPrompt>[0]["businessFact"];
   if (agendaContext) {
     const { settings, now } = agendaContext;
@@ -195,8 +199,16 @@ export async function runAgentTurn(
       iso: todayInTz(now, settings.timezone),
       label: todayLabelInTz(now, settings.timezone),
     };
+    expandRequest = lastInbound.text ? resolveExpandRequest(lastInbound.text) : null;
+    // Una ampliación ("más tarde", "por la tarde", "fin de semana") es señal de
+    // agenda por sí misma; "otro día"/"otros horarios" solo cuentan cuando ya
+    // hay una oferta vigente en esta conversación (follow-up, no primer turno).
+    const expansionSignal =
+      expandRequest !== null &&
+      (expandRequest !== "next_day" || ofertas.length > 0);
     schedulingSignal = lastInbound.text
-      ? hasSchedulingSignal({ text: lastInbound.text, now, timezone: settings.timezone })
+      ? hasSchedulingSignal({ text: lastInbound.text, now, timezone: settings.timezone }) ||
+        expansionSignal
       : false;
     scheduleScope = lastInbound.text
       ? resolveScheduleScope(lastInbound.text, now, settings.timezone)
@@ -298,6 +310,35 @@ export async function runAgentTurn(
     }
   }
 
+  // Ampliación explícita de una conversación de agenda ("más tarde", "otro
+  // día", "por la tarde", "fin de semana"): se muestra el siguiente conjunto
+  // relevante, nunca la agenda completa. No compite con fecha única/rango.
+  if (
+    agenda &&
+    expandRequest &&
+    !scheduleScope &&
+    (action.action === "reply" || action.action === "offer_slots")
+  ) {
+    try {
+      const turn = await offerSlots({
+        organizationId,
+        conversationId,
+        expand: expandRequest,
+      });
+      await deliverReply(conversation, turn.text);
+      if (turn.ok) {
+        publish(organizationId, {
+          type: "conversation.updated",
+          data: { conversation: { id: conversationId } },
+        });
+      }
+      return;
+    } catch (err) {
+      console.error(`[agente] el motor de agenda (ampliación) falló: ${err}`);
+      action = degradeAction(action);
+    }
+  }
+
   if (
     agenda &&
     scheduleIntent.kind === "date_mentioned" &&
@@ -339,6 +380,21 @@ export async function runAgentTurn(
                 : undefined,
           });
         } else if (action.action === "book_slot") {
+          // Selección de horario ≠ creación de cita: si el cliente solo
+          // mencionó/eligió una hora sin confirmar que quiere agendar, NO
+          // reservamos todavía — confirmamos el horario elegido y preguntamos.
+          if (lastInbound.text && isBareTimeSelection(lastInbound.text)) {
+            const chosen = findOffered(ofertas, action.startUtc);
+            if (chosen) {
+              await deliverReply(
+                conversation,
+                `Perfecto. Tengo ${chosen.label} disponible. ¿Quieres que agende tu cita?`
+              );
+              return;
+            }
+            // Sin coincidencia exacta se deja caer al flujo normal: el motor
+            // rechazará el instante no ofrecido y re-ofrecerá alternativas reales.
+          }
           turn = await bookSlot({
             organizationId,
             conversationId,

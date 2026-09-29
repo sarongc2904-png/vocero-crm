@@ -1,13 +1,37 @@
 import { computeAvailability, type AvailableSlot } from "@/server/agenda/availability";
 import { getSettings } from "@/server/agenda/settings";
-import { spreadByDay } from "@/server/agenda/spread";
+import { spreadByDay, type SpreadSlot } from "@/server/agenda/spread";
 import { replaceOffers } from "@/server/agenda/offers";
 import { BookingError, createSessionBooking } from "@/server/agenda/service";
 import { googleAddEventUrl } from "@/lib/calendar-link";
-import { dayIsoInTz, dayLabelInTz, timeInTz } from "@/lib/time/slots";
+import { dayIsoInTz, dayLabelInTz, timeInTz, weekdayKeyOf } from "@/lib/time/slots";
 import { capitalize, formatHoursEs } from "@/server/agenda/schedule-intent";
+import { type ExpandWindow } from "@/server/agenda/expand";
 
 const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * 015 — Política de presentación compacta de disponibilidad en el chat.
+ *
+ * La herramienta conserva TODA la disponibilidad internamente (se persiste en
+ * `offered_slot` para reservar/reprogramar con alternativas legítimas); lo que
+ * se limita es SOLO lo que se muestra al cliente. Sin fecha → 1 día y pocos
+ * horarios; un día pedido → ese día con tope; un día lleno → el día siguiente.
+ * Ampliar más solo ante una petición explícita (otro día / más tarde / tarde /
+ * mañana / fin de semana).
+ */
+export const COMPACT_PRESENTATION = {
+  /** Horarios visibles al pedir disponibilidad sin fecha (1 día). */
+  noDateSlots: 4,
+  /** Horarios visibles al pedir un día concreto. */
+  specificDaySlots: 5,
+  /** Horarios visibles cuando el día pedido está lleno (día siguiente). */
+  altDaySlots: 4,
+  /** Horarios visibles al ampliar (otro día / tarde / mañana / fin de semana). */
+  expandSlots: 4,
+  /** Tope por día al pedir un rango explícito (mantiene la respuesta legible). */
+  rangePerDaySlots: 4,
+} as const;
 
 export type AgendaTurn = {
   text: string;
@@ -75,11 +99,97 @@ function safeOfferIntro(intro?: string): string | undefined {
   return value;
 }
 
+/** Días (YYYY-MM-DD) presentes en el catálogo, en orden cronológico. */
+function distinctDays(slots: SpreadSlot[]): string[] {
+  return [...new Set(slots.map((s) => s.dayIso))];
+}
+
+/** Los horarios del PRIMER día disponible, hasta `max`. */
+function firstDaySlots(slots: SpreadSlot[], max: number): SpreadSlot[] {
+  if (slots.length === 0) return [];
+  const firstDay = slots[0]!.dayIso;
+  return slots.filter((s) => s.dayIso === firstDay).slice(0, max);
+}
+
+/** "10:40" → 640 minutos. */
+function timeMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+/** Selecciona la ventana pedida para una ampliación, sin salirse del catálogo real. */
+function windowSlots(
+  slots: SpreadSlot[],
+  window: ExpandWindow,
+  timezone: string
+): SpreadSlot[] {
+  const days = distinctDays(slots);
+  switch (window) {
+    case "afternoon":
+      for (const day of days) {
+        const found = slots.filter(
+          (s) => s.dayIso === day && timeMinutes(s.time) >= 12 * 60
+        );
+        if (found.length > 0) return found.slice(0, COMPACT_PRESENTATION.expandSlots);
+      }
+      return [];
+    case "morning":
+      for (const day of days) {
+        const found = slots.filter(
+          (s) => s.dayIso === day && timeMinutes(s.time) < 12 * 60
+        );
+        if (found.length > 0) return found.slice(0, COMPACT_PRESENTATION.expandSlots);
+      }
+      return [];
+    case "weekend":
+      for (const day of days) {
+        const weekday = weekdayKeyOf(day, timezone);
+        if (weekday === "sat" || weekday === "sun") {
+          return slots.filter((s) => s.dayIso === day).slice(0, COMPACT_PRESENTATION.expandSlots);
+        }
+      }
+      return [];
+    case "next_day": {
+      const second = days[1];
+      if (!second) return [];
+      return slots.filter((s) => s.dayIso === second).slice(0, COMPACT_PRESENTATION.expandSlots);
+    }
+  }
+}
+
+function expandIntro(window: ExpandWindow): string {
+  switch (window) {
+    case "afternoon":
+      return "Para la tarde tengo:";
+    case "morning":
+      return "Para la mañana tengo:";
+    case "weekend":
+      return "En fin de semana tengo:";
+    case "next_day":
+      return "Otro día tengo:";
+  }
+}
+
+function expandEmptyText(window: ExpandWindow): string {
+  switch (window) {
+    case "afternoon":
+      return "No me quedan horarios en la tarde. ¿Quieres que revise otro día?";
+    case "morning":
+      return "No me quedan horarios en la mañana. ¿Quieres que revise otro día?";
+    case "weekend":
+      return "No me quedan horarios en fin de semana. ¿Quieres que revise otro día?";
+    case "next_day":
+      return "No me quedan más días disponibles por ahora. ¿Quieres que revise otra semana?";
+  }
+}
+
 export async function offerSlots(input: {
   organizationId: string;
   conversationId: string;
   intro?: string;
   day?: string;
+  /** Ampliación explícita (otro día / más tarde / tarde / mañana / fin de semana). */
+  expand?: ExpandWindow;
   businessFact?: { businessOpen: boolean; businessHours: string; dateLabel: string };
 }): Promise<AgendaTurn> {
   const settings = await getSettings(input.organizationId);
@@ -112,20 +222,44 @@ export async function offerSlots(input: {
     };
   }
 
+  // Se conserva TODA la disponibilidad internamente (catálogo reservable) y se
+  // limita SOLO lo que se muestra al cliente.
   await replaceOffers(
     input.organizationId,
     input.conversationId,
     catalog.map((slot) => ({ startUtc: slot.startUtc, label: slot.label }))
   );
 
+  // Ampliación solicitada explícitamente: se muestra el siguiente conjunto
+  // relevante, nunca la agenda completa.
+  if (input.expand) {
+    const window = windowSlots(spread, input.expand, settings.timezone);
+    if (window.length === 0) {
+      return { ok: false, text: expandEmptyText(input.expand) };
+    }
+    const list = formatSlotBlocks(window, settings.timezone, now);
+    return {
+      ok: true,
+      text: `${expandIntro(input.expand)}\n${list}\n¿Cuál te funciona mejor?`,
+    };
+  }
+
   if (input.day) {
     if (requestedDayHasAvailability) {
-      const list = formatSlotBlocks(dayShown, settings.timezone, now);
+      const list = formatSlotBlocks(
+        dayShown.slice(0, COMPACT_PRESENTATION.specificDaySlots),
+        settings.timezone,
+        now
+      );
       const intro = safeOfferIntro(input.intro) || "Tengo estos horarios disponibles:";
       return { ok: true, text: `${intro}\n${list}` };
     }
 
-    const list = formatSlotBlocks(spread, settings.timezone, now);
+    const list = formatSlotBlocks(
+      firstDaySlots(spread, COMPACT_PRESENTATION.altDaySlots),
+      settings.timezone,
+      now
+    );
     const heading = input.businessFact
       ? input.businessFact.businessOpen
         ? `Sí abrimos ${input.businessFact.dateLabel} de ${formatHoursEs(input.businessFact.businessHours)}, pero ya no tengo horarios disponibles ese día.`
@@ -133,13 +267,17 @@ export async function offerSlots(input: {
       : "Ese día no tengo horarios disponibles.";
     return {
       ok: true,
-      text: `${heading} Estas son mis próximas opciones:\n${list}`,
+      text: `${heading} Estas son mis próximas opciones:\n${list}\n¿Te funciona alguno?`,
     };
   }
 
-  const list = formatSlotBlocks(spread, settings.timezone, now);
+  const list = formatSlotBlocks(
+    firstDaySlots(spread, COMPACT_PRESENTATION.noDateSlots),
+    settings.timezone,
+    now
+  );
   const intro = safeOfferIntro(input.intro) || "Tengo estos horarios disponibles:";
-  return { ok: true, text: `${intro}\n${list}` };
+  return { ok: true, text: `${intro}\n${list}\n¿Cuál te funciona mejor?` };
 }
 
 async function offerGrouped(input: {
@@ -174,9 +312,12 @@ async function offerGrouped(input: {
     all.map((slot) => ({ startUtc: slot.startUtc, label: slot.label }))
   );
 
+  let displayedSlots = 0;
   const blocks = [...byDay.values()].map((slots) => {
+    const shown = slots.slice(0, COMPACT_PRESENTATION.rangePerDaySlots);
+    displayedSlots += shown.length;
     const title = capitalize(dayLabelInTz(slots[0]!.startUtc, settings.timezone, now));
-    const times = slots
+    const times = shown
       .map((slot) => `• ${timeInTz(slot.startUtc, settings.timezone)}`)
       .join("\n");
     return `${title}\n${times}`;
@@ -186,12 +327,12 @@ async function offerGrouped(input: {
   const totalAvailableSlots = all.length;
   const pagination: SchedulePagination = {
     totalAvailableSlots,
-    displayedSlots: totalAvailableSlots,
+    displayedSlots,
     totalAvailableDays,
     displayedDays: totalAvailableDays,
-    remainingSlots: 0,
+    remainingSlots: totalAvailableSlots - displayedSlots,
     remainingDays: 0,
-    truncated: false,
+    truncated: displayedSlots < totalAvailableSlots,
   };
 
   return {
@@ -221,12 +362,34 @@ export async function offerGeneralAvailability(input: {
   organizationId: string;
   conversationId: string;
 }): Promise<AgendaTurn> {
-  return offerGrouped({
-    organizationId: input.organizationId,
-    conversationId: input.conversationId,
-    emptyText: "Por ahora no me quedan horarios libres. Déjame confirmarlo con el equipo y te aviso.",
-    heading: "Esta es la disponibilidad que tengo:",
-  });
+  const settings = await getSettings(input.organizationId);
+  const now = new Date();
+  const all = await computeAvailability(input.organizationId, { settings, now });
+  if (all.length === 0) {
+    return {
+      ok: false,
+      text: "Por ahora no me quedan horarios libres. Déjame confirmarlo con el equipo y te aviso.",
+    };
+  }
+  const spread = enrichAll(all, settings.timezone, now);
+
+  // Igual que la oferta sin fecha: 1 día y pocos horarios. El catálogo completo
+  // queda persistido internamente para poder ampliar si el cliente lo pide.
+  await replaceOffers(
+    input.organizationId,
+    input.conversationId,
+    spread.map((slot) => ({ startUtc: slot.startUtc, label: slot.label }))
+  );
+
+  const list = formatSlotBlocks(
+    firstDaySlots(spread, COMPACT_PRESENTATION.noDateSlots),
+    settings.timezone,
+    now
+  );
+  return {
+    ok: true,
+    text: `Esta es la disponibilidad que tengo:\n${list}\n¿Cuál te funciona mejor?`,
+  };
 }
 
 export async function offerNextAvailable(input: {

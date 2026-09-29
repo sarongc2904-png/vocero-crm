@@ -57,7 +57,7 @@ describe("domingo completo 09:00–17:00 con buffer de 10 minutos", () => {
     }));
   });
 
-  it("ofrece y persiste exactamente los 12 slots del día solicitado", async () => {
+  it("persiste los 12 slots del día, pero SOLO muestra un máximo de 5 al cliente", async () => {
     const { offerSlots } = await import("@/server/agenda/agent");
     const turn = await offerSlots({
       organizationId: "org_1",
@@ -73,9 +73,15 @@ describe("domingo completo 09:00–17:00 con buffer de 10 minutos", () => {
     expect(slots.map((slot) => timeInTz(slot.startUtc, TIMEZONE))).toEqual(
       expectedTimes
     );
-    expect(turn.text.match(/^• /gm)).toHaveLength(12);
-    for (const time of expectedTimes) expect(turn.text).toContain(`• ${time}`);
 
+    // UX compacta: máximo 5 horarios visibles para un día concreto.
+    const visibleTimes = expectedTimes.slice(0, 5);
+    expect(turn.text.match(/^• /gm)).toHaveLength(5);
+    for (const time of visibleTimes) expect(turn.text).toContain(`• ${time}`);
+    // Los restantes NO se vuelcan al chat.
+    for (const time of expectedTimes.slice(5)) expect(turn.text).not.toContain(`• ${time}`);
+
+    // El catálogo completo SÍ queda persistido internamente (reservable).
     const persisted = mocks.replaceOffers.mock.calls[0]![2];
     expect(persisted).toHaveLength(12);
     expect(findOffered(persisted, slots.at(-1)!.startUtc)).not.toBeNull();

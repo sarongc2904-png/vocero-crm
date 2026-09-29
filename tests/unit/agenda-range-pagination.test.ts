@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * Contrato actual: la disponibilidad que devuelve computeAvailability se
- * muestra completa. Ya no existe presupuesto artificial de 24 slots ni tope
- * por día; la metadata de paginación debe reflejar que no quedó nada oculto.
+ * 015 — Rango explícito ("de lunes a domingo") y su presentación compacta.
+ *
+ * El catálogo completo se conserva internamente (se persiste para reservar);
+ * lo que se MUESTRA por día queda limitado a `COMPACT_PRESENTATION.rangePerDaySlots`
+ * para que la respuesta siga siendo legible. La metadata de paginación refleja
+ * cuántos slots quedaron ocultos (`truncated`) cuando un día tiene más que el
+ * tope, y los días siguen apareciendo todos (un rango pide varios días).
  */
 
 const settings = {
@@ -130,7 +134,7 @@ describe("offerGrouped — disponibilidad completa", () => {
     expect(turno.text).not.toMatch(/miércoles|viernes/i);
   });
 
-  it("muestra todos los slots de un día sin tope por día", async () => {
+  it("limita los slots por día al tope y reporta el truncado", async () => {
     computeAvailabilityImpl = async () => [
       ...Array.from({ length: 8 }, (_, i) => ({
         startUtc: `2026-09-21T${String(15 + i).padStart(2, "0")}:00:00.000Z`,
@@ -148,16 +152,17 @@ describe("offerGrouped — disponibilidad completa", () => {
 
     expect(turno.pagination).toEqual({
       totalAvailableSlots: 9,
-      displayedSlots: 9,
+      displayedSlots: 5,
       totalAvailableDays: 2,
       displayedDays: 2,
-      remainingSlots: 0,
+      remainingSlots: 4,
       remainingDays: 0,
-      truncated: false,
+      truncated: true,
     });
-    // 15:00Z..22:00Z se presenta en America/Mexico_City como 09:00..16:00.
+    // 15:00Z..18:00Z se presentan en America/Mexico_City como 09:00..12:00.
     expect(turno.text).toContain("09:00");
-    expect(turno.text).toContain("16:00");
+    expect(turno.text).toContain("12:00");
+    expect(turno.text).not.toContain("16:00"); // 8º slot del lunes, oculto por el tope
     expect(turno.text).toContain("Mañana martes, 22 de septiembre");
   });
 });

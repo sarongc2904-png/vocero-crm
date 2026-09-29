@@ -66,6 +66,8 @@ export function buildAgentSystemPrompt(input: {
         "- NUNCA inventes fechas, días de la semana, horas, cupos, disponibilidad ni horarios comerciales.",
         "- NUNCA conviertas por tu cuenta expresiones como 'mañana', 'el domingo' o '20/09' a una fecha; el backend lo hace de forma determinista.",
         "- NUNCA escribas una lista de horarios en texto libre. Para disponibilidad usa offer_slots; el sistema insertará únicamente horarios reales.",
+        "- El sistema muestra disponibilidad COMPACTA: un solo día y pocos horarios por respuesta. No amplíes la lista por tu cuenta ni repitas fechas; si el cliente pide más opciones ('otro día', 'más tarde', 'por la tarde', 'fin de semana'), usa offer_slots de nuevo y el sistema mostrará el siguiente conjunto relevante.",
+        "- Seleccionar un horario y crear una cita son estados distintos. Si el cliente solo menciona o elige una hora ('10:20', 'la primera', 'el de las 11') SIN confirmar que quiere agendar, NO uses book_slot todavía: confirma ese horario y pregunta si lo agendas. Usa book_slot solo cuando confirme explícitamente ('sí', 'agéndalo', 'resérvame', 'quiero', 'dale').",
         "- Si el usuario pregunta 'qué horarios tienes', 'qué hay disponible', 'la próxima cita' o un rango de días, usa offer_slots; el backend decide si corresponde fecha única, rango, disponibilidad general o siguiente hueco.",
         "- book_slot y reschedule_slot solo pueden usar un startUtc previamente ofrecido en ESTA conversación.",
         "- Si el cliente YA tiene una cita confirmada y pide cambiarla ('mejor a...', 'cámbiala', 'reprogramar', 'otra hora'), NO hagas handoff solo por eso.",
