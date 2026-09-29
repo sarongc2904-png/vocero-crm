@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -166,12 +167,23 @@ export function AgendaClient() {
 
   return (
     <div className="max-w-2xl space-y-4">
+      <div className="rounded-lg border bg-subtle p-4 text-sm">
+        <p className="font-medium">Agenda general</p>
+        <p className="mt-1 text-text-3">
+          Esta configuración se usa cuando una cita no tiene un servicio y una
+          persona asignados. Para definir los horarios de cada persona, usa{" "}
+          <Link href="/settings/beauty" className="font-medium text-brand-text hover:underline">
+            Servicios y personal
+          </Link>
+          .
+        </p>
+      </div>
       <Card>
         <CardHeader>
-          <CardTitle>Horario de atención</CardTitle>
+          <CardTitle>Horario general</CardTitle>
           <CardDescription>
-            En qué franjas puede agendarte un cliente. Las horas son las de tu
-            zona; un día sin franjas está cerrado.
+            Define la disponibilidad general para citas sin una persona asignada.
+            Las horas son las de tu zona; un día sin franjas está cerrado.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -241,7 +253,7 @@ export function AgendaClient() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Cómo se generan los huecos</CardTitle>
+          <CardTitle>Reglas de la agenda general</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
