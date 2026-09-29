@@ -28,5 +28,11 @@ export const GET = withOrgPermissions(["settings.read"], async () => {
     verifyToken: env.META_WEBHOOK_VERIFY_TOKEN,
     isHttps: url.startsWith("https://"),
     signatureLayer: Boolean(env.META_APP_SECRET),
+    /**
+     * SEC-V3: en producción la firma es obligatoria, así que `signatureLayer`
+     * tiene que ser `true` — si no, el webhook rechaza todo. Se expone para que
+     * el operador lo vea sin leer logs.
+     */
+    signatureRequired: env.NODE_ENV === "production",
   });
 });

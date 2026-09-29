@@ -21,15 +21,23 @@ export function isValidWebhookToken(
 }
 
 /**
- * Capa 2 (opcional): firma HMAC-SHA256 de Meta sobre el body CRUDO.
- * Devuelve true si no hay secreto configurado (capa desactivada).
+ * Capa 2: firma HMAC-SHA256 de Meta sobre el body CRUDO.
+ *
+ * SEC-V3: por defecto, sin secreto configurado la capa queda desactivada
+ * (comportamiento histórico, útil en local). `requireSecret: true` invierte la
+ * decisión: **sin secreto se rechaza**. Una instalación productiva no puede
+ * aceptar webhooks sin validar firma — el verify token es un secreto de
+ * instancia que viaja en la URL del webhook, así que cualquiera que lo conozca
+ * (un owner de cualquier tenant lo lee en Ajustes) podría inyectar mensajes en
+ * la bandeja de otra organización si esta capa estuviera apagada.
  */
 export function isValidSignature(
   rawBody: string,
   signatureHeader: string | null,
-  appSecret: string | undefined
+  appSecret: string | undefined,
+  options: { requireSecret?: boolean } = {}
 ): boolean {
-  if (!appSecret) return true;
+  if (!appSecret) return options.requireSecret !== true;
   if (!signatureHeader?.startsWith("sha256=")) return false;
   const expected = createHmac("sha256", appSecret)
     .update(rawBody, "utf8")

@@ -11,8 +11,15 @@ import { processTemplateStatusValue } from "@/server/whatsapp/template-events";
 /**
  * Webhook público de WhatsApp (contrato webhook.md).
  * Capa 1: el segmento [webhookToken] debe coincidir (si no → 404 sin efectos).
- * Capa 2: firma x-hub-signature-256 solo si META_APP_SECRET está configurado.
- * El POST siempre responde 200 tras validar; el procesamiento va en after().
+ * Capa 2: firma x-hub-signature-256.
+ *
+ * SEC-V3: en producción la capa 2 es OBLIGATORIA. Antes, si faltaba
+ * `META_APP_SECRET`, `isValidSignature` devolvía `true` y el webhook aceptaba
+ * cualquier POST: con el verify token (secreto de instancia, visible en la URL
+ * y en Ajustes para cualquier owner/admin) se podían inyectar mensajes en la
+ * bandeja de otra organización. Ahora, sin secreto, producción **rechaza** en
+ * lugar de aceptar; en local/CI sigue desactivada para no romper el self-test.
+ * Requiere `META_APP_SECRET` configurado antes de desplegar (ver README/.env.example).
  */
 export const dynamic = "force-dynamic";
 
@@ -45,7 +52,11 @@ export async function POST(req: Request, { params }: Params) {
 
   const rawBody = await req.text();
   const signature = req.headers.get("x-hub-signature-256");
-  if (!isValidSignature(rawBody, signature, env.META_APP_SECRET)) {
+  if (
+    !isValidSignature(rawBody, signature, env.META_APP_SECRET, {
+      requireSecret: env.NODE_ENV === "production",
+    })
+  ) {
     return new Response(null, { status: 401 });
   }
 
