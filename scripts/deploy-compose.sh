@@ -13,5 +13,5 @@ if command -v node >/dev/null 2>&1; then
   node --env-file=.env scripts/production-smoke.mjs "${BASE_URL}"
 else
   echo "Node no está instalado en el host; ejecutando smoke dentro del contenedor app"
-  docker compose exec -T app node scripts/production-smoke.mjs "${BASE_URL}"
+  docker compose exec -T app node --input-type=module - "${BASE_URL}" < scripts/production-smoke.mjs
 fi
