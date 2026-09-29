@@ -152,6 +152,12 @@ export async function createSessionBooking(input: {
       .limit(1);
     const conv = rows[0];
     if (!conv) throw new BookingError("not_found", "Conversación no encontrada");
+    if (contactId && contactId !== conv.contactId) {
+      throw new BookingError(
+        "invalid",
+        "El contacto no corresponde a esta conversación"
+      );
+    }
     isTest = conv.isTest;
     contactId = contactId ?? conv.contactId;
   }

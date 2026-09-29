@@ -264,6 +264,27 @@ describe("la carrera del hueco", () => {
     expect(inserted).toHaveLength(0);
   });
 
+  it("rechaza un contacto distinto al de la conversación", async () => {
+    const { createSessionBooking } = await import("@/server/agenda/service");
+    selectRows.push([{ contactId: "ct_conversation", isTest: false }]);
+
+    await expect(
+      createSessionBooking({
+        organizationId: "org_1",
+        contactId: "ct_other",
+        conversationId: "cv_1",
+        startUtc: SLOT,
+        source: "manual",
+        requireOffer: false,
+        now: NOW,
+      })
+    ).rejects.toMatchObject({
+      code: "invalid",
+      message: "El contacto no corresponde a esta conversación",
+    });
+    expect(inserted).toHaveLength(0);
+  });
+
   it("una oferta que venció se rechaza antes de insertar", async () => {
     const { createSessionBooking } = await import("@/server/agenda/service");
     primeLookups();

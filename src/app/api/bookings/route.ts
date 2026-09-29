@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseBody, withAuth } from "@/lib/api";
+import { parseBody, withOrgPermissions } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { listBookings } from "@/server/agenda/queries";
 import { createBlock, createSessionBooking } from "@/server/agenda/service";
@@ -7,7 +7,7 @@ import { bookingErrorResponse, bookingPayload } from "@/server/agenda/http";
 
 export const dynamic = "force-dynamic";
 
-export const GET = withAuth(async (session) => {
+export const GET = withOrgPermissions(["appointments.read"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   const bookings = await listBookings(session.organizationId);
   return Response.json({ bookings });
@@ -42,39 +42,42 @@ const postSchema = z.discriminatedUnion("kind", [
  * disponibilidad que está viendo en pantalla. La re-validación y el candado
  * anti doble-booking sí aplican igual.
  */
-export const POST = withAuth(async (session, req: Request) => {
-  if (!agendaEnabled()) return agendaDisabledResponse();
-  const body = await parseBody(req, postSchema);
-  if (!body.ok) return body.response;
+export const POST = withOrgPermissions(
+  ["appointments.create"],
+  async (session, req: Request) => {
+    if (!agendaEnabled()) return agendaDisabledResponse();
+    const body = await parseBody(req, postSchema);
+    if (!body.ok) return body.response;
 
-  try {
-    if (body.data.kind === "block") {
-      const block = await createBlock({
+    try {
+      if (body.data.kind === "block") {
+        const block = await createBlock({
+          organizationId: session.organizationId,
+          startUtc: body.data.startUtc,
+          durationMinutes: body.data.durationMinutes,
+          professionalId: body.data.professionalId ?? null,
+          notes: body.data.notes ?? null,
+        });
+        return Response.json({ booking: { id: block.id } }, { status: 201 });
+      }
+
+      const result = await createSessionBooking({
         organizationId: session.organizationId,
+        contactId: body.data.contactId,
+        conversationId: body.data.conversationId ?? null,
+        serviceId: body.data.serviceId,
+        professionalId: body.data.professionalId,
         startUtc: body.data.startUtc,
-        durationMinutes: body.data.durationMinutes,
-        professionalId: body.data.professionalId ?? null,
         notes: body.data.notes ?? null,
+        source: "manual",
+        requireOffer: false,
       });
-      return Response.json({ booking: { id: block.id } }, { status: 201 });
+      return Response.json(
+        { booking: { id: result.booking.id }, ...bookingPayload(result) },
+        { status: 201 }
+      );
+    } catch (err) {
+      return bookingErrorResponse(err);
     }
-
-    const result = await createSessionBooking({
-      organizationId: session.organizationId,
-      contactId: body.data.contactId,
-      conversationId: body.data.conversationId ?? null,
-      serviceId: body.data.serviceId,
-      professionalId: body.data.professionalId,
-      startUtc: body.data.startUtc,
-      notes: body.data.notes ?? null,
-      source: "manual",
-      requireOffer: false,
-    });
-    return Response.json(
-      { booking: { id: result.booking.id }, ...bookingPayload(result) },
-      { status: 201 }
-    );
-  } catch (err) {
-    return bookingErrorResponse(err);
   }
-});
+);
