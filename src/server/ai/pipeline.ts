@@ -37,7 +37,10 @@ import {
   mapaDeHuecosParaModelo,
 } from "@/server/agenda/offers";
 import { resolveExpandRequest, type ExpandWindow } from "@/server/agenda/expand";
-import { isBareTimeSelection } from "@/server/agenda/selection";
+import {
+  hasBookingConfirmation,
+  isBareTimeSelection,
+} from "@/server/agenda/selection";
 import { getSettings } from "@/server/agenda/settings";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
 import {
@@ -232,6 +235,25 @@ export async function runAgentTurn(
     }
   }
 
+  /**
+   * AG-HOLA — El turno ACTUAL debe justificar la agenda.
+   *
+   * Antes el catálogo de huecos vigentes se inyectaba siempre que existiera una
+   * oferta persistida, aunque el mensaje fuera "Hola". Combinado con la regla
+   * del prompt que empujaba a "retomar el punto pendiente", el modelo heredaba
+   * la intención de una conversación anterior y prometía consultar
+   * disponibilidad ante un saludo. Un contexto histórico puede informar la
+   * respuesta, pero la operación de agenda necesita señal presente: palabras de
+   * agenda, una ampliación explícita, una selección de horario o una
+   * confirmación.
+   */
+  const slotChoiceSignal =
+    lastInbound.text !== null &&
+    (isBareTimeSelection(lastInbound.text) ||
+      hasBookingConfirmation(lastInbound.text));
+  const turnTouchesAgenda =
+    schedulingSignal || expandRequest !== null || slotChoiceSignal;
+
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -251,7 +273,7 @@ export async function runAgentTurn(
         role: m.direction === "in" ? ("user" as const) : ("assistant" as const),
         content: m.text!,
       })),
-    ...(mapaDeHuecos
+    ...(mapaDeHuecos && turnTouchesAgenda
       ? [{ role: "system" as const, content: mapaDeHuecos }]
       : []),
   ];

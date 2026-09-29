@@ -31,3 +31,15 @@ export function isBareTimeSelection(text: string): boolean {
   if (!TIME_SELECTION.test(norm)) return false;
   return !BOOKING_CONFIRM.test(norm);
 }
+
+/**
+ * AG-HOLA — ¿El cliente está confirmando explícitamente una acción de agenda?
+ *
+ * Se usa junto a `isBareTimeSelection` para decidir si el turno ACTUAL toca
+ * agenda. Un "sí, agéndala" es señal suficiente; un "Hola" no lo es, y sin esta
+ * distinción el catálogo de huecos se le entregaba al modelo en turnos
+ * neutrales — heredando la intención de una conversación anterior.
+ */
+export function hasBookingConfirmation(text: string): boolean {
+  return BOOKING_CONFIRM.test(normalize(text));
+}
