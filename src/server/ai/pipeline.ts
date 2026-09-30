@@ -41,6 +41,8 @@ import {
   hasBookingConfirmation,
   isAffirmativeConfirmation,
   isBareTimeSelection,
+  resolveOfferedTimeSelection,
+  selectedOfferConfirmationLabel,
 } from "@/server/agenda/selection";
 import {
   clearPendingAction,
@@ -52,6 +54,8 @@ import {
   resetOfferCursor,
 } from "@/server/agenda/offer-cursor";
 import { getSettings } from "@/server/agenda/settings";
+import { findSlot } from "@/server/agenda/availability";
+import { findProfessionalSlot } from "@/server/agenda/professional-availability";
 import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
 import {
   factualHoursReply,
@@ -188,6 +192,8 @@ export async function runAgentTurn(
           organizationId,
           conversationId,
           startUtc: pending.startUtc,
+          serviceId: pending.serviceId ?? undefined,
+          professionalId: pending.professionalId ?? undefined,
         });
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
@@ -344,6 +350,118 @@ export async function runAgentTurn(
       hasBookingConfirmation(lastInbound.text));
   const turnTouchesAgenda =
     schedulingSignal || expandRequest !== null || slotChoiceSignal;
+
+  /**
+   * Selección horaria determinista: el modelo no decide si "2:20" significa
+   * el 14:20 que el backend acaba de mostrar. Se reconstruye la última ventana
+   * desde el último mensaje saliente y se cruza únicamente con esas ofertas.
+   */
+  if (
+    agendaContext &&
+    lastInbound.text &&
+    isBareTimeSelection(lastInbound.text)
+  ) {
+    const lastOutbound = [...history]
+      .reverse()
+      .find(
+        (message) =>
+          message.direction === "out" &&
+          message.createdAt < lastInbound.createdAt &&
+          Boolean(message.text?.trim())
+      );
+
+    if (lastOutbound?.text) {
+      const resolution = resolveOfferedTimeSelection({
+        text: lastInbound.text,
+        offers: ofertas,
+        lastOutboundText: lastOutbound.text,
+        timezone: agendaContext.settings.timezone,
+        shownAt: lastOutbound.createdAt,
+      });
+
+      if (resolution.kind === "match") {
+        const chosen = findOffered(ofertas, resolution.offer.startUtc);
+        const hasCompleteProfessionalContext = Boolean(
+          chosen?.serviceId && chosen.professionalId
+        );
+        const hasPartialProfessionalContext = Boolean(
+          chosen && Boolean(chosen.serviceId) !== Boolean(chosen.professionalId)
+        );
+        const stillAvailable =
+          chosen && !hasPartialProfessionalContext
+            ? hasCompleteProfessionalContext
+              ? await findProfessionalSlot(organizationId, {
+                  serviceId: chosen.serviceId!,
+                  professionalId: chosen.professionalId!,
+                  startUtc: chosen.startUtc,
+                  now: agendaContext.now,
+                })
+              : await findSlot(organizationId, chosen.startUtc, {
+                  now: agendaContext.now,
+                  settings: agendaContext.settings,
+                })
+            : null;
+
+        if (chosen && stillAvailable) {
+          await setPendingAction({
+            organizationId,
+            conversationId,
+            action: "book",
+            startUtc: chosen.startUtc,
+            serviceId: chosen.serviceId,
+            professionalId: chosen.professionalId,
+          });
+          await deliverReply(
+            conversation,
+            `Perfecto. Tengo ${selectedOfferConfirmationLabel(
+              chosen.startUtc,
+              agendaContext.settings.timezone
+            )} disponible. ¿Quieres que agende tu cita?`
+          );
+          return;
+        }
+
+        const turn = await offerSlots({
+          organizationId,
+          conversationId,
+          intro:
+            "Ese horario acaba de dejar de estar disponible. Estas son las opciones actuales:",
+        });
+        await deliverReply(conversation, turn.text);
+        return;
+      }
+
+      if (resolution.kind === "ambiguous") {
+        const choices = resolution.offers
+          .map(
+            (offer) =>
+              `• ${selectedOfferConfirmationLabel(
+                offer.startUtc,
+                agendaContext.settings.timezone
+              )}`
+          )
+          .join("\n");
+        await deliverReply(
+          conversation,
+          `Encontré más de una opción para esa hora:\n${choices}\n¿Cuál de estas quieres elegir?`
+        );
+        return;
+      }
+
+      if (resolution.kind === "not_found") {
+        const turn = await offerSlots({
+          organizationId,
+          conversationId,
+          intro:
+            "No encontré esa hora entre las opciones que te mostré. Estas son las opciones actuales:",
+        });
+        await deliverReply(conversation, turn.text);
+        return;
+      }
+      // Selecciones ordinales ("la primera") conservan el guardarraíl previo:
+      // el modelo elige el ISO y findOffered exige coincidencia exacta.
+    }
+  }
 
   const messages: ChatMessage[] = [
     {
@@ -522,6 +640,8 @@ export async function runAgentTurn(
                 conversationId,
                 action: "book",
                 startUtc: action.startUtc,
+                serviceId: chosen.serviceId,
+                professionalId: chosen.professionalId,
               });
               await deliverReply(
                 conversation,

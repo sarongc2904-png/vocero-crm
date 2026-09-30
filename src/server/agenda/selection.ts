@@ -1,3 +1,12 @@
+import {
+  dayIsoInTz,
+  dayLabelInTz,
+  dateLabelInTz,
+  labelInTz,
+  timeInTz,
+} from "@/lib/time/slots";
+import type { OfferedSlot } from "@/server/agenda/offers";
+
 /**
  * Distinción determinista entre "mencionar/seleccionar un horario" y
  * "confirmar que quieres agendarlo".
@@ -42,6 +51,174 @@ export function isBareTimeSelection(text: string): boolean {
  */
 export function hasBookingConfirmation(text: string): boolean {
   return BOOKING_CONFIRM.test(normalize(text));
+}
+
+export type OfferedTimeSelectionResolution =
+  | { kind: "match"; offer: OfferedSlot; shownOffers: OfferedSlot[] }
+  | { kind: "ambiguous"; offers: OfferedSlot[]; shownOffers: OfferedSlot[] }
+  | { kind: "not_found"; shownOffers: OfferedSlot[] }
+  | { kind: "not_time"; shownOffers: OfferedSlot[] };
+
+function searchable(text: string): string {
+  return normalize(text)
+    .replace(/[^a-z0-9:\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseSelectedMinutes(text: string): number[] | null {
+  const match = /\b(\d{1,2}):([0-5]\d)\s*(a\.?\s*m\.?|p\.?\s*m\.?)?\b/i.exec(
+    text
+  );
+  if (!match) return null;
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23) return null;
+
+  const meridiem = match[3]?.toLowerCase().replace(/[^apm]/g, "");
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    const hour24 =
+      meridiem === "pm" ? (hour === 12 ? 12 : hour + 12) : hour === 12 ? 0 : hour;
+    return [hour24 * 60 + minute];
+  }
+
+  if (hour >= 13 || hour === 0 || hour === 12) {
+    return [hour * 60 + minute];
+  }
+
+  // Sin am/pm, solo son candidatos los dos relojes posibles. La ventana que
+  // el backend acaba de mostrar decide cuál existe; nunca se elige por intuición.
+  return [hour * 60 + minute, (hour + 12) * 60 + minute];
+}
+
+function minutesInTz(startUtc: string, timezone: string): number | null {
+  const time = timeInTz(startUtc, timezone);
+  const match = /^(\d{2}):(\d{2})$/.exec(time);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+/**
+ * Reconstruye la última ventana REALMENTE mostrada a partir del mensaje
+ * saliente factual. `offered_slot` conserva a propósito el catálogo completo
+ * para paginar; usarlo directamente haría ambiguo un mismo 14:20 repetido en
+ * siete días aunque el cliente solo haya visto uno.
+ */
+export function offersShownInLastMessage(input: {
+  offers: OfferedSlot[];
+  lastOutboundText: string;
+  timezone: string;
+  shownAt: Date;
+}): OfferedSlot[] {
+  const { offers, lastOutboundText, timezone, shownAt } = input;
+  if (!lastOutboundText.trim() || offers.length === 0) return [];
+
+  const byDay = new Map<string, OfferedSlot[]>();
+  for (const offer of offers) {
+    const day = dayIsoInTz(new Date(offer.startUtc), timezone);
+    const bucket = byDay.get(day);
+    if (bucket) bucket.push(offer);
+    else byDay.set(day, [offer]);
+  }
+
+  const shown = new Map<string, OfferedSlot>();
+  let activeDay: string | null = null;
+  for (const rawLine of lastOutboundText.split(/\r?\n/)) {
+    const line = searchable(rawLine);
+    if (!line) continue;
+
+    for (const [day, dayOffers] of byDay) {
+      const longDay = searchable(
+        dayLabelInTz(dayOffers[0]!.startUtc, timezone, shownAt)
+      );
+      const absoluteDay = searchable(dateLabelInTz(day, timezone));
+      if (
+        (longDay && line.includes(longDay)) ||
+        (absoluteDay && line.includes(absoluteDay))
+      ) {
+        activeDay = day;
+        break;
+      }
+    }
+
+    // Algunas respuestas muestran la etiqueta completa en una sola línea
+    // (próxima cita o re-oferta tras conflicto), sin bloque día + viñetas.
+    for (const offer of offers) {
+      const shortLabel = searchable(labelInTz(offer.startUtc, timezone));
+      const longLabel = searchable(
+        `${dayLabelInTz(offer.startUtc, timezone, shownAt)} a las ${timeInTz(
+          offer.startUtc,
+          timezone
+        )}`
+      );
+      if (
+        (shortLabel && line.includes(shortLabel)) ||
+        (longLabel && line.includes(longLabel))
+      ) {
+        shown.set(offer.startUtc, offer);
+      }
+    }
+
+    const bulletTime = /^[\s•▪◦*-]*(\d{1,2}):([0-5]\d)\s*$/.exec(rawLine.trim());
+    if (!bulletTime || !activeDay) continue;
+    const minute = Number(bulletTime[1]) * 60 + Number(bulletTime[2]);
+    for (const offer of byDay.get(activeDay) ?? []) {
+      if (minutesInTz(offer.startUtc, timezone) === minute) {
+        shown.set(offer.startUtc, offer);
+      }
+    }
+  }
+
+  return [...shown.values()].sort(
+    (a, b) => Date.parse(a.startUtc) - Date.parse(b.startUtc)
+  );
+}
+
+/**
+ * Convierte una selección humana ("2:20", "2:20 pm", "a las 2:20") al
+ * instante exacto de la última ventana mostrada. No consulta al LLM y jamás
+ * busca fuera de esa ventana.
+ */
+export function resolveOfferedTimeSelection(input: {
+  text: string;
+  offers: OfferedSlot[];
+  lastOutboundText: string;
+  timezone: string;
+  shownAt: Date;
+}): OfferedTimeSelectionResolution {
+  const shownOffers = offersShownInLastMessage(input);
+  const selectedMinutes = parseSelectedMinutes(input.text);
+  if (!selectedMinutes) return { kind: "not_time", shownOffers };
+
+  const matches = shownOffers.filter((offer) => {
+    const minute = minutesInTz(offer.startUtc, input.timezone);
+    return minute !== null && selectedMinutes.includes(minute);
+  });
+  const unique = [...new Map(matches.map((offer) => [offer.startUtc, offer])).values()];
+
+  if (unique.length === 1) {
+    return { kind: "match", offer: unique[0]!, shownOffers };
+  }
+  if (unique.length > 1) {
+    return { kind: "ambiguous", offers: unique, shownOffers };
+  }
+  return { kind: "not_found", shownOffers };
+}
+
+/** Texto factual breve para pedir confirmación sin dejar la hora al modelo. */
+export function selectedOfferConfirmationLabel(
+  startUtc: string,
+  timezone: string
+): string {
+  const parts = new Intl.DateTimeFormat("es-MX", {
+    timeZone: timezone,
+    weekday: "long",
+    day: "numeric",
+  }).formatToParts(new Date(startUtc));
+  const weekday = parts.find((part) => part.type === "weekday")?.value ?? "";
+  const day = parts.find((part) => part.type === "day")?.value ?? "";
+  return `${weekday} ${day} a las ${timeInTz(startUtc, timezone)}`.trim();
 }
 
 /** Un "sí" al principio del mensaje, sin condicional detrás ("si me surge algo"). */

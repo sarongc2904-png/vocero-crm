@@ -287,13 +287,12 @@ describe("AG-HOLA — un turno neutral no recibe contexto de agenda", () => {
     expect(ultimoTextoSaliente()).toContain("Otro día tengo:");
   });
 
-  it("historial de agenda + '10:20' → el catálogo llega y NO se reserva", async () => {
+  it("historial de agenda + hora no mostrada → reoferta factual y NO consulta al LLM", async () => {
     const startUtc = `${DAY1}T15:00:00.000Z`;
     offers = [{ startUtc, label: "viejo" }];
-    chatJson.mockResolvedValueOnce({
-      ok: true,
-      data: { action: "book_slot", startUtc, reply: "¡Listo!" },
-    });
+    computeAvailability.mockResolvedValue([
+      { startUtc, endUtc: `${DAY1}T15:30:00.000Z` },
+    ]);
     queueTurno([
       { id: "m3", direction: "in", text: "10:20", createdAt: new Date() },
       ...historialAgenda(),
@@ -302,8 +301,11 @@ describe("AG-HOLA — un turno neutral no recibe contexto de agenda", () => {
     const { runAgentTurn } = await import("@/server/ai/pipeline");
     await runAgentTurn("cv_lab");
 
-    expect(mapaEnviadoAlModelo()).not.toBeNull();
-    expect(ultimoTextoSaliente()).toContain("¿Quieres que agende tu cita?");
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(ultimoTextoSaliente()).toContain(
+      "No encontré esa hora entre las opciones que te mostré"
+    );
+    expect(ultimoTextoSaliente()).toContain("15:00");
     expect(ultimoTextoSaliente()).not.toContain("Te agendé");
   });
 

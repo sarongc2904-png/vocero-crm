@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveExpandRequest } from "@/server/agenda/expand";
-import { isBareTimeSelection } from "@/server/agenda/selection";
+import {
+  isBareTimeSelection,
+  resolveOfferedTimeSelection,
+  selectedOfferConfirmationLabel,
+} from "@/server/agenda/selection";
 import type { OfferedSlot } from "@/server/agenda/offers";
 
 /**
@@ -55,6 +59,87 @@ describe("isBareTimeSelection", () => {
   });
 });
 
+describe("resolveOfferedTimeSelection — incidente 2:20 → 14:20", () => {
+  const shownAt = new Date("2026-09-30T02:10:19.000Z");
+  const timezone = "America/Matamoros";
+  const incidentOffers: OfferedSlot[] = [
+    { startUtc: "2026-09-30T17:20:00.000Z", label: "mié 30 sep, 12:20" },
+    { startUtc: "2026-09-30T18:00:00.000Z", label: "mié 30 sep, 13:00" },
+    { startUtc: "2026-09-30T18:40:00.000Z", label: "mié 30 sep, 13:40" },
+    { startUtc: "2026-09-30T19:20:00.000Z", label: "mié 30 sep, 14:20" },
+    // El catálogo completo conserva otros días; no pertenecen a esta ventana.
+    { startUtc: "2026-10-01T19:20:00.000Z", label: "jue 1 oct, 14:20" },
+  ];
+  const incidentWindow = [
+    "Para la tarde tengo:",
+    "Mañana miércoles, 30 de septiembre",
+    "• 12:20",
+    "• 13:00",
+    "• 13:40",
+    "• 14:20",
+    "¿Cuál te funciona mejor?",
+  ].join("\n");
+
+  it.each(["2:20", "14:20", "a las 2:20", "el de las 2:20", "2:20 pm"])(
+    "%s resuelve el 14:20 exacto de la última ventana",
+    (text) => {
+      const result = resolveOfferedTimeSelection({
+        text,
+        offers: incidentOffers,
+        lastOutboundText: incidentWindow,
+        timezone,
+        shownAt,
+      });
+      expect(result).toMatchObject({
+        kind: "match",
+        offer: { startUtc: "2026-09-30T19:20:00.000Z" },
+      });
+    }
+  );
+
+  it("no elige arbitrariamente si 02:20 y 14:20 fueron mostrados", () => {
+    const result = resolveOfferedTimeSelection({
+      text: "2:20",
+      offers: [
+        { startUtc: "2026-09-30T07:20:00.000Z", label: "mié 30 sep, 02:20" },
+        { startUtc: "2026-09-30T19:20:00.000Z", label: "mié 30 sep, 14:20" },
+      ],
+      lastOutboundText: [
+        "Miércoles, 30 de septiembre",
+        "• 02:20",
+        "• 14:20",
+      ].join("\n"),
+      timezone,
+      shownAt,
+    });
+    expect(result.kind).toBe("ambiguous");
+    if (result.kind === "ambiguous") expect(result.offers).toHaveLength(2);
+  });
+
+  it("un 14:20 repetido en varios días solo usa el día de la última ventana", () => {
+    const result = resolveOfferedTimeSelection({
+      text: "14:20",
+      offers: incidentOffers,
+      lastOutboundText: ["Jueves, 1 de octubre", "• 14:20"].join("\n"),
+      timezone,
+      shownAt,
+    });
+    expect(result).toMatchObject({
+      kind: "match",
+      offer: { startUtc: "2026-10-01T19:20:00.000Z" },
+    });
+  });
+
+  it("forma la confirmación factual pedida por producto", () => {
+    expect(
+      selectedOfferConfirmationLabel(
+        "2026-09-30T19:20:00.000Z",
+        "America/Matamoros"
+      )
+    ).toBe("miércoles 30 a las 14:20");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pipeline: ampliación y guardarraíl de selección (mismo harness que los e2e).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,6 +157,9 @@ const settings = {
 
 let offers: OfferedSlot[] = [];
 const computeAvailability = vi.fn();
+const findSlot = vi.fn();
+const findProfessionalSlot = vi.fn();
+const createSessionBooking = vi.fn();
 const chatJson = vi.fn();
 
 vi.mock("@/lib/ai", () => ({ chatJson: (...args: unknown[]) => chatJson(...args) }));
@@ -79,7 +167,18 @@ vi.mock("@/server/agenda/settings", () => ({ getSettings: async () => settings }
 vi.mock("@/server/agenda/availability", () => ({
   computeAvailability: (...args: unknown[]) =>
     computeAvailability(...(args as [string, object | undefined])),
+  findSlot: (...args: unknown[]) => findSlot(...args),
 }));
+vi.mock("@/server/agenda/professional-availability", () => ({
+  findProfessionalSlot: (...args: unknown[]) => findProfessionalSlot(...args),
+}));
+vi.mock("@/server/agenda/service", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/server/agenda/service")>();
+  return {
+    ...original,
+    createSessionBooking: (...args: unknown[]) => createSessionBooking(...args),
+  };
+});
 vi.mock("@/server/agenda/offers", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/server/agenda/offers")>();
   return {
@@ -178,8 +277,12 @@ describe("pipeline — ampliación y selección compacta", () => {
     selectQueue.length = 0;
     inserts.length = 0;
     offers = [];
+    settings.timezone = "UTC";
     chatJson.mockReset();
     computeAvailability.mockReset();
+    findSlot.mockReset();
+    findProfessionalSlot.mockReset();
+    createSessionBooking.mockReset();
     vi.stubEnv("OPENROUTER_API_TOKEN", "token-test");
     vi.stubEnv("AGENDA", "on");
   });
@@ -243,5 +346,171 @@ describe("pipeline — ampliación y selección compacta", () => {
     const texto = ultimoTextoSaliente();
     expect(texto).toContain("¿Quieres que agende tu cita?");
     expect(texto).not.toContain("Te agendé");
+  });
+
+  it("resuelve '2:20' antes del LLM y crea la confirmación pendiente factual", async () => {
+    const target = "2026-09-30T19:20:00.000Z";
+    const shownAt = new Date("2026-09-30T02:10:19.000Z");
+    const receivedAt = new Date("2026-09-30T02:10:36.000Z");
+    settings.timezone = "America/Matamoros";
+    vi.setSystemTime(receivedAt);
+    offers = [
+      { startUtc: "2026-09-30T17:20:00.000Z", label: "mié 30 sep, 12:20" },
+      { startUtc: "2026-09-30T18:00:00.000Z", label: "mié 30 sep, 13:00" },
+      { startUtc: "2026-09-30T18:40:00.000Z", label: "mié 30 sep, 13:40" },
+      { startUtc: target, label: "mié 30 sep, 14:20" },
+      { startUtc: "2026-10-01T19:20:00.000Z", label: "jue 1 oct, 14:20" },
+    ];
+    findSlot.mockResolvedValue({
+      startUtc: target,
+      endUtc: "2026-09-30T19:50:00.000Z",
+      label: "mié 30 sep, 14:20",
+    });
+    chatJson.mockResolvedValue({
+      ok: true,
+      data: { action: "reply", text: "El horario de 14:20 no está disponible" },
+    });
+    queueTurno([
+      {
+        id: "m0",
+        direction: "out",
+        text: [
+          "Para la tarde tengo:",
+          "Mañana miércoles, 30 de septiembre",
+          "• 12:20",
+          "• 13:00",
+          "• 13:40",
+          "• 14:20",
+          "¿Cuál te funciona mejor?",
+        ].join("\n"),
+        createdAt: shownAt,
+      },
+      { id: "m1", direction: "in", text: "2:20", createdAt: receivedAt },
+    ]);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(ultimoTextoSaliente()).toBe(
+      "Perfecto. Tengo miércoles 30 a las 14:20 disponible. ¿Quieres que agende tu cita?"
+    );
+    const pending = inserts.find((entry) => entry.values.action === "book");
+    expect(pending?.values).toMatchObject({
+      organizationId: "org_1",
+      conversationId: "cv_lab",
+      action: "book",
+      serviceId: null,
+      professionalId: null,
+    });
+    expect((pending?.values.startUtc as Date).toISOString()).toBe(target);
+    expect(createSessionBooking).not.toHaveBeenCalled();
+  });
+
+  it("pide aclaración factual cuando 02:20 y 14:20 están en la ventana", async () => {
+    settings.timezone = "America/Matamoros";
+    const shownAt = new Date("2026-09-30T02:10:19.000Z");
+    const receivedAt = new Date("2026-09-30T02:10:36.000Z");
+    offers = [
+      { startUtc: "2026-09-30T07:20:00.000Z", label: "mié 30 sep, 02:20" },
+      { startUtc: "2026-09-30T19:20:00.000Z", label: "mié 30 sep, 14:20" },
+    ];
+    queueTurno([
+      {
+        id: "m0",
+        direction: "out",
+        text: "Miércoles, 30 de septiembre\n• 02:20\n• 14:20",
+        createdAt: shownAt,
+      },
+      { id: "m1", direction: "in", text: "2:20", createdAt: receivedAt },
+    ]);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(ultimoTextoSaliente()).toContain("Encontré más de una opción");
+    expect(ultimoTextoSaliente()).toContain("02:20");
+    expect(ultimoTextoSaliente()).toContain("14:20");
+    expect(inserts.some((entry) => entry.values.action === "book")).toBe(false);
+  });
+
+  it("la confirmación posterior crea exactamente una cita", async () => {
+    const target = "2026-09-30T19:20:00.000Z";
+    createSessionBooking.mockResolvedValue({
+      booking: { durationMinutes: 30 },
+      meetingLink: null,
+      linkPending: false,
+      label: "mié 30 sep, 14:20",
+    });
+    selectQueue.push(
+      [CONVERSACION_DE_PRUEBA],
+      [PERFIL],
+      [{ id: "m1", direction: "in", text: "sí", createdAt: new Date() }],
+      [
+        {
+          id: "paa_1",
+          organizationId: "org_1",
+          conversationId: "cv_lab",
+          action: "book",
+          bookingId: null,
+          startUtc: new Date(target),
+          serviceId: null,
+          professionalId: null,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      ]
+    );
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(createSessionBooking).toHaveBeenCalledTimes(1);
+    expect(createSessionBooking).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: "org_1",
+        conversationId: "cv_lab",
+        startUtc: target,
+        source: "ai",
+        requireOffer: true,
+      })
+    );
+    expect(ultimoTextoSaliente()).toContain("¡Listo! Te agendé");
+  });
+
+  it("un conflicto real entre oferta y confirmación responde slot_taken", async () => {
+    const target = "2026-09-30T19:20:00.000Z";
+    const { BookingError } = await import("@/server/agenda/service");
+    createSessionBooking.mockRejectedValue(
+      new BookingError("slot_taken", "Ese horario acaba de ocuparse", [
+        { startUtc: "2026-09-30T20:00:00.000Z", label: "mié 30 sep, 15:00" },
+      ])
+    );
+    selectQueue.push(
+      [CONVERSACION_DE_PRUEBA],
+      [PERFIL],
+      [{ id: "m1", direction: "in", text: "sí", createdAt: new Date() }],
+      [
+        {
+          id: "paa_1",
+          organizationId: "org_1",
+          conversationId: "cv_lab",
+          action: "book",
+          bookingId: null,
+          startUtc: new Date(target),
+          serviceId: null,
+          professionalId: null,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      ]
+    );
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(createSessionBooking).toHaveBeenCalledTimes(1);
+    expect(ultimoTextoSaliente()).toContain("Se me acaba de ocupar ese horario");
+    expect(ultimoTextoSaliente()).toContain("15:00");
+    expect(ultimoTextoSaliente()).not.toContain("Te agendé");
   });
 });
