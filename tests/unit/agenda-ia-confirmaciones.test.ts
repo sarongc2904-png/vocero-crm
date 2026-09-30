@@ -84,6 +84,7 @@ const settings = {
 
 let offers: OfferedSlot[] = [];
 const computeAvailability = vi.fn();
+const findSlot = vi.fn();
 const chatJson = vi.fn();
 
 vi.mock("@/lib/ai", () => ({ chatJson: (...args: unknown[]) => chatJson(...args) }));
@@ -91,6 +92,7 @@ vi.mock("@/server/agenda/settings", () => ({ getSettings: async () => settings }
 vi.mock("@/server/agenda/availability", () => ({
   computeAvailability: (...args: unknown[]) =>
     computeAvailability(...(args as [string, object | undefined])),
+  findSlot: (...args: unknown[]) => findSlot(...args),
 }));
 vi.mock("@/server/agenda/offers", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/server/agenda/offers")>();
@@ -222,6 +224,7 @@ describe("AG-HOLA — un turno neutral no recibe contexto de agenda", () => {
     offers = [];
     chatJson.mockReset();
     computeAvailability.mockReset();
+    findSlot.mockReset();
     vi.stubEnv("OPENROUTER_API_TOKEN", "token-test");
     vi.stubEnv("AGENDA", "on");
   });
@@ -309,22 +312,30 @@ describe("AG-HOLA — un turno neutral no recibe contexto de agenda", () => {
     expect(ultimoTextoSaliente()).not.toContain("Te agendé");
   });
 
-  it("historial de agenda + 'la primera' → el catálogo llega y NO se reserva", async () => {
-    const startUtc = `${DAY1}T15:00:00.000Z`;
+  it("historial de agenda + 'la primera' → selección determinista y NO reserva", async () => {
+    const startUtc = `${DAY1}T09:00:00.000Z`;
     offers = [{ startUtc, label: "viejo" }];
-    chatJson.mockResolvedValueOnce({
-      ok: true,
-      data: { action: "book_slot", startUtc, reply: "¡Listo!" },
+    findSlot.mockResolvedValueOnce({
+      startUtc,
+      endUtc: `${DAY1}T09:30:00.000Z`,
+      label: "09:00",
     });
     queueTurno([
       { id: "m3", direction: "in", text: "la primera", createdAt: new Date() },
-      ...historialAgenda(),
+      ...historialAgenda().map((message) =>
+        message.id === "m2"
+          ? {
+              ...message,
+              text: "Mañana miércoles, 16 de septiembre\n• 09:00",
+            }
+          : message
+      ),
     ]);
 
     const { runAgentTurn } = await import("@/server/ai/pipeline");
     await runAgentTurn("cv_lab");
 
-    expect(mapaEnviadoAlModelo()).not.toBeNull();
+    expect(chatJson).not.toHaveBeenCalled();
     expect(ultimoTextoSaliente()).toContain("¿Quieres que agende tu cita?");
     expect(ultimoTextoSaliente()).not.toContain("Te agendé");
   });

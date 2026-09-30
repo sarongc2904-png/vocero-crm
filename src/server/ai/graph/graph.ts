@@ -4,7 +4,7 @@ import {
   StateGraph,
   type BaseCheckpointSaver,
 } from "@langchain/langgraph";
-import { chatJson } from "@/lib/ai";
+import { chatJson, type ChatMessage } from "@/lib/ai";
 import {
   agentActionSchema,
   degradeAction,
@@ -16,7 +16,10 @@ import { matchesHandoffIntent } from "@/server/ai/handoff";
 import { buildAgentSystemPrompt } from "@/server/ai/prompts";
 import { matchesCancellationIntent } from "@/server/agenda/cancel-intent";
 import { findSlot } from "@/server/agenda/availability";
-import { findOffered } from "@/server/agenda/offers";
+import {
+  findOffered,
+  mapaDeHuecosParaModelo,
+} from "@/server/agenda/offers";
 import { findProfessionalSlot } from "@/server/agenda/professional-availability";
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 import {
@@ -95,21 +98,34 @@ function blocked(
 async function proposeModelAction(
   state: ShadowAgentGraphState
 ): Promise<unknown> {
+  const result = await chatJson(
+    agentActionSchema(state.agendaEnabled),
+    buildShadowModelMessages(state)
+  );
+  if (!result.ok) throw new Error(`model_${result.error}`);
+  return result.data;
+}
+
+/** Replica el mapa factual del pipeline sin contaminar turnos no-agenda. */
+export function buildShadowModelMessages(
+  state: ShadowAgentGraphState
+): ChatMessage[] {
   const context = state.context;
   if (!context?.profile) throw new Error("agent_profile_missing");
-
   const system = buildAgentSystemPrompt({
     profile: context.profile,
     kb: context.kb,
     stages: context.stages,
     agenda: state.agendaEnabled,
   });
-  const result = await chatJson(agentActionSchema(state.agendaEnabled), [
+  const offerMap = agendaIntent(state)
+    ? mapaDeHuecosParaModelo(context.offers)
+    : null;
+  return [
     { role: "system", content: system },
     ...context.history,
-  ]);
-  if (!result.ok) throw new Error(`model_${result.error}`);
-  return result.data;
+    ...(offerMap ? [{ role: "system" as const, content: offerMap }] : []),
+  ];
 }
 
 function agendaIntent(state: ShadowAgentGraphState): boolean {
@@ -206,8 +222,12 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
         const loaded = await dependencies.loadContext({
           conversationId: state.conversationId,
           expectedOrganizationId: state.expectedOrganizationId,
+          expectedInboundMessageId: state.expectedInboundMessageId,
           now: dependencies.now(),
         });
+        if (loaded.failureReason) {
+          return blocked("load_context", loaded.failureReason);
+        }
         const context = loaded.context;
         if (!context) return blocked("load_context", "conversation_not_found");
         const loadedState = {

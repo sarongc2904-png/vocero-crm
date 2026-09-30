@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, gte, lt, ne } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { currentOffers, getOffers } from "@/server/agenda/offers";
@@ -12,6 +12,7 @@ import type { ShadowContext } from "@/server/ai/graph/state";
 export type ShadowContextInput = {
   conversationId: string;
   expectedOrganizationId: string;
+  expectedInboundMessageId: string;
   now: Date;
 };
 
@@ -20,6 +21,7 @@ export type LoadedShadowContext = {
   commercialAccess: boolean;
   agendaEnabled: boolean;
   whatsappWindowOpen: boolean;
+  failureReason?: "inbound_not_found" | "inbound_mismatch";
 };
 
 /**
@@ -53,7 +55,31 @@ export async function loadShadowContext(
   }
 
   const organizationId = conversation.organizationId;
-  const [commercialAccess, lastInboundRows] = await Promise.all([
+  const expectedInboundRows = await db
+    .select()
+    .from(schema.message)
+    .where(
+      scoped(
+        schema.message.organizationId,
+        organizationId,
+        eq(schema.message.conversationId, conversation.id),
+        eq(schema.message.id, input.expectedInboundMessageId),
+        eq(schema.message.direction, "in")
+      )
+    )
+    .limit(1);
+  const expectedInbound = expectedInboundRows[0];
+  if (!expectedInbound) {
+    return {
+      context: null,
+      commercialAccess: false,
+      agendaEnabled: agenda,
+      whatsappWindowOpen: false,
+      failureReason: "inbound_not_found",
+    };
+  }
+
+  const [commercialAccess, competingInboundRows] = await Promise.all([
     conversation.isTest
       ? Promise.resolve(true)
       : hasCommercialAccess(organizationId, input.now),
@@ -65,13 +91,23 @@ export async function loadShadowContext(
           schema.message.organizationId,
           organizationId,
           eq(schema.message.conversationId, conversation.id),
-          eq(schema.message.direction, "in")
+          eq(schema.message.direction, "in"),
+          gte(schema.message.createdAt, expectedInbound.createdAt),
+          ne(schema.message.id, expectedInbound.id)
         )
       )
       .orderBy(desc(schema.message.createdAt))
       .limit(1),
   ]);
-  const lastInbound = lastInboundRows[0] ?? null;
+  if (competingInboundRows.length > 0) {
+    return {
+      context: null,
+      commercialAccess,
+      agendaEnabled: agenda,
+      whatsappWindowOpen: false,
+      failureReason: "inbound_mismatch",
+    };
+  }
 
   // Replica el orden del pipeline productivo: salvo el inbound mínimo usado
   // para correlacionar el evento, un tenant sin entitlement no causa lecturas
@@ -83,8 +119,8 @@ export async function loadShadowContext(
         conversation,
         profile: null,
         history: [],
-        lastInboundMessageId: lastInbound?.id ?? null,
-        lastInboundText: lastInbound?.text ?? null,
+        lastInboundMessageId: expectedInbound.id,
+        lastInboundText: expectedInbound.text ?? null,
         lastOutboundText: null,
         lastOutboundAt: null,
         kb: [],
@@ -112,11 +148,12 @@ export async function loadShadowContext(
         scoped(
           schema.message.organizationId,
           organizationId,
-          eq(schema.message.conversationId, conversation.id)
+          eq(schema.message.conversationId, conversation.id),
+          lt(schema.message.createdAt, expectedInbound.createdAt)
         )
       )
       .orderBy(desc(schema.message.createdAt))
-      .limit(20),
+      .limit(19),
     db
       .select()
       .from(schema.kbEntry)
@@ -129,13 +166,14 @@ export async function loadShadowContext(
       .orderBy(asc(schema.pipelineStage.position)),
   ]);
 
+  historyRows.unshift(expectedInbound);
   historyRows.reverse();
   const lastOutbound = [...historyRows]
     .reverse()
     .find(
       (message) =>
         message.direction === "out" &&
-        (!lastInbound || message.createdAt < lastInbound.createdAt)
+        message.createdAt < expectedInbound.createdAt
     );
 
   const settings = agenda ? await getSettings(organizationId) : null;
@@ -163,8 +201,8 @@ export async function loadShadowContext(
           role: message.direction === "in" ? "user" : "assistant",
           content: message.text!,
         })),
-      lastInboundMessageId: lastInbound?.id ?? null,
-      lastInboundText: lastInbound?.text ?? null,
+      lastInboundMessageId: expectedInbound.id,
+      lastInboundText: expectedInbound.text ?? null,
       lastOutboundText: lastOutbound?.text ?? null,
       lastOutboundAt: lastOutbound?.createdAt ?? null,
       kb,

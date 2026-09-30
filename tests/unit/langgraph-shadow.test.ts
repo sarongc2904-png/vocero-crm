@@ -2,11 +2,16 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { DEFAULT_CALENDAR_SETTINGS } from "@/server/agenda/settings";
+import { CABECERA_HUECOS } from "@/server/agenda/offers";
 import {
+  buildShadowModelMessages,
   runShadowAgent,
   type ShadowGraphDependencies,
 } from "@/server/ai/graph/graph";
-import type { ShadowContext } from "@/server/ai/graph/state";
+import type {
+  ShadowAgentGraphState,
+  ShadowContext,
+} from "@/server/ai/graph/state";
 
 const NOW = new Date("2026-09-30T18:00:00.000Z");
 
@@ -136,6 +141,42 @@ describe("LangGraph shadow runtime", () => {
     }>();
   });
 
+  it("inyecta el mapa factual cuando el turno toca agenda", () => {
+    const offered = "2026-10-01T16:00:00.000Z";
+    const messages = buildShadowModelMessages({
+      context: context({
+        offers: [{ startUtc: offered, label: "jueves 1 a las 10:00" }],
+      }),
+      agendaEnabled: true,
+      inboundText: "Quiero consultar horarios para una cita",
+    } as ShadowAgentGraphState);
+
+    expect(messages.at(-1)).toMatchObject({
+      role: "system",
+      content: expect.stringContaining(CABECERA_HUECOS),
+    });
+    expect(messages.at(-1)?.content).toContain(offered);
+  });
+
+  it("no inyecta el mapa factual en un saludo sin agenda", () => {
+    const messages = buildShadowModelMessages({
+      context: context({
+        offers: [
+          {
+            startUtc: "2026-10-01T16:00:00.000Z",
+            label: "jueves 1 a las 10:00",
+          },
+        ],
+      }),
+      agendaEnabled: true,
+      inboundText: "Hola",
+    } as ShadowAgentGraphState);
+
+    expect(messages.some((message) => message.content.includes(CABECERA_HUECOS))).toBe(
+      false
+    );
+  });
+
   it("permanece desconectado de mutaciones y entregas productivas", () => {
     const graph = readFileSync(
       resolve(process.cwd(), "src/server/ai/graph/graph.ts"),
@@ -204,6 +245,17 @@ describe("LangGraph shadow runtime", () => {
     expect(result.blocked).toBe(true);
     expect(result.reason).toBe("conversation_not_found");
     expect(result.trace).toEqual(["load_context", "shadow_result"]);
+  });
+
+  it("falla cerrado si ocurre un error al construir el snapshot", async () => {
+    const deps = dependencies();
+    deps.loadContext = vi.fn().mockRejectedValue(new Error("snapshot_failed"));
+    const result = await run("Hola", deps);
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe("context_load_failed");
+    expect(result.wouldExecute).toBeNull();
+    expect(result.wouldReply).toBeNull();
   });
 
   it("bloquea tenant mismatch", async () => {
