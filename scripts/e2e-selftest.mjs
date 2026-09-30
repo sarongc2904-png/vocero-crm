@@ -13,6 +13,8 @@
  */
 
 const BASE = process.env.APP_BASE_URL ?? "http://localhost:3000";
+const RUN_SUFFIX = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const RUN_PHONE_TAIL = String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
 let botKey = "";
 
 let cookie = "";
@@ -792,7 +794,21 @@ async function main() {
   );
 
   console.log("\n== 008: paridad inbox — echoes de coexistence (US1) ==");
-  const LEAD = "5214627008001"; // canónica: 524627008001
+  const LEAD = `5214627${RUN_PHONE_TAIL}`;
+  const LEAD_CANONICAL = `524627${RUN_PHONE_TAIL}`;
+  const NEW_LEAD_PHONE_TAIL = String((Number(RUN_PHONE_TAIL) + 1) % 1_000_000).padStart(6, "0");
+  const NEW_LEAD = `5214627${NEW_LEAD_PHONE_TAIL}`;
+  const NEW_LEAD_CANONICAL = `524627${NEW_LEAD_PHONE_TAIL}`;
+  const inboundText = `hola, quiero informes [${RUN_SUFFIX}]`;
+  const manualText = `te contesto yo, dame un minuto [${RUN_SUFFIX}]`;
+  const secondManualText = `segundo mensaje manual [${RUN_SUFFIX}]`;
+  const newLeadText = `hola, te escribo del anuncio [${RUN_SUFFIX}]`;
+  const outgoingCaption = `mira nuestro local [${RUN_SUFFIX}]`;
+  const outgoingLocationName = `Oficina Central [${RUN_SUFFIX}]`;
+  const incomingCaption = `foto de mi negocio [${RUN_SUFFIX}]`;
+  const incomingLocationName = `Mi taller [${RUN_SUFFIX}]`;
+  const echoImageCaption = `así quedaría tu logo [${RUN_SUFFIX}]`;
+  const wamid008 = (label) => `wamid.e2e.008.${label}.${RUN_SUFFIX}`;
 
   // Un inbound primero: la conversación existe y la ventana queda abierta.
   await api("/api/dev/wa-mock/inbound", {
@@ -800,15 +816,15 @@ async function main() {
     body: JSON.stringify({
       phoneNumberId: PN,
       from: LEAD,
-      name: "Lead 008",
-      text: "hola, quiero informes",
-      waMessageId: "wamid.e2e.008.in.1",
+      name: `Lead 008 ${RUN_SUFFIX}`,
+      text: inboundText,
+      waMessageId: wamid008("in.1"),
     }),
   });
   await sleep(1200);
   const findConv008 = async () =>
     (((await api("/api/conversations")).json?.conversations) ?? []).find(
-      (c) => c.contact.phone === "524627008001"
+      (c) => c.contact.phone === LEAD_CANONICAL
     );
   let conv008 = await findConv008();
   ok("conversación del lead 008 creada", Boolean(conv008), "sin conversación");
@@ -820,15 +836,15 @@ async function main() {
     body: JSON.stringify({
       phoneNumberId: PN,
       to: LEAD,
-      text: "te contesto yo, dame un minuto",
-      waMessageId: "wamid.e2e.008.echo.1",
+      text: manualText,
+      waMessageId: wamid008("echo.1"),
     }),
   });
   ok("echo entregado al webhook", echo1.res.ok, JSON.stringify(echo1.json));
   await sleep(900);
 
   const msgs1 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
-  const manual1 = msgs1.find((m) => m.text === "te contesto yo, dame un minuto");
+  const manual1 = msgs1.find((m) => m.text === manualText);
   ok(
     "el mensaje manual aparece como saliente origin=manual",
     manual1?.direction === "out" && manual1?.origin === "manual" && manual1?.status === "sent",
@@ -853,15 +869,15 @@ async function main() {
     body: JSON.stringify({
       phoneNumberId: PN,
       to: LEAD,
-      text: "te contesto yo, dame un minuto",
-      waMessageId: "wamid.e2e.008.echo.1",
+      text: manualText,
+      waMessageId: wamid008("echo.1"),
     }),
   });
   await sleep(700);
   const msgs2 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
   ok(
     "echo duplicado (mismo wamid) no duplica el mensaje",
-    msgs2.filter((m) => m.text === "te contesto yo, dame un minuto").length === 1
+    msgs2.filter((m) => m.text === manualText).length === 1
   );
 
   // Variante defensiva: echoes bajo la clave `messages`.
@@ -870,8 +886,8 @@ async function main() {
     body: JSON.stringify({
       phoneNumberId: PN,
       to: LEAD,
-      text: "segundo mensaje manual",
-      waMessageId: "wamid.e2e.008.echo.2",
+      text: secondManualText,
+      waMessageId: wamid008("echo.2"),
       useMessagesKey: true,
     }),
   });
@@ -879,7 +895,7 @@ async function main() {
   const msgs3 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
   ok(
     "echo bajo la clave `messages` también se ingiere (parser tolerante)",
-    msgs3.some((m) => m.text === "segundo mensaje manual" && m.origin === "manual")
+    msgs3.some((m) => m.text === secondManualText && m.origin === "manual")
   );
 
   // Echo hacia un número SIN conversación previa → la crea.
@@ -887,14 +903,14 @@ async function main() {
     method: "POST",
     body: JSON.stringify({
       phoneNumberId: PN,
-      to: "5214627008002",
-      text: "hola, te escribo del anuncio",
-      waMessageId: "wamid.e2e.008.echo.3",
+      to: NEW_LEAD,
+      text: newLeadText,
+      waMessageId: wamid008("echo.3"),
     }),
   });
   await sleep(700);
   const convNew = (((await api("/api/conversations")).json?.conversations) ?? []).find(
-    (c) => c.contact.phone === "524627008002"
+    (c) => c.contact.phone === NEW_LEAD_CANONICAL
   );
   ok("echo a número nuevo crea contacto y conversación", Boolean(convNew));
 
@@ -915,9 +931,9 @@ async function main() {
   mediaForm.set(
     "file",
     new Blob([JPEG_BYTES], { type: "image/jpeg" }),
-    "local.jpg"
+    `local-${RUN_SUFFIX}.jpg`
   );
-  mediaForm.set("caption", "mira nuestro local");
+  mediaForm.set("caption", outgoingCaption);
   const upRes = await fetch(`${BASE}/api/conversations/${conv008.id}/messages/media`, {
     method: "POST",
     headers: { cookie, origin: BASE },
@@ -927,7 +943,7 @@ async function main() {
   ok("imagen con caption enviada (201)", upRes.status === 201, JSON.stringify(upJson));
 
   const msgs4 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
-  const sentImg = msgs4.find((m) => m.media?.caption === "mira nuestro local");
+  const sentImg = msgs4.find((m) => m.id === upJson?.messageId);
   ok(
     "el saliente con imagen trae asset disponible y origin=operator",
     sentImg?.type === "image" &&
@@ -947,7 +963,12 @@ async function main() {
   const outbox008 = (await api("/api/dev/wa-mock/outbox")).json?.outbox ?? [];
   ok(
     "el envío llegó a Graph como type=image con media id subido",
-    outbox008.some((o) => o.type === "image" && JSON.stringify(o.body).includes("media-up-"))
+    outbox008.some(
+      (o) =>
+        o.type === "image" &&
+        o.body?.image?.caption === outgoingCaption &&
+        String(o.body?.image?.id ?? "").startsWith("media-up-")
+    )
   );
 
   // Camino infeliz: archivo que excede el límite (imagen > 5 MB) → 413 previo.
@@ -955,7 +976,7 @@ async function main() {
   bigForm.set(
     "file",
     new Blob([Buffer.alloc(6 * 1024 * 1024)], { type: "image/png" }),
-    "grande.png"
+    `grande-${RUN_SUFFIX}.png`
   );
   const bigRes = await fetch(`${BASE}/api/conversations/${conv008.id}/messages/media`, {
     method: "POST",
@@ -969,12 +990,17 @@ async function main() {
     method: "POST",
     body: JSON.stringify({
       type: "location",
-      location: { latitude: 21.019, longitude: -101.257, name: "Oficina Central" },
+      location: { latitude: 21.019, longitude: -101.257, name: outgoingLocationName },
     }),
   });
   ok("ubicación enviada", locRes.res.ok, JSON.stringify(locRes.json));
   const msgs5 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
-  const sentLoc = msgs5.find((m) => m.type === "location" && m.direction === "out");
+  const sentLoc = msgs5.find(
+    (m) =>
+      m.type === "location" &&
+      m.direction === "out" &&
+      m.media?.payload?.name === outgoingLocationName
+  );
   ok(
     "la ubicación viaja como payload (lat/long/name) sin binario",
     sentLoc?.media?.kind === "location" && sentLoc?.media?.payload?.latitude === 21.019,
@@ -983,7 +1009,9 @@ async function main() {
   const outboxLoc = (await api("/api/dev/wa-mock/outbox")).json?.outbox ?? [];
   ok(
     "Graph recibió type=location",
-    outboxLoc.some((o) => o.type === "location")
+    outboxLoc.some(
+      (o) => o.type === "location" && o.body?.location?.name === outgoingLocationName
+    )
   );
 
   console.log("\n== 008: previews de adjuntos entrantes (US3) ==");
@@ -993,14 +1021,14 @@ async function main() {
       phoneNumberId: PN,
       from: LEAD,
       type: "image",
-      mediaId: "media-e2e-img-1",
-      caption: "foto de mi negocio",
-      waMessageId: "wamid.e2e.008.in.img",
+      mediaId: `media-e2e-img-${RUN_SUFFIX}`,
+      caption: incomingCaption,
+      waMessageId: wamid008("in.img"),
     }),
   });
   await sleep(1600); // ingesta + descarga in-process del binario
   const msgs6 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
-  const inImg = msgs6.find((m) => m.media?.caption === "foto de mi negocio");
+  const inImg = msgs6.find((m) => m.media?.caption === incomingCaption);
   ok(
     "imagen entrante queda disponible tras la descarga in-process",
     inImg?.direction === "in" &&
@@ -1020,34 +1048,42 @@ async function main() {
       phoneNumberId: PN,
       from: LEAD,
       type: "location",
-      location: { latitude: 20.5, longitude: -100.8, name: "Mi taller" },
-      waMessageId: "wamid.e2e.008.in.loc",
+      location: { latitude: 20.5, longitude: -100.8, name: incomingLocationName },
+      waMessageId: wamid008("in.loc"),
     }),
   });
   await sleep(900);
   const msgs7 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
-  const inLoc = msgs7.find((m) => m.type === "location" && m.direction === "in");
+  const inLoc = msgs7.find(
+    (m) =>
+      m.type === "location" &&
+      m.direction === "in" &&
+      m.media?.payload?.name === incomingLocationName
+  );
   ok(
     "ubicación entrante trae payload directo",
-    inLoc?.media?.payload?.name === "Mi taller",
+    inLoc?.media?.payload?.name === incomingLocationName,
     JSON.stringify(inLoc?.media)
   );
 
   // Camino infeliz: media cuya descarga falla (metadata sin url) → failed,
   // el mensaje se conserva y /api/media responde 410.
+  const messageIdsBeforeBroken = new Set(msgs7.map((m) => m.id));
   await api("/api/dev/wa-mock/inbound", {
     method: "POST",
     body: JSON.stringify({
       phoneNumberId: PN,
       from: LEAD,
       type: "image",
-      mediaId: "broken-no-url",
-      waMessageId: "wamid.e2e.008.in.broken",
+      mediaId: `broken-no-url-${RUN_SUFFIX}`,
+      waMessageId: wamid008("in.broken"),
     }),
   });
   await sleep(1600);
   const msgs8 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
-  const broken = msgs8.find((m) => m.id !== inImg?.id && m.media?.fetchStatus === "failed");
+  const broken = msgs8.find(
+    (m) => !messageIdsBeforeBroken.has(m.id) && m.media?.fetchStatus === "failed"
+  );
   ok(
     "descarga fallida degrada a failed sin perder el mensaje",
     Boolean(broken),
@@ -1067,14 +1103,14 @@ async function main() {
       phoneNumberId: PN,
       to: LEAD,
       type: "image",
-      mediaId: "media-e2e-echo-img",
-      caption: "así quedaría tu logo",
-      waMessageId: "wamid.e2e.008.echo.img",
+      mediaId: `media-e2e-echo-img-${RUN_SUFFIX}`,
+      caption: echoImageCaption,
+      waMessageId: wamid008("echo.img"),
     }),
   });
   await sleep(1600);
   const msgs9 = (await api(`/api/conversations/${conv008.id}/messages`)).json?.messages ?? [];
-  const echoImg = msgs9.find((m) => m.media?.caption === "así quedaría tu logo");
+  const echoImg = msgs9.find((m) => m.media?.caption === echoImageCaption);
   ok(
     "echo con imagen: manual + asset descargado y previsualizable",
     echoImg?.origin === "manual" && echoImg?.media?.fetchStatus === "available",

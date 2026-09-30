@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, getSql, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -74,7 +74,7 @@ export async function scheduleAutomation(input: {
       conversationId: input.conversationId,
       contactId: input.contactId ?? conversation.contactId,
       bookingId: input.bookingId ?? null,
-      dueAt: input.dueAt,
+      dueAt: sql`(${input.dueAt.toISOString()}::timestamptz AT TIME ZONE current_setting('TimeZone'))`,
       idempotencyKey: input.idempotencyKey,
       messageText: input.messageText ?? null,
       templateId: input.templateId ?? null,

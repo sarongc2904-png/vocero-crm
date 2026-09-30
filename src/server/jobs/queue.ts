@@ -186,14 +186,13 @@ export async function claimNextJob(
 
 export async function completeAgentJob(job: DurableJob): Promise<void> {
   const sql = getSql();
-  const claimedRequestAtExact = job.claimedRequestAt;
 
   // Si nadie pidió otro turno mientras este corría, la fila puede desaparecer.
   const deleted = await sql`
     delete from durable_job
     where id = ${job.id}
       and organization_id = ${job.organizationId}
-      and requested_at <= ${claimedRequestAtExact}
+      and requested_at <= claimed_request_at
     returning id
   `;
   if (deleted.length > 0) return;
