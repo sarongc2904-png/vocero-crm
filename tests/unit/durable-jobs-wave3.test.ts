@@ -114,13 +114,24 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     ).toBe(false);
   });
 
-  it("serializa instantes antes de cruzar el boundary postgres-js", () => {
+  it("mantiene instantes SQL exactos al cruzar el boundary postgres-js", () => {
     const queue = source("src/server/jobs/queue.ts");
-    expect(queue).toContain("const dueAtIso = dueAt.toISOString()");
-    expect(queue).toContain("if (typeof value === \"string\") return value");
+
     expect(queue).toContain(
-      "const claimedRequestAtExact = job.claimedRequestAt"
+      "now() + (${delay} * interval '1 millisecond')"
     );
+    expect(queue).toContain(
+      "now() + (${retryDelay} * interval '1 millisecond')"
+    );
+    expect(queue).toContain("if (typeof value === \"string\") return value");
+    expect(queue).toContain("requestedAt: exactSqlTimestamp(row.requested_at)");
+    expect(queue).toContain(
+      "claimedRequestAt: exactSqlTimestamp(row.claimed_request_at)"
+    );
+    expect(queue).toContain("requested_at <= claimed_request_at");
+    expect(queue).not.toContain("new Date(row.requested_at)");
+    expect(queue).not.toContain("new Date(row.claimed_request_at)");
+    expect(queue).not.toContain("const dueAtIso = dueAt.toISOString()");
     expect(queue).not.toContain("due_at = ${dueAt},");
     expect(queue).not.toContain("requested_at <= ${job.claimedRequestAt}");
   });
