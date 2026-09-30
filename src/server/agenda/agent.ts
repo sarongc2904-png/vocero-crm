@@ -439,12 +439,16 @@ export async function bookSlot(input: {
   organizationId: string;
   conversationId: string;
   startUtc: string;
+  serviceId?: string;
+  professionalId?: string;
 }): Promise<AgendaTurn> {
   try {
     const result = await createSessionBooking({
       organizationId: input.organizationId,
       conversationId: input.conversationId,
       startUtc: input.startUtc,
+      serviceId: input.serviceId,
+      professionalId: input.professionalId,
       source: "ai",
       requireOffer: true,
     });
