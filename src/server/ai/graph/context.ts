@@ -11,7 +11,7 @@ import type { ShadowContext } from "@/server/ai/graph/state";
 
 export type ShadowContextInput = {
   conversationId: string;
-  expectedOrganizationId?: string;
+  expectedOrganizationId: string;
   now: Date;
 };
 
@@ -23,8 +23,8 @@ export type LoadedShadowContext = {
 };
 
 /**
- * Snapshot de solo lectura. Cuando se recibe tenant esperado, la primera
- * consulta ya va scopeada: una organización nunca puede inspeccionar otra.
+ * Snapshot de solo lectura. La primera consulta siempre exige conversación y
+ * tenant: no existe una variante pública que consulte solo por id.
  */
 export async function loadShadowContext(
   input: ShadowContextInput
@@ -34,13 +34,11 @@ export async function loadShadowContext(
     .select()
     .from(schema.conversation)
     .where(
-      input.expectedOrganizationId
-        ? scoped(
-            schema.conversation.organizationId,
-            input.expectedOrganizationId,
-            eq(schema.conversation.id, input.conversationId)
-          )
-        : eq(schema.conversation.id, input.conversationId)
+      scoped(
+        schema.conversation.organizationId,
+        input.expectedOrganizationId,
+        eq(schema.conversation.id, input.conversationId)
+      )
     )
     .limit(1);
   const conversation = rows[0];
@@ -68,6 +66,7 @@ export async function loadShadowContext(
         conversation,
         profile: null,
         history: [],
+        lastInboundText: null,
         lastOutboundText: null,
         lastOutboundAt: null,
         kb: [],
@@ -149,6 +148,7 @@ export async function loadShadowContext(
           role: message.direction === "in" ? "user" : "assistant",
           content: message.text!,
         })),
+      lastInboundText: lastInbound?.text ?? null,
       lastOutboundText: lastOutbound?.text ?? null,
       lastOutboundAt: lastOutbound?.createdAt ?? null,
       kb,

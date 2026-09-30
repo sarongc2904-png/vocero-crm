@@ -15,6 +15,7 @@ import { enforceAgentCapabilities } from "@/server/ai/capability-guard";
 import { matchesHandoffIntent } from "@/server/ai/handoff";
 import { buildAgentSystemPrompt } from "@/server/ai/prompts";
 import { matchesCancellationIntent } from "@/server/agenda/cancel-intent";
+import { findOffered } from "@/server/agenda/offers";
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 import {
   factualHoursReply,
@@ -46,8 +47,7 @@ const COMMERCIAL_SIGNAL =
 
 export type ShadowAgentInput = {
   conversationId: string;
-  expectedOrganizationId?: string;
-  inboundText: string;
+  expectedOrganizationId: string;
 };
 
 export type ShadowGraphDependencies = {
@@ -119,6 +119,30 @@ function agendaIntent(state: ShadowAgentGraphState): boolean {
   );
 }
 
+function sanitizeActionTexts(
+  action: AgentActionType,
+  agenda: boolean
+): AgentActionType {
+  const safe = (text: string) => enforceAgentCapabilities({ text, agenda });
+  switch (action.action) {
+    case "reply":
+      return { ...action, text: safe(action.text) };
+    case "update_lead":
+    case "move_stage":
+      return action.reply ? { ...action, reply: safe(action.reply) } : action;
+    case "handoff":
+      return action.farewell
+        ? { ...action, farewell: safe(action.farewell) }
+        : action;
+    case "offer_slots":
+    case "book_slot":
+    case "reschedule_slot":
+      return action.reply ? { ...action, reply: safe(action.reply) } : action;
+    default:
+      return action;
+  }
+}
+
 function routeIntent(state: ShadowAgentGraphState): ShadowIntent {
   if (matchesHandoffIntent(state.inboundText)) return "handoff";
   if (matchesCancellationIntent(state.inboundText)) return "cancel";
@@ -137,12 +161,14 @@ function executionFor(state: ShadowAgentGraphState): string | null {
     return state.pendingActionConfirmed ? "cancel_booking" : "set_pending_cancel";
   }
   if (action.action === "book_slot") {
-    return state.pendingActionConfirmed ? "book_slot" : "set_pending_book";
+    return state.pendingActionConfirmed
+      ? "book_slot"
+      : "revalidate_then_set_pending_book";
   }
   if (action.action === "reschedule_slot") {
     return state.pendingActionConfirmed
       ? "reschedule_slot"
-      : "set_pending_reschedule";
+      : "revalidate_then_set_pending_reschedule";
   }
   return actionName(action);
 }
@@ -167,13 +193,14 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
       try {
         const loaded = await dependencies.loadContext({
           conversationId: state.conversationId,
-          expectedOrganizationId: state.expectedOrganizationId ?? undefined,
+          expectedOrganizationId: state.expectedOrganizationId,
           now: dependencies.now(),
         });
         const context = loaded.context;
         if (!context) return blocked("load_context", "conversation_not_found");
         return {
           context,
+          inboundText: context.lastInboundText ?? "",
           organizationId: context.conversation.organizationId,
           isTest: context.conversation.isTest,
           aiEnabled: context.conversation.aiEnabled,
@@ -195,7 +222,6 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
     })
     .addNode("commercial_guard", (state) => {
       if (
-        state.expectedOrganizationId &&
         state.organizationId !== state.expectedOrganizationId
       ) {
         return blocked("commercial_guard", "tenant_mismatch");
@@ -231,6 +257,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
           intent: "cancel" as const,
           proposedAction: { action: "cancel_booking" },
           pendingActionConfirmed: true,
+          actionSource: "pending" as const,
           trace: ["pending_action_router"],
         };
       }
@@ -244,6 +271,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
           startUtc: pending.startUtc,
         },
         pendingActionConfirmed: true,
+        actionSource: "pending" as const,
         trace: ["pending_action_router"],
       };
     })
@@ -258,10 +286,12 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
         farewell:
           "Claro. Voy a pasar tu conversación a un asesor. La IA quedaría en pausa mientras te atienden.",
       },
+      actionSource: "deterministic" as const,
       trace: ["handoff_decision"],
     }))
     .addNode("cancel_decision", () => ({
       proposedAction: { action: "cancel_booking" },
+      actionSource: "deterministic" as const,
       reply:
         "Antes de cancelar necesitaría tu confirmación. Responde «sí» para continuar.",
       trace: ["cancel_decision"],
@@ -288,10 +318,11 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
               action: "book_slot",
               startUtc: resolution.offer.startUtc,
             },
-            reply: `Perfecto. Tengo ${selectedOfferConfirmationLabel(
+            reply: `Reconocí ${selectedOfferConfirmationLabel(
               resolution.offer.startUtc,
               settings.timezone
-            )} disponible. ¿Quieres que agende tu cita?`,
+            )} como una opción previamente ofrecida. Antes de reservar, el backend tendría que revalidar que siga disponible. ¿Quieres continuar?`,
+            actionSource: "deterministic" as const,
             trace: ["scheduling_decision"],
           };
         }
@@ -306,6 +337,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
               action: "reply",
               text: `Encontré más de una opción: ${choices}. ¿Cuál quieres elegir?`,
             },
+            actionSource: "deterministic" as const,
             trace: ["scheduling_decision"],
           };
         }
@@ -316,6 +348,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
               reply:
                 "No encontré esa hora entre las opciones mostradas. Consultaría opciones actuales.",
             },
+            actionSource: "deterministic" as const,
             trace: ["scheduling_decision"],
           };
         }
@@ -337,6 +370,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
               action: "reply",
               text: factualHoursReply(scheduleIntent),
             },
+            actionSource: "deterministic" as const,
             trace: ["scheduling_decision"],
           };
         }
@@ -344,6 +378,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
 
       return {
         proposedAction: { action: "offer_slots" },
+        actionSource: "deterministic" as const,
         trace: ["scheduling_decision"],
       };
     })
@@ -351,6 +386,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
       try {
         return {
           proposedAction: await dependencies.proposeAction(state, "commercial"),
+          actionSource: "model" as const,
           trace: ["commercial_decision"],
         };
       } catch (error) {
@@ -365,6 +401,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
       try {
         return {
           proposedAction: await dependencies.proposeAction(state, "general"),
+          actionSource: "model" as const,
           trace: ["general_decision"],
         };
       } catch (error) {
@@ -380,8 +417,16 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
       // capacidades reales del tenant y degrada agenda cuando está apagada.
       const parsed = agentActionSchema(true).safeParse(state.proposedAction);
       if (!parsed.success) return blocked("validate_action", "action_invalid");
+      const action = parsed.data as AgentActionType;
+      if (
+        state.actionSource === "model" &&
+        (action.action === "book_slot" || action.action === "reschedule_slot") &&
+        !findOffered(state.context?.offers ?? [], action.startUtc)
+      ) {
+        return blocked("validate_action", "slot_not_offered");
+      }
       return {
-        validatedAction: parsed.data as AgentActionType,
+        validatedAction: action,
         trace: ["validate_action"],
       };
     })
@@ -397,7 +442,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
       ) {
         return {
           ...blocked("capability_guard", "agenda_disabled"),
-          validatedAction: degradeAction(action),
+          validatedAction: sanitizeActionTexts(degradeAction(action), false),
         };
       }
       if (action.action === "move_stage") {
@@ -405,23 +450,23 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
         if (!stage) {
           return {
             ...blocked("capability_guard", "invalid_stage"),
-            validatedAction: degradeAction(action),
+            validatedAction: sanitizeActionTexts(
+              degradeAction(action),
+              state.agendaEnabled
+            ),
           };
         }
       }
-      if (action.action === "reply") {
-        return {
-          validatedAction: {
-            action: "reply",
-            text: enforceAgentCapabilities({
-              text: action.text,
+      return {
+        validatedAction: sanitizeActionTexts(action, state.agendaEnabled),
+        reply: state.reply
+          ? enforceAgentCapabilities({
+              text: state.reply,
               agenda: state.agendaEnabled,
-            }),
-          },
-          trace: ["capability_guard"],
-        };
-      }
-      return { trace: ["capability_guard"] };
+            })
+          : state.reply,
+        trace: ["capability_guard"],
+      };
     })
     .addNode("shadow_result", (state) => {
       const trace = [...state.trace, "shadow_result"];
@@ -492,9 +537,10 @@ export async function runShadowAgent(
 ): Promise<ShadowDecision> {
   const result = await createShadowAgentGraph(options).invoke({
     conversationId: input.conversationId,
-    expectedOrganizationId: input.expectedOrganizationId ?? null,
+    expectedOrganizationId: input.expectedOrganizationId,
     organizationId: null,
-    inboundText: input.inboundText,
+    // load_context lo reemplaza con el último inbound persistido.
+    inboundText: "",
     isTest: false,
     aiEnabled: false,
     commercialAccess: false,
@@ -513,6 +559,7 @@ export async function runShadowAgent(
     shadowDecision: null,
     context: null,
     pendingActionConfirmed: false,
+    actionSource: null,
     trace: [],
   });
   if (!result.shadowDecision) {

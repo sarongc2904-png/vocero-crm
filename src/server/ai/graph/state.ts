@@ -51,6 +51,7 @@ export type ShadowContext = {
   conversation: ShadowConversation;
   profile: ShadowAgentProfile | null;
   history: ChatMessage[];
+  lastInboundText: string | null;
   lastOutboundText: string | null;
   lastOutboundAt: Date | null;
   kb: ShadowKbEntry[];
@@ -75,7 +76,7 @@ export type ShadowDecision = {
 
 export const ShadowAgentState = Annotation.Root({
   conversationId: Annotation<string>,
-  expectedOrganizationId: Annotation<string | null>,
+  expectedOrganizationId: Annotation<string>,
   organizationId: Annotation<string | null>,
   inboundText: Annotation<string>,
   isTest: Annotation<boolean>,
@@ -96,6 +97,7 @@ export const ShadowAgentState = Annotation.Root({
   shadowDecision: Annotation<ShadowDecision | null>,
   context: Annotation<ShadowContext | null>,
   pendingActionConfirmed: Annotation<boolean>,
+  actionSource: Annotation<"model" | "deterministic" | "pending" | null>,
   trace: Annotation<string[], string[]>({
     reducer: (current, update) => current.concat(update),
     default: () => [],

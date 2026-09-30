@@ -38,6 +38,7 @@ function context(
       updatedAt: NOW,
     },
     history: [{ role: "user", content: "Hola" }],
+    lastInboundText: "Hola",
     lastOutboundText: null,
     lastOutboundAt: null,
     kb: [],
@@ -77,9 +78,27 @@ async function run(
   deps: ShadowGraphDependencies,
   expectedOrganizationId = "org_a"
 ) {
+  const loadContext = deps.loadContext;
   return runShadowAgent(
-    { conversationId: "conv_1", expectedOrganizationId, inboundText },
-    { dependencies: deps }
+    { conversationId: "conv_1", expectedOrganizationId },
+    {
+      dependencies: {
+        ...deps,
+        loadContext: async (input) => {
+          const loaded = await loadContext(input);
+          return loaded.context
+            ? {
+                ...loaded,
+                context: {
+                  ...loaded.context,
+                  lastInboundText: inboundText,
+                  history: [{ role: "user", content: inboundText }],
+                },
+              }
+            : loaded;
+        },
+      },
+    }
   );
 }
 
@@ -93,6 +112,8 @@ describe("LangGraph shadow runtime", () => {
     expect(graph).not.toContain("runAgentTurn");
     expect(graph).not.toContain("sendText");
     expect(graph).not.toContain("bookSlot");
+    expect(graph).not.toContain("rescheduleSlot");
+    expect(graph).not.toContain("cancelBooking");
     expect(graph).not.toContain("setPendingAction");
     expect(graph).not.toContain("applyHandoff");
   });
@@ -228,6 +249,84 @@ describe("LangGraph shadow runtime", () => {
     expect(result.wouldExecute).toBeNull();
   });
 
+  it("falla cerrado cuando el modelo rechaza la decisión", async () => {
+    const deps = dependencies();
+    deps.proposeAction = vi.fn().mockRejectedValue(new Error("provider_down"));
+
+    const result = await run("Hola", deps);
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe("decision_failed");
+    expect(result.wouldExecute).toBeNull();
+  });
+
+  it.each(["book_slot", "reschedule_slot"] as const)(
+    "bloquea %s inventado por el modelo",
+    async (action) => {
+      const result = await run(
+        "Hola",
+        dependencies({
+          proposedAction: {
+            action,
+            startUtc: "2026-10-02T16:00:00.000Z",
+          },
+        })
+      );
+
+      expect(result.blocked).toBe(true);
+      expect(result.reason).toBe("slot_not_offered");
+      expect(result.validatedAction).toEqual({ action: "none" });
+      expect(result.wouldExecute).toBeNull();
+    }
+  );
+
+  it("permite continuar en shadow cuando el modelo usa una oferta exacta", async () => {
+    const offered = "2026-10-01T16:00:00.000Z";
+    const result = await run(
+      "Hola",
+      dependencies({
+        context: context({
+          offers: [{ startUtc: offered, label: "jueves 1 a las 10:00" }],
+        }),
+        proposedAction: { action: "book_slot", startUtc: offered },
+      })
+    );
+
+    expect(result.blocked).toBe(false);
+    expect(result.validatedAction).toMatchObject({
+      action: "book_slot",
+      startUtc: offered,
+    });
+    expect(result.wouldExecute).toBe("revalidate_then_set_pending_book");
+  });
+
+  it("distingue una oferta histórica de disponibilidad actual", async () => {
+    const offered = "2026-09-30T19:20:00.000Z";
+    const result = await run(
+      "2:20",
+      dependencies({
+        context: context({
+          settings: {
+            ...DEFAULT_CALENDAR_SETTINGS,
+            timezone: "America/Matamoros",
+          },
+          offers: [{ startUtc: offered, label: "mié 30 sep, 14:20" }],
+          lastOutboundText: [
+            "Mañana miércoles, 30 de septiembre",
+            "• 14:20",
+          ].join("\n"),
+          lastOutboundAt: new Date("2026-09-30T02:10:19.000Z"),
+        }),
+      })
+    );
+
+    expect(result.blocked).toBe(false);
+    expect(result.wouldExecute).toBe("revalidate_then_set_pending_book");
+    expect(result.wouldReply).toContain("opción previamente ofrecida");
+    expect(result.wouldReply).toContain("revalidar");
+    expect(result.wouldReply).not.toMatch(/^Perfecto\. Tengo .* disponible/);
+  });
+
   it("bloquea capacidades de agenda cuando están deshabilitadas", async () => {
     const result = await run(
       "Quiero agendar una cita",
@@ -239,6 +338,51 @@ describe("LangGraph shadow runtime", () => {
     expect(result.reason).toBe("agenda_disabled");
     expect(result.validatedAction).toEqual({ action: "none" });
   });
+
+  it.each([
+    { action: "reply", text: "Te agendo una cita" },
+    { action: "update_lead", note: "interés", reply: "Te agendo una cita" },
+    { action: "move_stage", stage: "Nuevo", reply: "Te agendo una cita" },
+    { action: "handoff", farewell: "Te agendo una cita" },
+    { action: "offer_slots", reply: "Te agendo una cita" },
+  ])("protege todos los textos de salida: $action", async (proposedAction) => {
+    const result = await run(
+      "Hola",
+      dependencies({ agendaEnabled: false, proposedAction })
+    );
+    const action = result.validatedAction as Record<string, unknown>;
+    const text = action.text ?? action.reply ?? action.farewell;
+
+    expect(text).toContain("no puedo agendar citas");
+  });
+
+  it.each(["book_slot", "reschedule_slot"] as const)(
+    "protege el texto de salida de %s",
+    async (action) => {
+      const offered = "2026-10-01T16:00:00.000Z";
+      const result = await run(
+        "Hola",
+        dependencies({
+          agendaEnabled: false,
+          context: context({
+            offers: [{ startUtc: offered, label: "jueves 1 a las 10:00" }],
+          }),
+          proposedAction: {
+            action,
+            startUtc: offered,
+            reply: "Te agendo una cita",
+          },
+        })
+      );
+
+      expect(result.blocked).toBe(true);
+      expect(result.reason).toBe("agenda_disabled");
+      expect(result.validatedAction).toMatchObject({
+        action: "reply",
+        text: expect.stringContaining("no puedo agendar citas"),
+      });
+    }
+  );
 
   it("simula una confirmación pendiente sin ejecutar la reserva", async () => {
     const result = await run(
@@ -264,7 +408,7 @@ describe("LangGraph shadow runtime", () => {
   });
 
   it("mantiene aislamiento entre organizaciones", async () => {
-    const loadContext = vi.fn(async (input: { expectedOrganizationId?: string }) => ({
+    const loadContext = vi.fn(async (input: { expectedOrganizationId: string }) => ({
       context: context({}, input.expectedOrganizationId),
       commercialAccess: true,
       agendaEnabled: true,
