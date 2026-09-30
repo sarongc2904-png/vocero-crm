@@ -25,8 +25,13 @@ export default async function OnboardingPage() {
             {onboarding.requiredCompleted} de {onboarding.requiredTotal} pasos esenciales completos · Plan {subscription.plan.name} por {new Intl.NumberFormat("es-MX", { style: "currency", currency: subscription.plan.currency, maximumFractionDigits: 0 }).format(subscription.plan.monthlyPriceCents / 100)} al mes.
           </p>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-secondary">
-          <div className="h-full bg-brand" style={{ width: `${Math.round((onboarding.requiredCompleted / onboarding.requiredTotal) * 100)}%` }} />
+        <div className="space-y-1">
+          <div className="h-2 overflow-hidden rounded-full bg-secondary">
+            <div className="h-full bg-brand" style={{ width: `${Math.round((onboarding.requiredCompleted / onboarding.requiredTotal) * 100)}%` }} />
+          </div>
+          <p className="text-xs text-text-3">
+            {onboarding.requiredCompleted} de {onboarding.requiredTotal} pasos esenciales completos
+          </p>
         </div>
 
         {onboarding.nextStep ? (
@@ -34,13 +39,13 @@ export default async function OnboardingPage() {
             <p className="kicker text-brand-text">Siguiente paso</p>
             <h2 className="mt-1 text-lg font-bold">{onboarding.nextStep.label}</h2>
             <p className="mt-1 text-sm text-text-2">
-              Solo necesitas terminar este paso para seguir avanzando.
+              Debes completar este paso para activar tu CRM.
             </p>
             <Link
               href={onboarding.nextStep.href}
-              className="mt-3 inline-flex items-center justify-center rounded-full bg-brand px-4 py-2 text-sm font-semibold text-brand-fg"
+              className="mt-3 inline-flex items-center justify-center rounded-full bg-brand px-4 py-2 text-sm font-semibold text-brand-fg hover:bg-brand-hover"
             >
-              Continuar configuración
+              Continuar
             </Link>
           </section>
         ) : onboarding.readyToActivate &&
@@ -74,11 +79,19 @@ export default async function OnboardingPage() {
               <span className={`flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold ${step.complete ? "bg-brand text-brand-fg" : "bg-secondary text-text-2"}`}>
                 {step.complete ? "✓" : index + 1}
               </span>
-              <span className="flex-1 text-sm font-semibold">
-                {step.label}{step.optional ? " (opcional)" : ""}
-              </span>
-              <Link className="text-sm font-semibold text-brand-text hover:underline" href={step.href}>
-                {step.complete ? "Revisar" : step.optional ? "Opcional" : "Continuar"}
+              <div className="flex-1">
+                <span className="text-sm font-semibold">
+                  {step.label}
+                </span>
+                {step.optional && (
+                  <span className="ml-2 text-xs text-text-3">(Opcional)</span>
+                )}
+              </div>
+              <Link
+                className="text-sm font-semibold text-brand-text hover:underline"
+                href={step.href}
+              >
+                {step.complete ? "Revisar" : "Continuar"}
               </Link>
             </li>
           ))}
