@@ -47,6 +47,6 @@ describe("bandeja orientada a atención", () => {
     const login = source("src/app/(auth)/login/page.tsx");
 
     expect(home).toContain('redirect("/inbox")');
-    expect(login).toContain('router.push("/inbox")');
+    expect(login).toContain('router.push("/")');
   });
 });

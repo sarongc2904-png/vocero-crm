@@ -35,7 +35,7 @@ export default function RegisterPage() {
       }
       return;
     }
-    router.push("/inbox");
+    router.push("/");
     router.refresh();
   }
 

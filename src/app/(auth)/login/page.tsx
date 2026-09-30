@@ -32,7 +32,7 @@ export default function LoginPage() {
       );
       return;
     }
-    router.push("/inbox");
+    router.push("/");
     router.refresh();
   }
 
