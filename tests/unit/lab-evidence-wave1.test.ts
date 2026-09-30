@@ -127,6 +127,73 @@ describe("Wave 1 - evidencia anclada del juez", () => {
     }
   });
 
+  it("descarta alucinacion cuando el mensaje afirma un handoff que el action_trace confirma", () => {
+    const transcriptWithHandoff = [
+      { role: "cliente" as const, text: "Quiero contratar." },
+      {
+        role: "agente" as const,
+        text: "Voy a pasar tu solicitud a un asesor para continuar.",
+      },
+    ];
+    const handoffTrace: AgentActionTrace = [
+      {
+        turn: 1,
+        customerMessage: "Quiero contratar.",
+        agentMessages: ["Voy a pasar tu solicitud a un asesor para continuar."],
+        observedActions: ["reply", "handoff"],
+        result: {
+          handoffReason: "modelo",
+          contactNotesChanged: false,
+          stageChanged: null,
+          bookingCreated: false,
+        },
+      },
+    ];
+
+    const result = validateAndAnchorVerdict({
+      verdict: verdict({
+        tipo: "alucinacion",
+        severity: "grave",
+        evidenceRefs: [{ source: "agent_message", index: 0 }],
+      }),
+      transcript: transcriptWithHandoff,
+      actionTrace: handoffTrace,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.verdict.veredicto).toBe("verde");
+      expect(result.verdict.hallazgos).toEqual([]);
+    }
+  });
+
+  it("conserva alucinacion si el agente afirma handoff pero el action_trace no lo confirma", () => {
+    const transcriptWithoutHandoff = [
+      { role: "cliente" as const, text: "Quiero contratar." },
+      {
+        role: "agente" as const,
+        text: "Voy a pasar tu solicitud a un asesor para continuar.",
+      },
+    ];
+
+    const result = validateAndAnchorVerdict({
+      verdict: verdict({
+        tipo: "alucinacion",
+        severity: "grave",
+        evidenceRefs: [{ source: "agent_message", index: 0 }],
+      }),
+      transcript: transcriptWithoutHandoff,
+      actionTrace: [],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.verdict.veredicto).toBe("rojo");
+      expect(result.verdict.hallazgos).toHaveLength(1);
+      expect(result.verdict.hallazgos[0]!.tipo).toBe("alucinacion");
+    }
+  });
+
   it("descarta fuera_de_kb cuando la evidencia es una abstención segura", () => {
     const abstentionTranscript = [
       { role: "cliente" as const, text: "¿Cuánto cuesta?" },
