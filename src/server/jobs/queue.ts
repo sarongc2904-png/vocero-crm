@@ -48,12 +48,6 @@ export async function enqueueAgentTurn(
   if (!rows[0]) return;
 
   const delay = Math.max(0, getEnv().AGENT_COALESCE_MS);
-  const dueAt = new Date(Date.now() + delay);
-  // El cliente postgres puede vivir en otro realm del bundle de Next. Pasar
-  // el Date crudo hace que su `instanceof Date` no siempre lo reconozca y
-  // termine intentando medirlo como string. ISO conserva exactamente el
-  // instante y PostgreSQL lo castea a timestamp de forma determinista.
-  const dueAtIso = dueAt.toISOString();
   const sql = getSql();
 
   await sql`
@@ -63,7 +57,7 @@ export async function enqueueAgentTurn(
     )
     values (
       ${newId("backgroundJob")}, 'agent_turn', ${organizationId}, ${conversationId},
-      now(), ${dueAtIso}, now(), now()
+      now(), now() + (${delay} * interval '1 millisecond'), now(), now()
     )
     on conflict (conversation_id) do update
       set organization_id = excluded.organization_id,
@@ -241,8 +235,7 @@ export async function releaseFailedJob(
   options: { permanent?: boolean } = {}
 ): Promise<"retry" | "dead_letter"> {
   const sql = getSql();
-  const dueAt = new Date(Date.now() + retryDelayMs(job.attempts));
-  const dueAtIso = dueAt.toISOString();
+  const retryDelay = retryDelayMs(job.attempts);
   const detail = String(error).slice(0, 2000);
   if (options.permanent || shouldDeadLetter(job.attempts)) {
     await sql`
@@ -261,7 +254,7 @@ export async function releaseFailedJob(
     update durable_job
     set lease_until = null,
         claimed_request_at = null,
-        due_at = ${dueAtIso},
+        due_at = now() + (${retryDelay} * interval '1 millisecond'),
         last_error = ${detail},
         updated_at = now()
     where id = ${job.id}
