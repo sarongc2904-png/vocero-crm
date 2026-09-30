@@ -53,12 +53,29 @@ export async function loadShadowContext(
   }
 
   const organizationId = conversation.organizationId;
-  const commercialAccess =
-    conversation.isTest ||
-    (await hasCommercialAccess(organizationId, input.now));
+  const [commercialAccess, lastInboundRows] = await Promise.all([
+    conversation.isTest
+      ? Promise.resolve(true)
+      : hasCommercialAccess(organizationId, input.now),
+    db
+      .select()
+      .from(schema.message)
+      .where(
+        scoped(
+          schema.message.organizationId,
+          organizationId,
+          eq(schema.message.conversationId, conversation.id),
+          eq(schema.message.direction, "in")
+        )
+      )
+      .orderBy(desc(schema.message.createdAt))
+      .limit(1),
+  ]);
+  const lastInbound = lastInboundRows[0] ?? null;
 
-  // Replica el orden del pipeline productivo: un tenant sin entitlement no
-  // causa lecturas adicionales de perfil, historial, KB ni agenda.
+  // Replica el orden del pipeline productivo: salvo el inbound mínimo usado
+  // para correlacionar el evento, un tenant sin entitlement no causa lecturas
+  // adicionales de perfil, historial, KB ni agenda.
   if (!commercialAccess) {
     return {
       context: {
@@ -66,7 +83,8 @@ export async function loadShadowContext(
         conversation,
         profile: null,
         history: [],
-        lastInboundText: null,
+        lastInboundMessageId: lastInbound?.id ?? null,
+        lastInboundText: lastInbound?.text ?? null,
         lastOutboundText: null,
         lastOutboundAt: null,
         kb: [],
@@ -112,9 +130,6 @@ export async function loadShadowContext(
   ]);
 
   historyRows.reverse();
-  const lastInbound = [...historyRows]
-    .reverse()
-    .find((message) => message.direction === "in");
   const lastOutbound = [...historyRows]
     .reverse()
     .find(
@@ -148,6 +163,7 @@ export async function loadShadowContext(
           role: message.direction === "in" ? "user" : "assistant",
           content: message.text!,
         })),
+      lastInboundMessageId: lastInbound?.id ?? null,
       lastInboundText: lastInbound?.text ?? null,
       lastOutboundText: lastOutbound?.text ?? null,
       lastOutboundAt: lastOutbound?.createdAt ?? null,

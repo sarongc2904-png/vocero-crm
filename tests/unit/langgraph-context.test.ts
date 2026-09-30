@@ -20,8 +20,10 @@ const tables = vi.hoisted(() => ({
   },
   message: {
     table: "message",
+    id: Symbol("message.id"),
     organizationId: Symbol("message.organizationId"),
     conversationId: Symbol("message.conversationId"),
+    direction: Symbol("message.direction"),
     createdAt: Symbol("message.createdAt"),
   },
   kbEntry: {
@@ -87,6 +89,7 @@ function rowsFor(table: { table: string }, predicate: Predicate) {
   if (table === tables.message) {
     return [
       {
+        id: "msg_in_1",
         direction: "in",
         text: "mensaje persistido",
         createdAt: new Date("2026-09-30T17:55:00.000Z"),
@@ -163,12 +166,21 @@ describe("loadShadowContext tenant scope", () => {
     });
 
     expect(result.context?.conversation.organizationId).toBe("org_a");
+    expect(result.context?.lastInboundMessageId).toBe("msg_in_1");
     expect(result.context?.lastInboundText).toBe("mensaje persistido");
     expect(h.predicates[0]).toMatchObject({
       kind: "scoped",
       organizationId: "org_a",
     });
     expect(eqValue(h.predicates[0]!, tables.conversation.id)).toBe("conv_1");
+    expect(h.predicates[1]).toMatchObject({
+      kind: "scoped",
+      organizationId: "org_a",
+    });
+    expect(eqValue(h.predicates[1]!, tables.message.conversationId)).toBe(
+      "conv_1"
+    );
+    expect(eqValue(h.predicates[1]!, tables.message.direction)).toBe("in");
   });
 
   it("no carga la misma conversación desde otro tenant", async () => {

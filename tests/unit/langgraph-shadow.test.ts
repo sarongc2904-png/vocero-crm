@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { DEFAULT_CALENDAR_SETTINGS } from "@/server/agenda/settings";
 import {
   runShadowAgent,
@@ -38,6 +38,7 @@ function context(
       updatedAt: NOW,
     },
     history: [{ role: "user", content: "Hola" }],
+    lastInboundMessageId: "msg_in_1",
     lastInboundText: "Hola",
     lastOutboundText: null,
     lastOutboundAt: null,
@@ -56,6 +57,8 @@ function dependencies(input?: {
   agendaEnabled?: boolean;
   whatsappWindowOpen?: boolean;
   proposedAction?: unknown;
+  findSlot?: ShadowGraphDependencies["findSlot"];
+  findProfessionalSlot?: ShadowGraphDependencies["findProfessionalSlot"];
 }): ShadowGraphDependencies {
   return {
     now: () => NOW,
@@ -70,17 +73,37 @@ function dependencies(input?: {
         ? { action: "reply", text: "Respuesta segura" }
         : input.proposedAction
     ),
+    findSlot:
+      input?.findSlot ??
+      vi.fn(async (_organizationId, startUtc) => ({
+        startUtc,
+        endUtc: startUtc,
+        label: "disponible",
+      })),
+    findProfessionalSlot:
+      input?.findProfessionalSlot ??
+      vi.fn(async (_organizationId, slot) => ({
+        startUtc: slot.startUtc,
+        endUtc: slot.startUtc,
+        label: "disponible",
+      })),
   };
 }
 
 async function run(
   inboundText: string,
   deps: ShadowGraphDependencies,
-  expectedOrganizationId = "org_a"
+  expectedOrganizationId = "org_a",
+  expectedInboundMessageId = "msg_in_1",
+  persistedInboundMessageId: string | null = "msg_in_1"
 ) {
   const loadContext = deps.loadContext;
   return runShadowAgent(
-    { conversationId: "conv_1", expectedOrganizationId },
+    {
+      conversationId: "conv_1",
+      expectedOrganizationId,
+      expectedInboundMessageId,
+    },
     {
       dependencies: {
         ...deps,
@@ -91,6 +114,7 @@ async function run(
                 ...loaded,
                 context: {
                   ...loaded.context,
+                  lastInboundMessageId: persistedInboundMessageId,
                   lastInboundText: inboundText,
                   history: [{ role: "user", content: inboundText }],
                 },
@@ -103,6 +127,15 @@ async function run(
 }
 
 describe("LangGraph shadow runtime", () => {
+  it("exige expectedInboundMessageId en el contrato público", () => {
+    type Input = Parameters<typeof runShadowAgent>[0];
+    expectTypeOf<Input>().toMatchTypeOf<{
+      conversationId: string;
+      expectedOrganizationId: string;
+      expectedInboundMessageId: string;
+    }>();
+  });
+
   it("permanece desconectado de mutaciones y entregas productivas", () => {
     const graph = readFileSync(
       resolve(process.cwd(), "src/server/ai/graph/graph.ts"),
@@ -110,12 +143,59 @@ describe("LangGraph shadow runtime", () => {
     );
 
     expect(graph).not.toContain("runAgentTurn");
+    expect(graph).not.toContain("publish");
     expect(graph).not.toContain("sendText");
     expect(graph).not.toContain("bookSlot");
     expect(graph).not.toContain("rescheduleSlot");
     expect(graph).not.toContain("cancelBooking");
     expect(graph).not.toContain("setPendingAction");
     expect(graph).not.toContain("applyHandoff");
+    expect(graph).not.toContain("createSessionBooking");
+    expect(graph).not.toContain("rescheduleForConversation");
+    expect(graph).not.toContain("cancelBookingForConversation");
+    expect(graph).not.toContain("replaceOffers");
+    expect(graph).not.toContain("clearPendingAction");
+    expect(graph).not.toContain(".insert(");
+    expect(graph).not.toContain(".update(");
+    expect(graph).not.toContain(".delete(");
+  });
+
+  it("continúa cuando coincide el ID del inbound persistido", async () => {
+    const result = await run("Hola", dependencies());
+    expect(result.blocked).toBe(false);
+  });
+
+  it("bloquea un ID inbound distinto", async () => {
+    const result = await run("Hola", dependencies(), "org_a", "msg_old");
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe("inbound_mismatch");
+    expect(result.wouldExecute).toBeNull();
+    expect(result.wouldReply).toBeNull();
+  });
+
+  it("bloquea la ejecución vieja si ya llegó un inbound nuevo", async () => {
+    const result = await run(
+      "mensaje B",
+      dependencies(),
+      "org_a",
+      "msg_a",
+      "msg_b"
+    );
+    expect(result.reason).toBe("inbound_mismatch");
+  });
+
+  it("bloquea cuando no existe un inbound persistido", async () => {
+    const result = await run(
+      "",
+      dependencies(),
+      "org_a",
+      "msg_in_1",
+      null
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe("inbound_not_found");
+    expect(result.wouldExecute).toBeNull();
+    expect(result.wouldReply).toBeNull();
   });
 
   it("bloquea una conversación inexistente", async () => {
@@ -280,27 +360,170 @@ describe("LangGraph shadow runtime", () => {
     }
   );
 
-  it("permite continuar en shadow cuando el modelo usa una oferta exacta", async () => {
+  it.each([
+    ["book_slot", "set_pending_book"],
+    ["reschedule_slot", "set_pending_reschedule"],
+  ] as const)(
+    "permite %s ofrecido y disponible",
+    async (action, wouldExecute) => {
+      const offered = "2026-10-01T16:00:00.000Z";
+      const findSlotMock = vi.fn(async () => ({
+        startUtc: offered,
+        endUtc: offered,
+        label: "disponible",
+      }));
+      const result = await run(
+        "Hola",
+        dependencies({
+          context: context({
+            offers: [{ startUtc: offered, label: "jueves 1 a las 10:00" }],
+          }),
+          proposedAction: { action, startUtc: offered },
+          findSlot: findSlotMock,
+        })
+      );
+
+      expect(result.blocked).toBe(false);
+      expect(result.wouldExecute).toBe(wouldExecute);
+      expect(findSlotMock).toHaveBeenCalledWith(
+        "org_a",
+        offered,
+        expect.objectContaining({ now: NOW })
+      );
+    }
+  );
+
+  it("bloquea una oferta general que ya está ocupada", async () => {
+    const offered = "2026-10-01T16:00:00.000Z";
+    const result = await run(
+      "Hola",
+      dependencies({
+        context: context({ offers: [{ startUtc: offered, label: "10:00" }] }),
+        proposedAction: { action: "book_slot", startUtc: offered },
+        findSlot: vi.fn(async () => null),
+      })
+    );
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe("slot_unavailable");
+    expect(result.wouldExecute).toBeNull();
+  });
+
+  it("revalida con servicio y profesional de la oferta", async () => {
+    const offered = "2026-10-01T16:00:00.000Z";
+    const findProfessionalSlotMock = vi.fn(async (_organizationId, slot) => ({
+      startUtc: slot.startUtc,
+      endUtc: slot.startUtc,
+      label: "disponible",
+    }));
+    const result = await run(
+      "Hola",
+      dependencies({
+        context: context({
+          offers: [
+            {
+              startUtc: offered,
+              label: "10:00",
+              serviceId: "service_backend",
+              professionalId: "professional_backend",
+            },
+          ],
+        }),
+        proposedAction: { action: "book_slot", startUtc: offered },
+        findProfessionalSlot: findProfessionalSlotMock,
+      })
+    );
+    expect(result.blocked).toBe(false);
+    expect(findProfessionalSlotMock).toHaveBeenCalledWith(
+      "org_a",
+      expect.objectContaining({
+        serviceId: "service_backend",
+        professionalId: "professional_backend",
+        startUtc: offered,
+        now: NOW,
+      })
+    );
+  });
+
+  it.each([
+    { serviceId: "service_1", professionalId: null },
+    { serviceId: null, professionalId: "professional_1" },
+  ])(
+    "bloquea contexto profesional parcial: $serviceId/$professionalId",
+    async (partial) => {
+      const offered = "2026-10-01T16:00:00.000Z";
+      const result = await run(
+        "Hola",
+        dependencies({
+          context: context({
+            offers: [{ startUtc: offered, label: "10:00", ...partial }],
+          }),
+          proposedAction: { action: "book_slot", startUtc: offered },
+        })
+      );
+      expect(result.reason).toBe("slot_context_invalid");
+      expect(result.wouldExecute).toBeNull();
+    }
+  );
+
+  it("bloquea una oferta profesional ocupada", async () => {
     const offered = "2026-10-01T16:00:00.000Z";
     const result = await run(
       "Hola",
       dependencies({
         context: context({
-          offers: [{ startUtc: offered, label: "jueves 1 a las 10:00" }],
+          offers: [
+            {
+              startUtc: offered,
+              label: "10:00",
+              serviceId: "service_1",
+              professionalId: "professional_1",
+            },
+          ],
         }),
         proposedAction: { action: "book_slot", startUtc: offered },
+        findProfessionalSlot: vi.fn(async () => null),
+      })
+    );
+    expect(result.reason).toBe("slot_unavailable");
+  });
+
+  it("distingue una oferta histórica de disponibilidad actual", async () => {
+    const offered = "2026-09-30T19:20:00.000Z";
+    const findSlotMock = vi.fn(async () => ({
+      startUtc: offered,
+      endUtc: offered,
+      label: "disponible",
+    }));
+    const result = await run(
+      "2:20",
+      dependencies({
+        context: context({
+          settings: {
+            ...DEFAULT_CALENDAR_SETTINGS,
+            timezone: "America/Matamoros",
+          },
+          offers: [{ startUtc: offered, label: "mié 30 sep, 14:20" }],
+          lastOutboundText: [
+            "Mañana miércoles, 30 de septiembre",
+            "• 14:20",
+          ].join("\n"),
+          lastOutboundAt: new Date("2026-09-30T02:10:19.000Z"),
+        }),
+        findSlot: findSlotMock,
       })
     );
 
     expect(result.blocked).toBe(false);
-    expect(result.validatedAction).toMatchObject({
-      action: "book_slot",
-      startUtc: offered,
-    });
-    expect(result.wouldExecute).toBe("revalidate_then_set_pending_book");
+    expect(result.wouldExecute).toBe("set_pending_book");
+    expect(result.wouldReply).toMatch(/^Perfecto\. Tengo .* disponible/);
+    expect(findSlotMock).toHaveBeenCalledWith(
+      "org_a",
+      offered,
+      expect.objectContaining({ now: NOW })
+    );
   });
 
-  it("distingue una oferta histórica de disponibilidad actual", async () => {
+  it("no afirma disponibilidad si la selección determinista ya está ocupada", async () => {
     const offered = "2026-09-30T19:20:00.000Z";
     const result = await run(
       "2:20",
@@ -317,14 +540,13 @@ describe("LangGraph shadow runtime", () => {
           ].join("\n"),
           lastOutboundAt: new Date("2026-09-30T02:10:19.000Z"),
         }),
+        findSlot: vi.fn(async () => null),
       })
     );
-
-    expect(result.blocked).toBe(false);
-    expect(result.wouldExecute).toBe("revalidate_then_set_pending_book");
-    expect(result.wouldReply).toContain("opción previamente ofrecida");
-    expect(result.wouldReply).toContain("revalidar");
-    expect(result.wouldReply).not.toMatch(/^Perfecto\. Tengo .* disponible/);
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toBe("slot_unavailable");
+    expect(result.wouldExecute).toBeNull();
+    expect(result.wouldReply).toBeNull();
   });
 
   it("bloquea capacidades de agenda cuando están deshabilitadas", async () => {
@@ -384,7 +606,70 @@ describe("LangGraph shadow runtime", () => {
     }
   );
 
-  it("simula una confirmación pendiente sin ejecutar la reserva", async () => {
+  it.each([
+    ["book", "book_slot"],
+    ["reschedule", "reschedule_slot"],
+  ] as const)("revalida pending %s disponible", async (pendingAction, expected) => {
+    const findSlotMock = vi.fn(async (_organizationId, startUtc) => ({
+      startUtc,
+      endUtc: startUtc,
+      label: "disponible",
+    }));
+    const result = await run(
+      "sí",
+      dependencies({
+        context: context({
+          pendingAction: {
+            id: "pending_1",
+            action: pendingAction,
+            bookingId: pendingAction === "reschedule" ? "booking_1" : null,
+            startUtc: "2026-10-01T16:00:00.000Z",
+            serviceId: null,
+            professionalId: null,
+            expiresAt: new Date("2026-09-30T18:30:00.000Z"),
+          },
+        }),
+        findSlot: findSlotMock,
+      })
+    );
+    expect(result.wouldExecute).toBe(expected);
+    expect(findSlotMock).toHaveBeenCalledWith(
+      "org_a",
+      "2026-10-01T16:00:00.000Z",
+      expect.objectContaining(
+        pendingAction === "reschedule"
+          ? { excludeBookingId: "booking_1" }
+          : { excludeBookingId: undefined }
+      )
+    );
+  });
+
+  it.each(["book", "reschedule"] as const)(
+    "bloquea pending %s ocupado",
+    async (pendingAction) => {
+      const result = await run(
+        "sí",
+        dependencies({
+          context: context({
+            pendingAction: {
+              id: "pending_1",
+              action: pendingAction,
+              bookingId: pendingAction === "reschedule" ? "booking_1" : null,
+              startUtc: "2026-10-01T16:00:00.000Z",
+              serviceId: null,
+              professionalId: null,
+              expiresAt: new Date("2026-09-30T18:30:00.000Z"),
+            },
+          }),
+          findSlot: vi.fn(async () => null),
+        })
+      );
+      expect(result.reason).toBe("slot_unavailable");
+      expect(result.wouldExecute).toBeNull();
+    }
+  );
+
+  it("bloquea pending con contexto profesional parcial", async () => {
     const result = await run(
       "sí",
       dependencies({
@@ -394,17 +679,49 @@ describe("LangGraph shadow runtime", () => {
             action: "book",
             bookingId: null,
             startUtc: "2026-10-01T16:00:00.000Z",
-            serviceId: null,
+            serviceId: "service_1",
             professionalId: null,
             expiresAt: new Date("2026-09-30T18:30:00.000Z"),
           },
         }),
       })
     );
+    expect(result.reason).toBe("slot_context_invalid");
+  });
 
-    expect(result.intent).toBe("scheduling");
+  it("revalida pending profesional con las IDs persistidas", async () => {
+    const startUtc = "2026-10-01T16:00:00.000Z";
+    const findProfessionalSlotMock = vi.fn(async (_organizationId, slot) => ({
+      startUtc: slot.startUtc,
+      endUtc: slot.startUtc,
+      label: "disponible",
+    }));
+    const result = await run(
+      "sí",
+      dependencies({
+        context: context({
+          pendingAction: {
+            id: "pending_1",
+            action: "book",
+            bookingId: null,
+            startUtc,
+            serviceId: "service_persisted",
+            professionalId: "professional_persisted",
+            expiresAt: new Date("2026-09-30T18:30:00.000Z"),
+          },
+        }),
+        findProfessionalSlot: findProfessionalSlotMock,
+      })
+    );
     expect(result.wouldExecute).toBe("book_slot");
-    expect(result.trace).not.toContain("intent_router");
+    expect(findProfessionalSlotMock).toHaveBeenCalledWith(
+      "org_a",
+      expect.objectContaining({
+        serviceId: "service_persisted",
+        professionalId: "professional_persisted",
+        startUtc,
+      })
+    );
   });
 
   it("mantiene aislamiento entre organizaciones", async () => {
@@ -418,6 +735,8 @@ describe("LangGraph shadow runtime", () => {
       now: () => NOW,
       loadContext,
       proposeAction: async () => ({ action: "none" }),
+      findSlot: vi.fn(async () => null),
+      findProfessionalSlot: vi.fn(async () => null),
     };
 
     const [orgA, orgB] = await Promise.all([

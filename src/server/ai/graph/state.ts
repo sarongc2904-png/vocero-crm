@@ -51,6 +51,7 @@ export type ShadowContext = {
   conversation: ShadowConversation;
   profile: ShadowAgentProfile | null;
   history: ChatMessage[];
+  lastInboundMessageId: string | null;
   lastInboundText: string | null;
   lastOutboundText: string | null;
   lastOutboundAt: Date | null;
@@ -59,6 +60,13 @@ export type ShadowContext = {
   settings: CalendarSettings | null;
   offers: OfferedSlot[];
   pendingAction: PendingAgendaAction | null;
+};
+
+export type ShadowAuthorizedSlot = {
+  startUtc: string;
+  serviceId: string | null;
+  professionalId: string | null;
+  bookingId: string | null;
 };
 
 export type ShadowDecision = {
@@ -77,6 +85,7 @@ export type ShadowDecision = {
 export const ShadowAgentState = Annotation.Root({
   conversationId: Annotation<string>,
   expectedOrganizationId: Annotation<string>,
+  expectedInboundMessageId: Annotation<string>,
   organizationId: Annotation<string | null>,
   inboundText: Annotation<string>,
   isTest: Annotation<boolean>,
@@ -98,6 +107,7 @@ export const ShadowAgentState = Annotation.Root({
   context: Annotation<ShadowContext | null>,
   pendingActionConfirmed: Annotation<boolean>,
   actionSource: Annotation<"model" | "deterministic" | "pending" | null>,
+  authorizedSlot: Annotation<ShadowAuthorizedSlot | null>,
   trace: Annotation<string[], string[]>({
     reducer: (current, update) => current.concat(update),
     default: () => [],

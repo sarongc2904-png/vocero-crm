@@ -15,7 +15,9 @@ import { enforceAgentCapabilities } from "@/server/ai/capability-guard";
 import { matchesHandoffIntent } from "@/server/ai/handoff";
 import { buildAgentSystemPrompt } from "@/server/ai/prompts";
 import { matchesCancellationIntent } from "@/server/agenda/cancel-intent";
+import { findSlot } from "@/server/agenda/availability";
 import { findOffered } from "@/server/agenda/offers";
+import { findProfessionalSlot } from "@/server/agenda/professional-availability";
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 import {
   factualHoursReply,
@@ -48,6 +50,7 @@ const COMMERCIAL_SIGNAL =
 export type ShadowAgentInput = {
   conversationId: string;
   expectedOrganizationId: string;
+  expectedInboundMessageId: string;
 };
 
 export type ShadowGraphDependencies = {
@@ -57,6 +60,8 @@ export type ShadowGraphDependencies = {
     state: ShadowAgentGraphState,
     intent: "commercial" | "general"
   ) => Promise<unknown>;
+  findSlot: typeof findSlot;
+  findProfessionalSlot: typeof findProfessionalSlot;
 };
 
 export type ShadowGraphOptions = {
@@ -69,6 +74,8 @@ const defaultDependencies: ShadowGraphDependencies = {
   now: () => new Date(),
   loadContext: loadShadowContext,
   proposeAction: proposeModelAction,
+  findSlot,
+  findProfessionalSlot,
 };
 
 function blocked(
@@ -161,14 +168,12 @@ function executionFor(state: ShadowAgentGraphState): string | null {
     return state.pendingActionConfirmed ? "cancel_booking" : "set_pending_cancel";
   }
   if (action.action === "book_slot") {
-    return state.pendingActionConfirmed
-      ? "book_slot"
-      : "revalidate_then_set_pending_book";
+    return state.pendingActionConfirmed ? "book_slot" : "set_pending_book";
   }
   if (action.action === "reschedule_slot") {
     return state.pendingActionConfirmed
       ? "reschedule_slot"
-      : "revalidate_then_set_pending_reschedule";
+      : "set_pending_reschedule";
   }
   return actionName(action);
 }
@@ -180,6 +185,13 @@ function replyFor(state: ShadowAgentGraphState): string | null {
   if (action.action === "reply") return action.text;
   if (action.action === "handoff") return action.farewell ?? null;
   if (action.action === "update_lead" || action.action === "move_stage") {
+    return action.reply ?? null;
+  }
+  if (
+    action.action === "offer_slots" ||
+    action.action === "book_slot" ||
+    action.action === "reschedule_slot"
+  ) {
     return action.reply ?? null;
   }
   return null;
@@ -198,7 +210,7 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
         });
         const context = loaded.context;
         if (!context) return blocked("load_context", "conversation_not_found");
-        return {
+        const loadedState = {
           context,
           inboundText: context.lastInboundText ?? "",
           organizationId: context.conversation.organizationId,
@@ -212,6 +224,19 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
           whatsappWindowOpen: loaded.whatsappWindowOpen,
           trace: ["load_context"],
         } satisfies ShadowAgentGraphUpdate;
+        if (!context.lastInboundMessageId) {
+          return {
+            ...loadedState,
+            ...blocked("load_context", "inbound_not_found"),
+          };
+        }
+        if (context.lastInboundMessageId !== state.expectedInboundMessageId) {
+          return {
+            ...loadedState,
+            ...blocked("load_context", "inbound_mismatch"),
+          };
+        }
+        return loadedState;
       } catch (error) {
         return blocked(
           "load_context",
@@ -272,6 +297,13 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
         },
         pendingActionConfirmed: true,
         actionSource: "pending" as const,
+        authorizedSlot: {
+          startUtc: pending.startUtc,
+          serviceId: pending.serviceId,
+          professionalId: pending.professionalId,
+          bookingId:
+            pending.action === "reschedule" ? pending.bookingId : null,
+        },
         trace: ["pending_action_router"],
       };
     })
@@ -318,11 +350,17 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
               action: "book_slot",
               startUtc: resolution.offer.startUtc,
             },
-            reply: `Reconocí ${selectedOfferConfirmationLabel(
+            reply: `Perfecto. Tengo ${selectedOfferConfirmationLabel(
               resolution.offer.startUtc,
               settings.timezone
-            )} como una opción previamente ofrecida. Antes de reservar, el backend tendría que revalidar que siga disponible. ¿Quieres continuar?`,
+            )} disponible. ¿Quieres que agende tu cita?`,
             actionSource: "deterministic" as const,
+            authorizedSlot: {
+              startUtc: resolution.offer.startUtc,
+              serviceId: resolution.offer.serviceId ?? null,
+              professionalId: resolution.offer.professionalId ?? null,
+              bookingId: null,
+            },
             trace: ["scheduling_decision"],
           };
         }
@@ -420,15 +458,75 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
       const action = parsed.data as AgentActionType;
       if (
         state.actionSource === "model" &&
-        (action.action === "book_slot" || action.action === "reschedule_slot") &&
-        !findOffered(state.context?.offers ?? [], action.startUtc)
+        (action.action === "book_slot" || action.action === "reschedule_slot")
       ) {
-        return blocked("validate_action", "slot_not_offered");
+        const offer = findOffered(state.context?.offers ?? [], action.startUtc);
+        if (!offer) return blocked("validate_action", "slot_not_offered");
+        return {
+          validatedAction: action,
+          authorizedSlot: {
+            startUtc: offer.startUtc,
+            serviceId: offer.serviceId ?? null,
+            professionalId: offer.professionalId ?? null,
+            bookingId: null,
+          },
+          trace: ["validate_action"],
+        };
       }
       return {
         validatedAction: action,
         trace: ["validate_action"],
       };
+    })
+    .addNode("revalidate_slot", async (state) => {
+      const action = state.validatedAction;
+      if (
+        !action ||
+        (action.action !== "book_slot" && action.action !== "reschedule_slot")
+      ) {
+        return { trace: ["revalidate_slot"] };
+      }
+      const slot = state.authorizedSlot;
+      const organizationId = state.organizationId;
+      const context = state.context;
+      if (!slot || !organizationId || !context) {
+        return blocked("revalidate_slot", "slot_context_invalid");
+      }
+      const hasService = Boolean(slot.serviceId);
+      const hasProfessional = Boolean(slot.professionalId);
+      if (hasService !== hasProfessional) {
+        return blocked("revalidate_slot", "slot_context_invalid");
+      }
+      try {
+        const excludeBookingId =
+          action.action === "reschedule_slot" && slot.bookingId
+            ? slot.bookingId
+            : undefined;
+        const available =
+          hasService && hasProfessional
+            ? await dependencies.findProfessionalSlot(organizationId, {
+                serviceId: slot.serviceId!,
+                professionalId: slot.professionalId!,
+                startUtc: slot.startUtc,
+                excludeBookingId,
+                now: context.now,
+              })
+            : context.settings
+              ? await dependencies.findSlot(organizationId, slot.startUtc, {
+                  excludeBookingId,
+                  now: context.now,
+                  settings: context.settings,
+                })
+              : null;
+        if (!available) return blocked("revalidate_slot", "slot_unavailable");
+        return { trace: ["revalidate_slot"] };
+      } catch (error) {
+        return blocked(
+          "revalidate_slot",
+          "availability_check_failed",
+          error instanceof Error ? error.message : String(error)
+        );
+      }
     })
     .addNode("capability_guard", (state) => {
       const action = state.validatedAction;
@@ -522,7 +620,14 @@ export function createShadowAgentGraph(options: ShadowGraphOptions = {}) {
   graph.addConditionalEdges("general_decision", (state) =>
     state.stop ? "shadow_result" : "validate_action"
   );
-  graph.addConditionalEdges("validate_action", (state) =>
+  graph.addConditionalEdges("validate_action", (state) => {
+    if (state.stop) return "shadow_result";
+    return state.validatedAction?.action === "book_slot" ||
+      state.validatedAction?.action === "reschedule_slot"
+      ? "revalidate_slot"
+      : "capability_guard";
+  });
+  graph.addConditionalEdges("revalidate_slot", (state) =>
     state.stop ? "shadow_result" : "capability_guard"
   );
   graph.addEdge("capability_guard", "shadow_result");
@@ -538,6 +643,7 @@ export async function runShadowAgent(
   const result = await createShadowAgentGraph(options).invoke({
     conversationId: input.conversationId,
     expectedOrganizationId: input.expectedOrganizationId,
+    expectedInboundMessageId: input.expectedInboundMessageId,
     organizationId: null,
     // load_context lo reemplaza con el último inbound persistido.
     inboundText: "",
@@ -560,6 +666,7 @@ export async function runShadowAgent(
     context: null,
     pendingActionConfirmed: false,
     actionSource: null,
+    authorizedSlot: null,
     trace: [],
   });
   if (!result.shadowDecision) {
