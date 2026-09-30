@@ -130,6 +130,25 @@ function normalizeVerdictConsistency(input: {
       return false;
     }
 
+    if (finding.tipo === "alucinacion" && hasHandoff) {
+      const citedAgentMessages = findingAgentEvidence(finding, input.transcript);
+      const handoffClaim = citedAgentMessages.some((message) => {
+        const value = normalizeForSafetyCheck(message);
+        return (
+          /\b(voy a|puedo|te puedo|prefieres que te)\b.{0,50}\b(escalar|transferir|pasar|comunicar)\b/.test(
+            value
+          ) ||
+          /\b(asesor|persona|equipo)\b.{0,50}\b(continu|atender|contact|comunicar)\b/.test(
+            value
+          )
+        );
+      });
+
+      if (handoffClaim) {
+        return false;
+      }
+    }
+
     if (finding.tipo === "fuera_de_kb") {
       const citedAgentMessages = findingAgentEvidence(finding, input.transcript);
       if (
@@ -239,9 +258,7 @@ export async function judgeCase(input: {
     .map((entry, index) => `[action_trace:${index}] ${renderTraceEvidence(entry)}`)
     .join("\n");
 
-  const groundedUser = `${user}\n\nFUENTES DE EVIDENCIA AUTORIZADAS\n${
-    indexedAgentMessages || "(sin mensajes del agente)"
-  }\n${indexedTrace || "(sin acciones observadas)"}\n\nREGLAS DE EVIDENCIA\n- Cada hallazgo DEBE incluir evidenceRefs con uno o más índices válidos de las fuentes anteriores.\n- Usa source=agent_message para texto producido por el agente y source=action_trace para efectos/acciones observados.\n- NUNCA uses una frase del cliente como evidencia de una alucinación del agente.\n- Para tipo=alucinacion es obligatorio incluir al menos un agent_message.\n- El campo evidencia puede ser breve: el backend lo reconstruirá desde evidenceRefs.`;
+  const groundedUser = `${user}\n\nFUENTES DE EVIDENCIA AUTORIZADAS\n${indexedAgentMessages || "(sin mensajes del agente)"}\n${indexedTrace || "(sin acciones observadas)"}\n\nREGLAS DE EVIDENCIA\n- Cada hallazgo DEBE incluir evidenceRefs con uno o más índices válidos de las fuentes anteriores.\n- Usa source=agent_message para texto producido por el agente y source=action_trace para efectos/acciones observados.\n- NUNCA uses una frase del cliente como evidencia de una alucinación del agente.\n- Para tipo=alucinacion es obligatorio incluir al menos un agent_message.\n- El campo evidencia puede ser breve: el backend lo reconstruirá desde evidenceRefs.`;
 
   const result = await chatJson(
     Verdict,
