@@ -77,6 +77,28 @@ export async function getPendingAction(
   conversationId: string,
   now: Date = new Date()
 ): Promise<PendingAgendaAction | null> {
+  return readPendingAction(organizationId, conversationId, now, true);
+}
+
+/**
+ * Variante de solo lectura para simulaciones y diagnósticos. Una acción
+ * expirada se trata como inexistente, pero no se elimina: shadow mode nunca
+ * debe mutar estado operacional.
+ */
+export async function peekPendingAction(
+  organizationId: string,
+  conversationId: string,
+  now: Date = new Date()
+): Promise<PendingAgendaAction | null> {
+  return readPendingAction(organizationId, conversationId, now, false);
+}
+
+async function readPendingAction(
+  organizationId: string,
+  conversationId: string,
+  now: Date,
+  clearExpired: boolean
+): Promise<PendingAgendaAction | null> {
   const db = getDb();
   const rows = await db
     .select()
@@ -94,8 +116,10 @@ export async function getPendingAction(
   if (!row) return null;
 
   if (row.expiresAt.getTime() <= now.getTime()) {
-    // Expirada: se descarta y se borra para que no pueda reutilizarse.
-    await clearPendingAction(organizationId, conversationId);
+    // El flujo productivo limpia; shadow mode solo observa.
+    if (clearExpired) {
+      await clearPendingAction(organizationId, conversationId);
+    }
     return null;
   }
 
