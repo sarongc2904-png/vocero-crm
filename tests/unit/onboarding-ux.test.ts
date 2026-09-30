@@ -22,4 +22,15 @@ describe("activación guiada", () => {
     expect(onboarding).toContain('label: "Configura la agenda general"');
     expect(onboarding).toContain('label: "Prueba una conversación"');
   });
+
+  it("distingue pasos obligatorios, opcionales, finales y su estado", () => {
+    const page = source("src/app/(app)/onboarding/page.tsx");
+
+    expect(page).toContain('step.id === "activation"');
+    expect(page).toContain('"(Final)"');
+    expect(page).toContain('"(Opcional)"');
+    expect(page).toContain('"(Obligatorio)"');
+    expect(page).toContain('step.complete ? "Completado" : "Pendiente"');
+    expect(page).toContain('? "Configurar"');
+  });
 });
