@@ -83,16 +83,29 @@ export default async function OnboardingPage() {
                 <span className="text-sm font-semibold">
                   {step.label}
                 </span>
-                {step.optional && (
-                  <span className="ml-2 text-xs text-text-3">(Opcional)</span>
-                )}
+                <span className="ml-2 text-xs text-text-3">
+                  {step.id === "activation"
+                    ? "(Final)"
+                    : step.optional
+                      ? "(Opcional)"
+                      : "(Obligatorio)"}
+                </span>
               </div>
-              <Link
-                className="text-sm font-semibold text-brand-text hover:underline"
-                href={step.href}
-              >
-                {step.complete ? "Revisar" : "Continuar"}
-              </Link>
+              <div className="flex flex-col items-end gap-1">
+                <span className="text-xs font-medium text-text-3">
+                  {step.complete ? "Completado" : "Pendiente"}
+                </span>
+                <Link
+                  className="text-sm font-semibold text-brand-text hover:underline"
+                  href={step.href}
+                >
+                  {step.complete
+                    ? "Revisar"
+                    : step.optional
+                      ? "Configurar"
+                      : "Continuar"}
+                </Link>
+              </div>
             </li>
           ))}
         </ol>
