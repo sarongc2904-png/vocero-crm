@@ -287,7 +287,12 @@ async function persistOutbound(input: {
   await db
     .update(schema.conversation)
     .set({ lastMessageAt: new Date(), updatedAt: new Date() })
-    .where(eq(schema.conversation.id, input.conversationId));
+    .where(
+      and(
+        eq(schema.conversation.organizationId, input.organizationId),
+        eq(schema.conversation.id, input.conversationId)
+      )
+    );
 
   publish(input.organizationId, {
     type: "message.new",

@@ -39,6 +39,15 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     expect(instrumentation).toContain("startDurableWorkers");
     expect(instrumentation).not.toContain("Interrumpida por un reinicio");
     expect(worker).toContain("recoverRunningLabJobs");
+    expect(worker).toContain('event: "job.recovery_failed"');
+    expect(worker.indexOf('event: "job.recovery_failed"')).toBeLessThan(
+      worker.indexOf('startLoop("agent_turn"')
+    );
+    expect(worker).toContain("void recoverLabJobs()");
+    expect(worker).toContain("}, 5_000)");
+    expect(worker).toContain('event: "job.drain_failed"');
+    expect(worker).toContain("void drain(kind, maxJobs).catch");
+    expect(worker).toContain("runDrain(kind, maxJobs)");
   });
 
   it("la cola usa leases y SKIP LOCKED para varios procesos", () => {

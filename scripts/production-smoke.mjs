@@ -90,6 +90,24 @@ async function main() {
     fail("versión publicada", "faltó health.version");
   }
 
+  const jobs = health?.jobs;
+  const validJobMetrics = [jobs?.pending, jobs?.leased, jobs?.deadLetter].every(
+    (value) => Number.isInteger(value) && value >= 0
+  );
+  if (validJobMetrics) {
+    pass(
+      "métricas de cola durable publicadas",
+      `pending=${jobs.pending}, leased=${jobs.leased}, deadLetter=${jobs.deadLetter}`
+    );
+    if (jobs.deadLetter === 0) {
+      pass("cola durable sin dead letters");
+    } else {
+      fail("cola durable sin dead letters", `deadLetter=${jobs.deadLetter}`);
+    }
+  } else {
+    fail("métricas de cola durable publicadas", JSON.stringify(jobs));
+  }
+
   if (expectedCommit) {
     if (health?.commit === expectedCommit) {
       pass("commit desplegado coincide con el esperado", expectedCommit);

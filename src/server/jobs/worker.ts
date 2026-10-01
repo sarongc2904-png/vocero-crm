@@ -15,6 +15,7 @@ import { isPermanentJobError } from "@/server/jobs/error-policy";
 type WorkerState = {
   timers?: Partial<Record<DurableJobKind, ReturnType<typeof setInterval>>>;
   running?: Partial<Record<DurableJobKind, boolean>>;
+  recoveryTimer?: ReturnType<typeof setTimeout>;
 };
 
 const globalForJobs = globalThis as unknown as {
@@ -73,6 +74,45 @@ async function drain(kind: DurableJobKind, maxJobs: number): Promise<void> {
   }
 }
 
+function runDrain(kind: DurableJobKind, maxJobs: number): void {
+  void drain(kind, maxJobs).catch((error) => {
+    console.error(
+      JSON.stringify({
+        event: "job.drain_failed",
+        kind,
+        error: String(error).slice(0, 500),
+      })
+    );
+  });
+}
+
+async function recoverLabJobs(): Promise<void> {
+  try {
+    const recovered = await recoverRunningLabJobs();
+    if (recovered > 0) {
+      console.log(
+        `[boot] ${recovered} corrida(s) de Lab aseguradas en la cola durable`
+      );
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "job.recovery_failed",
+        error: String(error).slice(0, 500),
+      })
+    );
+    const s = state();
+    if (!s.recoveryTimer) {
+      const timer = setTimeout(() => {
+        s.recoveryTimer = undefined;
+        void recoverLabJobs();
+      }, 5_000);
+      timer.unref?.();
+      s.recoveryTimer = timer;
+    }
+  }
+}
+
 function startLoop(
   kind: DurableJobKind,
   intervalMs: number,
@@ -82,9 +122,9 @@ function startLoop(
   s.timers ??= {};
   if (s.timers[kind]) return;
 
-  void drain(kind, maxJobs);
+  runDrain(kind, maxJobs);
   const timer = setInterval(() => {
-    void drain(kind, maxJobs);
+    runDrain(kind, maxJobs);
   }, intervalMs);
   timer.unref?.();
   s.timers[kind] = timer;
@@ -96,12 +136,9 @@ function startLoop(
  * sus leases sobreviven y otro proceso puede reclamarlos al expirar el lease.
  */
 export async function startDurableWorkers(): Promise<void> {
-  const recovered = await recoverRunningLabJobs();
-  if (recovered > 0) {
-    console.log(
-      `[boot] ${recovered} corrida(s) de Lab aseguradas en la cola durable`
-    );
-  }
+  // Si la BD tiene un fallo transitorio, la recuperación se reintenta sin
+  // bloquear el arranque de los consumers que procesan jobs ya persistidos.
+  await recoverLabJobs();
 
   // Agent: baja latencia y pequeños lotes. Lab: un run por vez por proceso para
   // no competir por CPU/LLM con la bandeja; SKIP LOCKED permite varios procesos.

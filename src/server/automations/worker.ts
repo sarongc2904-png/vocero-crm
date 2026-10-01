@@ -112,10 +112,21 @@ async function drain() {
   }
 }
 
+function runDrain(): void {
+  void drain().catch((error) => {
+    console.error(
+      JSON.stringify({
+        event: "automation.drain_failed",
+        error: String(error).slice(0, 500),
+      })
+    );
+  });
+}
+
 export function startAutomationWorker() {
   if (globalAutomation.__automationTimer) return;
-  void drain();
-  const timer = setInterval(() => void drain(), 2_000);
+  runDrain();
+  const timer = setInterval(runDrain, 2_000);
   timer.unref?.();
   globalAutomation.__automationTimer = timer;
 }

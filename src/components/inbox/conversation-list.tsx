@@ -137,6 +137,8 @@ export function ConversationList({
   selectedId,
   onSelect,
   onSeeded,
+  loadError,
+  onRetry,
 }: {
   conversations: ConversationDto[] | null;
   /** Canales encendidos en esta instancia (ADR-001). */
@@ -144,6 +146,8 @@ export function ConversationList({
   selectedId: string | null;
   onSelect: (id: string) => void;
   onSeeded: () => void;
+  loadError: string | null;
+  onRetry: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "attention" | "unread">("all");
@@ -336,7 +340,23 @@ export function ConversationList({
       </div>
 
       <div className="flex-1 overflow-y-auto">
+        {loadError && (
+          <div
+            role="alert"
+            className="m-3 flex items-center justify-between gap-2 rounded-lg border border-danger-soft bg-danger-tint p-3 text-xs text-danger-text"
+          >
+            <span>{loadError}</span>
+            <button
+              type="button"
+              className="shrink-0 font-semibold underline underline-offset-2"
+              onClick={onRetry}
+            >
+              Reintentar
+            </button>
+          </div>
+        )}
         {loading ? (
+          loadError ? null :
           <p className="p-6 text-center text-xs text-text-3">Cargando…</p>
         ) : conversations.length === 0 ? (
           <EmptyState onSeeded={onSeeded} />

@@ -59,7 +59,12 @@ export async function POST(req: Request) {
         handoffReason: toHandoffReason(body.data.reason),
         updatedAt: new Date(),
       })
-      .where(eq(schema.conversation.id, conv.id));
+      .where(
+        and(
+          eq(schema.conversation.organizationId, organizationId),
+          eq(schema.conversation.id, conv.id)
+        )
+      );
     publish(organizationId, {
       type: "conversation.updated",
       data: { conversation: { id: conv.id } },

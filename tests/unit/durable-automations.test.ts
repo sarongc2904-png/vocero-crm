@@ -4,6 +4,14 @@ import { describe, expect, it } from "vitest";
 const source = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 
 describe("automatizaciones durables", () => {
+  it("un fallo de polling se observa y el interval puede volver a intentar", () => {
+    const worker = source("src/server/automations/worker.ts");
+
+    expect(worker).toContain('event: "automation.drain_failed"');
+    expect(worker).toContain("const timer = setInterval(runDrain, 2_000)");
+    expect(worker).not.toContain("void drain();");
+  });
+
   it("reclama con SKIP LOCKED, lease e idempotencia", () => {
     const queue = source("src/server/automations/queue.ts").toLowerCase();
     const migration = source("drizzle/0024_durable_automations.sql").toLowerCase();

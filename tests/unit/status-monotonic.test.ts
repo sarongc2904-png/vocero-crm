@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isUpgrade } from "@/server/inbox/status";
+import { isUpgrade, upgradeableStatuses } from "@/server/inbox/status";
 
 describe("estados monotónicos del mensaje (FR-004)", () => {
   it("progresión normal: pending → sent → delivered → read", () => {
@@ -26,5 +28,34 @@ describe("estados monotónicos del mensaje (FR-004)", () => {
 
   it("estados desconocidos se ignoran", () => {
     expect(isUpgrade("sent", "warning")).toBe(false);
+  });
+
+  it("expone los únicos predecesores válidos de cada transición", () => {
+    expect(upgradeableStatuses("sent")).toEqual(["pending"]);
+    expect(upgradeableStatuses("delivered")).toEqual(["pending", "sent"]);
+    expect(upgradeableStatuses("read")).toEqual([
+      "pending",
+      "sent",
+      "delivered",
+    ]);
+    expect(upgradeableStatuses("failed")).toEqual([
+      "pending",
+      "sent",
+      "delivered",
+      "read",
+    ]);
+  });
+
+  it("aplica la transición y el tenant scope dentro del mismo UPDATE", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "src/server/inbox/status.ts"),
+      "utf8"
+    ).replace(/\r\n/g, "\n");
+
+    expect(source).not.toContain(".select({");
+    expect(source).toContain("eq(schema.message.organizationId, organizationId)");
+    expect(source).toContain("eq(schema.message.waMessageId, status.id)");
+    expect(source).toContain("inArray(schema.message.status, allowedCurrent)");
+    expect(source).toContain(".returning({");
   });
 });

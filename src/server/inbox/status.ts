@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { describeSendError } from "@/lib/meta/send-errors";
 import { publish } from "@/server/events/bus";
@@ -15,11 +15,21 @@ const STATUS_RANK: Record<string, number> = {
 type MessageStatus = "pending" | "sent" | "delivered" | "read" | "failed";
 
 export function isUpgrade(current: string, next: string): boolean {
-  if (next === "failed") return current !== "failed";
-  const c = STATUS_RANK[current];
-  const n = STATUS_RANK[next];
-  if (c === undefined || n === undefined) return false;
-  return n > c;
+  return upgradeableStatuses(next).includes(current as MessageStatus);
+}
+
+/**
+ * Estados desde los que `next` puede aplicarse. Esta lista viaja también al
+ * WHERE del UPDATE: PostgreSQL vuelve a evaluar el predicado después de
+ * esperar un lock concurrente y evita que un delivered tardío pise read.
+ */
+export function upgradeableStatuses(next: string): MessageStatus[] {
+  if (next === "failed") return ["pending", "sent", "delivered", "read"];
+  const nextRank = STATUS_RANK[next];
+  if (nextRank === undefined) return [];
+  return (Object.entries(STATUS_RANK) as [MessageStatus, number][])
+    .filter(([, rank]) => rank < nextRank)
+    .map(([status]) => status);
 }
 
 export async function applyStatusUpdate(
@@ -29,24 +39,8 @@ export async function applyStatusUpdate(
   const next = status.status;
   if (!(next in STATUS_RANK) && next !== "failed") return; // estado desconocido
 
-  const db = getDb();
-  const rows = await db
-    .select({
-      id: schema.message.id,
-      conversationId: schema.message.conversationId,
-      status: schema.message.status,
-    })
-    .from(schema.message)
-    .where(
-      and(
-        eq(schema.message.organizationId, organizationId),
-        eq(schema.message.waMessageId, status.id)
-      )
-    )
-    .limit(1);
-  const msg = rows[0];
-  if (!msg) return;
-  if (!isUpgrade(msg.status, next)) return;
+  const allowedCurrent = upgradeableStatuses(next);
+  if (allowedCurrent.length === 0) return;
 
   const failure = status.errors?.[0];
   const error =
@@ -54,10 +48,22 @@ export async function applyStatusUpdate(
       ? describeSendError(failure?.code, failure?.message ?? failure?.title)
       : null;
 
-  await db
+  const updated = await getDb()
     .update(schema.message)
     .set({ status: next as MessageStatus, error })
-    .where(eq(schema.message.id, msg.id));
+    .where(
+      and(
+        eq(schema.message.organizationId, organizationId),
+        eq(schema.message.waMessageId, status.id),
+        inArray(schema.message.status, allowedCurrent)
+      )
+    )
+    .returning({
+      id: schema.message.id,
+      conversationId: schema.message.conversationId,
+    });
+  const msg = updated[0];
+  if (!msg) return;
 
   publish(organizationId, {
     type: "message.status",

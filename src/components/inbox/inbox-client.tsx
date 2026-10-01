@@ -46,8 +46,12 @@ export function InboxClient({
   const [conversations, setConversations] = useState<ConversationDto[] | null>(
     null
   );
+  const [conversationsError, setConversationsError] = useState<string | null>(
+    null
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageDto[]>([]);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingOut[]>([]);
   // Arranca cerrado: en pantallas angostas el panel de detalles es un cajón
   // ENCIMA del hilo, así que abrirlo por defecto taparía la conversación. El
@@ -80,9 +84,13 @@ export function InboxClient({
 
   const refetchConversations = useCallback(async () => {
     const res = await fetch("/api/conversations").catch(() => null);
-    if (!res?.ok) return;
+    if (!res?.ok) {
+      setConversationsError("No se pudieron cargar las conversaciones.");
+      return;
+    }
     const data = (await res.json()) as { conversations: ConversationDto[] };
     setConversations(data.conversations);
+    setConversationsError(null);
     lastFetchRef.current = new Date().toISOString();
   }, []);
 
@@ -90,9 +98,17 @@ export function InboxClient({
     const res = await fetch(
       `/api/conversations/${conversationId}/messages`
     ).catch(() => null);
-    if (!res?.ok) return;
+    if (!res?.ok) {
+      if (selectedIdRef.current === conversationId) {
+        setMessagesError("No se pudo cargar el historial de mensajes.");
+      }
+      return;
+    }
     const data = (await res.json()) as { messages: MessageDto[] };
-    if (selectedIdRef.current === conversationId) setMessages(data.messages);
+    if (selectedIdRef.current === conversationId) {
+      setMessages(data.messages);
+      setMessagesError(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -103,6 +119,7 @@ export function InboxClient({
     (id: string) => {
       setSelectedId(id);
       setMessages([]);
+      setMessagesError(null);
       void refetchMessages(id);
       void fetch(`/api/conversations/${id}`, {
         method: "PATCH",
@@ -292,6 +309,8 @@ export function InboxClient({
           selectedId={selectedId}
           onSelect={select}
           onSeeded={() => void refetchConversations()}
+          loadError={conversationsError}
+          onRetry={() => void refetchConversations()}
         />
       </section>
 
@@ -351,6 +370,21 @@ export function InboxClient({
                 </button>
               )}
             </header>
+            {messagesError && (
+              <div
+                role="alert"
+                className="flex items-center justify-between gap-3 border-b border-danger-soft bg-danger-tint px-4 py-2 text-xs text-danger-text"
+              >
+                <span>{messagesError}</span>
+                <button
+                  type="button"
+                  className="shrink-0 font-semibold underline underline-offset-2"
+                  onClick={() => void refetchMessages(selected.id)}
+                >
+                  Reintentar
+                </button>
+              </div>
+            )}
             <MessageThread messages={thread} />
             <Composer
               conversation={selected}

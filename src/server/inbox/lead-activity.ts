@@ -20,14 +20,24 @@ export async function onLeadActivity(
   const existing = await db
     .select({ id: schema.lead.id })
     .from(schema.lead)
-    .where(eq(schema.lead.contactId, contactId))
+    .where(
+      and(
+        eq(schema.lead.organizationId, organizationId),
+        eq(schema.lead.contactId, contactId)
+      )
+    )
     .limit(1);
 
   if (existing[0]) {
     await db
       .update(schema.lead)
       .set({ lastActivityAt: at, updatedAt: new Date() })
-      .where(eq(schema.lead.id, existing[0].id));
+      .where(
+        and(
+          eq(schema.lead.organizationId, organizationId),
+          eq(schema.lead.id, existing[0].id)
+        )
+      );
     return;
   }
 

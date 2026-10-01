@@ -133,7 +133,12 @@ async function attachMediaAsset(
     await db
       .update(schema.message)
       .set({ mediaAssetId: asset.id })
-      .where(eq(schema.message.id, messageId));
+      .where(
+        and(
+          eq(schema.message.organizationId, organizationId),
+          eq(schema.message.id, messageId)
+        )
+      );
     if (asset.fetchStatus === "pending") {
       // Descarga in-process, sin bloquear la ingesta; on-demand reintenta.
       void ensureAssetAvailable(organizationId, asset.id).catch(() => {});
@@ -202,7 +207,12 @@ export async function getOrCreateConversation(
     await db
       .update(schema.conversation)
       .set({ channelThreadRef: opts.threadRef, updatedAt: new Date() })
-      .where(eq(schema.conversation.id, existing.id));
+      .where(
+        and(
+          eq(schema.conversation.organizationId, organizationId),
+          eq(schema.conversation.id, existing.id)
+        )
+      );
     existing.channelThreadRef = opts.threadRef;
   }
   return existing;
@@ -339,7 +349,12 @@ async function ingestManualEcho(
   await db
     .update(schema.conversation)
     .set({ lastMessageAt: waTimestamp, updatedAt: new Date() })
-    .where(eq(schema.conversation.id, conversation.id));
+    .where(
+      and(
+        eq(schema.conversation.organizationId, organizationId),
+        eq(schema.conversation.id, conversation.id)
+      )
+    );
 
   // Pausa automática de la IA, idempotente y atómica (solo si no hay handoff).
   const paused = await db
@@ -352,6 +367,7 @@ async function ingestManualEcho(
     })
     .where(
       and(
+        eq(schema.conversation.organizationId, organizationId),
         eq(schema.conversation.id, conversation.id),
         sql`${schema.conversation.handoffAt} is null`
       )
@@ -449,7 +465,12 @@ export async function ingestInboundMessage(input: {
       unreadCount: sql`${schema.conversation.unreadCount} + 1`,
       updatedAt: new Date(),
     })
-    .where(eq(schema.conversation.id, conversation.id));
+    .where(
+      and(
+        eq(schema.conversation.organizationId, organizationId),
+        eq(schema.conversation.id, conversation.id)
+      )
+    );
 
   await onLeadActivity(organizationId, contact.id, waTimestamp);
 

@@ -51,7 +51,12 @@ export async function POST(req: Request) {
       handoffReason: null,
       updatedAt: new Date(),
     })
-    .where(eq(schema.conversation.id, conv.id));
+    .where(
+      and(
+        eq(schema.conversation.organizationId, organizationId),
+        eq(schema.conversation.id, conv.id)
+      )
+    );
 
   // Etapa al inicio del funnel (best-effort: sin etapas no revienta el reset).
   try {

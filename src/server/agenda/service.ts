@@ -745,7 +745,7 @@ async function deliverMeeting(
             videoCall: settings.videoCall,
           });
 
-    return await persistDelivery(booking.id, {
+    return await persistDelivery(booking.organizationId, booking.id, {
       externalRef: meeting.externalId ?? booking.externalRef,
       meetingLink: meeting.joinUrl,
       // Un conector que promete enlace por cita y no lo trajo todavía deja la
@@ -769,7 +769,7 @@ async function deliverMeeting(
     // La cita ya existe y se queda: el enlace es lo único que falta. Se
     // conserva la referencia externa si ya la había, para que el reintento
     // sepa que no debe crear otra reunión.
-    return await persistDelivery(booking.id, {
+    return await persistDelivery(booking.organizationId, booking.id, {
       externalRef: booking.externalRef,
       meetingLink: null,
       linkPending: true,
@@ -778,6 +778,7 @@ async function deliverMeeting(
 }
 
 async function persistDelivery(
+  organizationId: string,
   bookingId: string,
   values: {
     externalRef: string | null;
@@ -789,7 +790,12 @@ async function persistDelivery(
   const rows = await db
     .update(schema.booking)
     .set({ ...values, updatedAt: new Date() })
-    .where(eq(schema.booking.id, bookingId))
+    .where(
+      and(
+        eq(schema.booking.organizationId, organizationId),
+        eq(schema.booking.id, bookingId)
+      )
+    )
     .returning();
   return rows[0]!;
 }
