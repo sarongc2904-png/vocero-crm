@@ -167,14 +167,20 @@ export function ConnectorCredentials({
     <Card>
       <CardHeader>
         <CardTitle>Conectar {meta.label}</CardTitle>
-        <CardDescription>{help.title}.</CardDescription>
+        <CardDescription>
+          {connector === "google" && oauthAvailable
+            ? "Autoriza tu cuenta de Google; no necesitas copiar credenciales."
+            : `${help.title}.`}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <ul className="list-disc space-y-1 pl-5 text-xs text-text-2">
-          {help.items.map((item, i) => (
-            <li key={i}>{item}</li>
-          ))}
-        </ul>
+        {!(connector === "google" && oauthAvailable) && (
+          <ul className="list-disc space-y-1 pl-5 text-xs text-text-2">
+            {help.items.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        )}
 
         {connection?.status === "error" && (
           <p className="rounded-sm border border-danger-soft bg-danger-tint px-3 py-2 text-sm text-danger-text">
