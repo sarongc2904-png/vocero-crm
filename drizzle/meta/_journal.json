@@ -232,6 +232,13 @@
       "when": 1790878400000,
       "tag": "0032_durable_job_lease_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790964800000,
+      "tag": "0033_ai_context_reset",
+      "breakpoints": true
     }
   ]
 }
