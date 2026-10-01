@@ -1,4 +1,4 @@
-import { asc, desc, eq, isNull } from "drizzle-orm";
+import { asc, desc, eq, gte, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -126,11 +126,18 @@ export async function runAgentTurn(
     .select()
     .from(schema.message)
     .where(
-      scoped(
-        schema.message.organizationId,
-        organizationId,
-        eq(schema.message.conversationId, conversationId)
-      )
+      conversation.aiContextResetAt
+        ? scoped(
+            schema.message.organizationId,
+            organizationId,
+            eq(schema.message.conversationId, conversationId),
+            gte(schema.message.createdAt, conversation.aiContextResetAt)
+          )
+        : scoped(
+            schema.message.organizationId,
+            organizationId,
+            eq(schema.message.conversationId, conversationId)
+          )
     )
     .orderBy(desc(schema.message.createdAt))
     .limit(20);
@@ -170,6 +177,30 @@ export async function runAgentTurn(
   }
 
   const inboundText = lastInbound.text;
+  const safeGreeting =
+    profile.greeting?.trim() ||
+    `¡Hola! 👋 Soy ${profile.name || "tu asistente"}. ¿En qué puedo ayudarte?`;
+
+  /**
+   * Reactivación = nueva sesión semántica.
+   *
+   * Si el primer turno de esa sesión es solo un saludo, no hay ninguna razón
+   * objetiva para heredar un handoff anterior ni para pedir al modelo que
+   * decida si escala: respondemos el saludo configurado y seguimos con IA.
+   */
+  const firstTurnAfterReset = Boolean(
+    conversation.aiContextResetAt &&
+      lastInbound.createdAt >= conversation.aiContextResetAt &&
+      !history.some(
+        (message) =>
+          message.direction === "out" &&
+          message.createdAt < lastInbound.createdAt
+      )
+  );
+  if (inboundText && firstTurnAfterReset && isBareGreeting(inboundText)) {
+    await deliverReply(conversation, safeGreeting);
+    return;
+  }
 
   /**
    * IA-W2 — Una confirmación explícita SOLO ejecuta la acción pendiente VIGENTE
@@ -811,6 +842,14 @@ export async function runAgentTurn(
       return;
     }
     case "handoff": {
+      // Un saludo aislado nunca es evidencia suficiente para escalar. El
+      // modelo puede proponer handoff, pero esta política determinista tiene la
+      // última palabra y evita bucles de "Hola → te paso con un asesor".
+      if (inboundText && isBareGreeting(inboundText)) {
+        await deliverReply(conversation, safeGreeting);
+        return;
+      }
+
       // La transición se reclama ANTES de enviar el farewell. Si varios jobs
       // quedaron en cola por mensajes consecutivos, solo uno puede ganar el
       // handoff y por tanto solo uno envía el mensaje de transferencia.

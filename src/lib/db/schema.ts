@@ -466,6 +466,14 @@ export const conversation = pgTable(
         "manual_reply",
       ],
     }),
+    /**
+     * Punto de corte del contexto conversacional que consume la IA.
+     *
+     * El historial completo sigue en message para Inbox/auditoría, pero al
+     * reactivar la IA después de un handoff se inicia una sesión semántica
+     * nueva y los mensajes anteriores dejan de alimentar al modelo.
+     */
+    aiContextResetAt: timestamp("ai_context_reset_at"),
     lastInboundAt: timestamp("last_inbound_at"),
     lastMessageAt: timestamp("last_message_at"),
     unreadCount: integer("unread_count").notNull().default(0),

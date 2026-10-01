@@ -219,12 +219,16 @@ export async function updateConversation(
   patch: { aiEnabled?: boolean; reactivate?: boolean; markRead?: boolean }
 ) {
   const db = getDb();
-  const set: Record<string, unknown> = { updatedAt: new Date() };
+  const now = new Date();
+  const set: Record<string, unknown> = { updatedAt: now };
   if (patch.aiEnabled !== undefined) set.aiEnabled = patch.aiEnabled;
   if (patch.reactivate) {
     set.handoffAt = null;
     set.handoffReason = null;
     set.aiEnabled = patch.aiEnabled ?? true;
+    // Reactivar inicia una NUEVA sesión semántica. El historial no se borra:
+    // solo deja de formar parte del contexto que consume el modelo.
+    set.aiContextResetAt = now;
   }
   if (patch.markRead) set.unreadCount = 0;
 
@@ -238,5 +242,36 @@ export async function updateConversation(
       )
     )
     .returning();
+
+  if (patch.reactivate && updated[0]) {
+    // El estado conversacional transitorio también pertenece a la sesión
+    // anterior. Si se conservara, un simple "sí" o "2:20" podría ejecutar una
+    // acción de agenda ofrecida antes del handoff.
+    await db
+      .delete(schema.pendingAgendaAction)
+      .where(
+        and(
+          eq(schema.pendingAgendaAction.organizationId, organizationId),
+          eq(schema.pendingAgendaAction.conversationId, conversationId)
+        )
+      );
+    await db
+      .delete(schema.agendaOfferCursor)
+      .where(
+        and(
+          eq(schema.agendaOfferCursor.organizationId, organizationId),
+          eq(schema.agendaOfferCursor.conversationId, conversationId)
+        )
+      );
+    await db
+      .delete(schema.offeredSlot)
+      .where(
+        and(
+          eq(schema.offeredSlot.organizationId, organizationId),
+          eq(schema.offeredSlot.conversationId, conversationId)
+        )
+      );
+  }
+
   return updated[0] ?? null;
 }
