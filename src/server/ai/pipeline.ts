@@ -1,4 +1,4 @@
-import { asc, desc, eq, isNull } from "drizzle-orm";
+import { asc, desc, eq, gte, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -126,11 +126,18 @@ export async function runAgentTurn(
     .select()
     .from(schema.message)
     .where(
-      scoped(
-        schema.message.organizationId,
-        organizationId,
-        eq(schema.message.conversationId, conversationId)
-      )
+      conversation.aiContextResetAt
+        ? scoped(
+            schema.message.organizationId,
+            organizationId,
+            eq(schema.message.conversationId, conversationId),
+            gte(schema.message.createdAt, conversation.aiContextResetAt)
+          )
+        : scoped(
+            schema.message.organizationId,
+            organizationId,
+            eq(schema.message.conversationId, conversationId)
+          )
     )
     .orderBy(desc(schema.message.createdAt))
     .limit(20);
