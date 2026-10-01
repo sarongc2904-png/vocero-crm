@@ -66,11 +66,49 @@ function searchable(text: string): string {
     .trim();
 }
 
-function parseSelectedMinutes(text: string): number[] | null {
+type ParsedSelection =
+  | { kind: "ordinal"; index: number | "last" }
+  | { kind: "minute"; candidates: number[] }
+  | { kind: "hour"; candidates: number[] };
+
+function parseSelection(text: string): ParsedSelection | null {
+  const normalized = normalize(text);
+  const ordinal =
+    /\b(?:la|el)\s+(primera|primero|segunda|segundo|tercera|tercero|cuarta|cuarto|ultima|ultimo)\b/.exec(
+      normalized
+    );
+  if (ordinal) {
+    const positions: Record<string, number | "last"> = {
+      primera: 0,
+      primero: 0,
+      segunda: 1,
+      segundo: 1,
+      tercera: 2,
+      tercero: 2,
+      cuarta: 3,
+      cuarto: 3,
+      ultima: "last",
+      ultimo: "last",
+    };
+    return { kind: "ordinal", index: positions[ordinal[1]!]! };
+  }
+
   const match = /\b(\d{1,2}):([0-5]\d)\s*(a\.?\s*m\.?|p\.?\s*m\.?)?\b/i.exec(
     text
   );
-  if (!match) return null;
+  if (!match) {
+    const hourOnly =
+      /\b(?:(?:la|el)\s+de(?:\s+las)?|a\s+las)\s+(\d{1,2})\b/.exec(
+        normalized
+      );
+    if (!hourOnly) return null;
+    const hour = Number(hourOnly[1]);
+    if (hour > 23) return null;
+    if (hour >= 13 || hour === 0 || hour === 12) {
+      return { kind: "hour", candidates: [hour] };
+    }
+    return { kind: "hour", candidates: [hour, hour + 12] };
+  }
 
   const hour = Number(match[1]);
   const minute = Number(match[2]);
@@ -81,16 +119,19 @@ function parseSelectedMinutes(text: string): number[] | null {
     if (hour < 1 || hour > 12) return null;
     const hour24 =
       meridiem === "pm" ? (hour === 12 ? 12 : hour + 12) : hour === 12 ? 0 : hour;
-    return [hour24 * 60 + minute];
+    return { kind: "minute", candidates: [hour24 * 60 + minute] };
   }
 
   if (hour >= 13 || hour === 0 || hour === 12) {
-    return [hour * 60 + minute];
+    return { kind: "minute", candidates: [hour * 60 + minute] };
   }
 
   // Sin am/pm, solo son candidatos los dos relojes posibles. La ventana que
   // el backend acaba de mostrar decide cuál existe; nunca se elige por intuición.
-  return [hour * 60 + minute, (hour + 12) * 60 + minute];
+  return {
+    kind: "minute",
+    candidates: [hour * 60 + minute, (hour + 12) * 60 + minute],
+  };
 }
 
 function minutesInTz(startUtc: string, timezone: string): number | null {
@@ -188,12 +229,26 @@ export function resolveOfferedTimeSelection(input: {
   shownAt: Date;
 }): OfferedTimeSelectionResolution {
   const shownOffers = offersShownInLastMessage(input);
-  const selectedMinutes = parseSelectedMinutes(input.text);
-  if (!selectedMinutes) return { kind: "not_time", shownOffers };
+  const selection = parseSelection(input.text);
+  if (!selection) return { kind: "not_time", shownOffers };
+
+  if (selection.kind === "ordinal") {
+    const index =
+      selection.index === "last"
+        ? shownOffers.length - 1
+        : selection.index;
+    const offer = shownOffers[index];
+    return offer
+      ? { kind: "match", offer, shownOffers }
+      : { kind: "not_found", shownOffers };
+  }
 
   const matches = shownOffers.filter((offer) => {
     const minute = minutesInTz(offer.startUtc, input.timezone);
-    return minute !== null && selectedMinutes.includes(minute);
+    if (minute === null) return false;
+    return selection.kind === "minute"
+      ? selection.candidates.includes(minute)
+      : selection.candidates.includes(Math.floor(minute / 60));
   });
   const unique = [...new Map(matches.map((offer) => [offer.startUtc, offer])).values()];
 

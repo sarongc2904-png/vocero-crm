@@ -130,6 +130,57 @@ describe("resolveOfferedTimeSelection — incidente 2:20 → 14:20", () => {
     });
   });
 
+  it.each([
+    ["la primera", "2026-09-30T17:20:00.000Z"],
+    ["la segunda", "2026-09-30T18:00:00.000Z"],
+    ["la última", "2026-09-30T19:20:00.000Z"],
+  ])("%s selecciona por posición en la ventana mostrada", (text, startUtc) => {
+    const result = resolveOfferedTimeSelection({
+      text,
+      offers: incidentOffers,
+      lastOutboundText: incidentWindow,
+      timezone,
+      shownAt,
+    });
+    expect(result).toMatchObject({ kind: "match", offer: { startUtc } });
+  });
+
+  it.each(["el de las 11", "a las 11"])(
+    "%s resuelve una hora sin minutos cuando es inequívoca",
+    (text) => {
+      const startUtc = "2026-09-30T16:00:00.000Z";
+      const result = resolveOfferedTimeSelection({
+        text,
+        offers: [{ startUtc, label: "mié 30 sep, 11:00" }],
+        lastOutboundText: [
+          "Miércoles, 30 de septiembre",
+          "• 11:00",
+        ].join("\n"),
+        timezone,
+        shownAt,
+      });
+      expect(result).toMatchObject({ kind: "match", offer: { startUtc } });
+    }
+  );
+
+  it("no elige arbitrariamente una hora sin minutos con varias coincidencias", () => {
+    const result = resolveOfferedTimeSelection({
+      text: "a las 11",
+      offers: [
+        { startUtc: "2026-09-30T16:00:00.000Z", label: "11:00" },
+        { startUtc: "2026-09-30T16:30:00.000Z", label: "11:30" },
+      ],
+      lastOutboundText: [
+        "Miércoles, 30 de septiembre",
+        "• 11:00",
+        "• 11:30",
+      ].join("\n"),
+      timezone,
+      shownAt,
+    });
+    expect(result.kind).toBe("ambiguous");
+  });
+
   it("forma la confirmación factual pedida por producto", () => {
     expect(
       selectedOfferConfirmationLabel(

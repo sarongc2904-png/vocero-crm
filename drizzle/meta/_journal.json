@@ -225,6 +225,13 @@
       "when": 1790792000000,
       "tag": "0031_agenda_offer_cursor",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790878400000,
+      "tag": "0032_durable_job_lease_ownership",
+      "breakpoints": true
     }
   ]
 }

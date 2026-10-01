@@ -1317,6 +1317,7 @@ export const durableJob = pgTable(
     dueAt: timestamp("due_at").notNull().defaultNow(),
     claimedRequestAt: timestamp("claimed_request_at"),
     leaseUntil: timestamp("lease_until"),
+    leaseToken: text("lease_token"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
     deadLetterAt: timestamp("dead_letter_at"),

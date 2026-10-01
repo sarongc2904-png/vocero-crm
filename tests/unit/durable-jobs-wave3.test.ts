@@ -46,6 +46,8 @@ describe("Wave 3 - durable agent/Lab execution", () => {
 
     expect(queue.toLowerCase()).toContain("for update skip locked");
     expect(queue).toContain("lease_until");
+    expect(queue).toContain("lease_token = ${leaseToken}");
+    expect(queue).toContain("j.lease_token");
     expect(queue).toContain("claimed_request_at");
     expect(queue).toContain("on conflict (conversation_id)");
     expect(queue).toContain("on conflict (run_id)");
@@ -68,6 +70,20 @@ describe("Wave 3 - durable agent/Lab execution", () => {
       "await maybeRunAgentTurn(organizationId, conversation.id)"
     );
     expect(worker).toContain("await completeLabJob(job)");
+  });
+
+  it("exige ownership por lease_token al completar o liberar durable jobs", () => {
+    const queue = source("src/server/jobs/queue.ts");
+    const schema = source("src/lib/db/schema.ts");
+    const migration = source("drizzle/0032_durable_job_lease_ownership.sql");
+    const worker = source("scripts/release-gate-worker.mjs");
+
+    expect(schema).toContain('leaseToken: text("lease_token")');
+    expect(migration).toContain('ADD COLUMN "lease_token" text');
+    expect(queue).toContain("leaseToken: string");
+    expect(queue).toContain("leaseToken: row.lease_token");
+    expect(queue.match(/and lease_token = \$\{job\.leaseToken\}/g)).toHaveLength(5);
+    expect(worker.match(/and lease_token = \$\{job\.lease_token\}/g)).toHaveLength(2);
   });
 
   it("aplica backoff acotado al reintentar jobs", () => {
@@ -114,13 +130,24 @@ describe("Wave 3 - durable agent/Lab execution", () => {
     ).toBe(false);
   });
 
-  it("serializa instantes antes de cruzar el boundary postgres-js", () => {
+  it("mantiene instantes SQL exactos al cruzar el boundary postgres-js", () => {
     const queue = source("src/server/jobs/queue.ts");
-    expect(queue).toContain("const dueAtIso = dueAt.toISOString()");
-    expect(queue).toContain("if (typeof value === \"string\") return value");
+
     expect(queue).toContain(
-      "const claimedRequestAtExact = job.claimedRequestAt"
+      "now() + (${delay} * interval '1 millisecond')"
     );
+    expect(queue).toContain(
+      "now() + (${retryDelay} * interval '1 millisecond')"
+    );
+    expect(queue).toContain("if (typeof value === \"string\") return value");
+    expect(queue).toContain("requestedAt: exactSqlTimestamp(row.requested_at)");
+    expect(queue).toContain(
+      "claimedRequestAt: exactSqlTimestamp(row.claimed_request_at)"
+    );
+    expect(queue).toContain("requested_at <= claimed_request_at");
+    expect(queue).not.toContain("new Date(row.requested_at)");
+    expect(queue).not.toContain("new Date(row.claimed_request_at)");
+    expect(queue).not.toContain("const dueAtIso = dueAt.toISOString()");
     expect(queue).not.toContain("due_at = ${dueAt},");
     expect(queue).not.toContain("requested_at <= ${job.claimedRequestAt}");
   });
