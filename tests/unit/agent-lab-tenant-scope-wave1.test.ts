@@ -13,7 +13,9 @@ describe("Wave 1 - tenant scope audit", () => {
     const text = source("src/server/ai/pipeline.ts");
     expect(text).toContain("expectedOrganizationId?: string");
     expect(text).toContain("schema.conversation.organizationId,\n            expectedOrganizationId");
-    expect(text).toContain("schema.message.organizationId,\n        organizationId");
+    expect(text).toMatch(
+      /schema\.message\.organizationId,\s*organizationId/
+    );
   });
 
   it("handoff, sandbox outbound y notas exigen organizationId", () => {
