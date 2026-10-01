@@ -28,6 +28,12 @@ function runWorker(mode) {
   return result.stdout.trim().split(/\r?\n/).at(-1);
 }
 
+function runWorkerJson(mode) {
+  const output = runWorker(mode);
+  assert.notEqual(output, "NONE", `${mode} no reclamó ningún job`);
+  return JSON.parse(output);
+}
+
 async function verifyUpgradePath() {
   const parsed = new URL(url);
   const database = `vocero_upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -213,6 +219,115 @@ try {
   ok("proceso nuevo recupera lease expirado", runWorker("recover-agent") === jobId);
   ok("agent_turn finaliza una sola vez", (await sql`select 1 from durable_job where id = ${jobId}`).length === 0 && runWorker("recover-agent") === "NONE");
 
+  const ownershipJobId = `job_ownership_${suffix}`;
+  await sql`
+    insert into durable_job (id, kind, organization_id, conversation_id, due_at)
+    values (${ownershipJobId}, 'agent_turn', ${orgA}, ${conversationA}, now())
+  `;
+  const workerA = runWorkerJson("claim-agent-with-token");
+  ok(
+    "worker A reclama durable_job con ownership",
+    workerA.id === ownershipJobId && Boolean(workerA.lease_token)
+  );
+  await sql`
+    update durable_job
+    set lease_until = '-infinity'::timestamp,
+        due_at = least(due_at, now())
+    where id = ${ownershipJobId}
+  `;
+  const workerB = runWorkerJson("claim-agent-with-token");
+  ok(
+    "worker B recupera el mismo durable_job",
+    workerB.id === ownershipJobId && Boolean(workerB.lease_token)
+  );
+  ok(
+    "cada reclamación recibe un lease_token distinto",
+    workerA.lease_token !== workerB.lease_token
+  );
+
+  const staleDelete = await sql`
+    delete from durable_job
+    where id = ${ownershipJobId}
+      and organization_id = ${orgA}
+      and lease_token = ${workerA.lease_token}
+    returning id
+  `;
+  const ownedByB = await sql`
+    select lease_token, lease_until::text, due_at::text, dead_letter_at
+    from durable_job
+    where id = ${ownershipJobId}
+  `;
+  ok(
+    "worker A stale no puede borrar el job de B",
+    staleDelete.length === 0 &&
+      ownedByB.length === 1 &&
+      ownedByB[0].lease_token === workerB.lease_token
+  );
+
+  const staleRetry = await sql`
+    update durable_job
+    set lease_until = null,
+        lease_token = null,
+        claimed_request_at = null,
+        due_at = now() + interval '5 seconds',
+        last_error = 'stale retry',
+        updated_at = now()
+    where id = ${ownershipJobId}
+      and organization_id = ${orgA}
+      and lease_token = ${workerA.lease_token}
+    returning id
+  `;
+  const afterStaleRetry = await sql`
+    select lease_token, lease_until::text, due_at::text, dead_letter_at
+    from durable_job
+    where id = ${ownershipJobId}
+  `;
+  ok(
+    "worker A stale no puede liberar ni reprogramar el job de B",
+    staleRetry.length === 0 &&
+      afterStaleRetry[0].lease_token === workerB.lease_token &&
+      afterStaleRetry[0].lease_until === ownedByB[0].lease_until &&
+      afterStaleRetry[0].due_at === ownedByB[0].due_at
+  );
+
+  const staleDeadLetter = await sql`
+    update durable_job
+    set lease_until = null,
+        lease_token = null,
+        claimed_request_at = null,
+        dead_letter_at = now(),
+        last_error = 'stale dead-letter',
+        updated_at = now()
+    where id = ${ownershipJobId}
+      and organization_id = ${orgA}
+      and lease_token = ${workerA.lease_token}
+    returning id
+  `;
+  const afterStaleDeadLetter = await sql`
+    select lease_token, dead_letter_at
+    from durable_job
+    where id = ${ownershipJobId}
+  `;
+  ok(
+    "worker A stale no puede mandar el job de B a dead-letter",
+    staleDeadLetter.length === 0 &&
+      afterStaleDeadLetter[0].lease_token === workerB.lease_token &&
+      afterStaleDeadLetter[0].dead_letter_at === null
+  );
+
+  const ownerDelete = await sql`
+    delete from durable_job
+    where id = ${ownershipJobId}
+      and organization_id = ${orgA}
+      and lease_token = ${workerB.lease_token}
+    returning id
+  `;
+  ok(
+    "worker B completa con su lease_token y elimina la fila",
+    ownerDelete.length === 1 &&
+      (await sql`select 1 from durable_job where id = ${ownershipJobId}`).length === 0
+  );
+
   const automationId = `auto_restart_${suffix}`;
   await sql`
     insert into scheduled_automation
@@ -234,7 +349,7 @@ try {
   const poisonId = `job_poison_${suffix}`;
   await sql`
     insert into durable_job (id, kind, organization_id, conversation_id, due_at, attempts)
-    values (${poisonId}, 'agent_turn', ${orgA}, ${conversationA}, now(), 7)
+    values (${poisonId}, 'agent_turn', ${orgA}, ${conversationA}, '-infinity'::timestamp, 7)
   `;
   ok("poison job alcanza dead-letter sin loop", runWorker("dead-letter-agent") === poisonId);
   ok("dead-letter queda persistido e inreclamable", (await sql`select 1 from durable_job where id = ${poisonId} and dead_letter_at is not null and attempts = 8`).length === 1 && runWorker("recover-agent") === "NONE");

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { scoped } from "@/lib/db/tenant";
 import { getDb, getSql, schema } from "@/lib/db";
@@ -14,6 +15,7 @@ export type DurableJob = {
   runId: string | null;
   requestedAt: string;
   claimedRequestAt: string;
+  leaseToken: string;
   attempts: number;
 };
 
@@ -128,6 +130,7 @@ export async function claimNextJob(
   kind: DurableJobKind
 ): Promise<DurableJob | null> {
   const sql = getSql();
+  const leaseToken = randomUUID();
   const rows = await sql`
     with candidate as (
       select id
@@ -143,6 +146,7 @@ export async function claimNextJob(
     )
     update durable_job as j
     set lease_until = now() + make_interval(mins => ${LEASE_MINUTES}),
+        lease_token = ${leaseToken},
         claimed_request_at = j.requested_at,
         attempts = j.attempts + 1,
         updated_at = now()
@@ -156,6 +160,7 @@ export async function claimNextJob(
       j.run_id,
       j.requested_at,
       j.claimed_request_at,
+      j.lease_token,
       j.attempts
   `;
   const row = rows[0] as
@@ -167,6 +172,7 @@ export async function claimNextJob(
         run_id: string | null;
         requested_at: Date | string;
         claimed_request_at: Date | string;
+        lease_token: string;
         attempts: number;
       }
     | undefined;
@@ -180,6 +186,7 @@ export async function claimNextJob(
     runId: row.run_id,
     requestedAt: exactSqlTimestamp(row.requested_at),
     claimedRequestAt: exactSqlTimestamp(row.claimed_request_at),
+    leaseToken: row.lease_token,
     attempts: row.attempts,
   };
 }
@@ -192,6 +199,7 @@ export async function completeAgentJob(job: DurableJob): Promise<void> {
     delete from durable_job
     where id = ${job.id}
       and organization_id = ${job.organizationId}
+      and lease_token = ${job.leaseToken}
       and requested_at <= claimed_request_at
     returning id
   `;
@@ -203,11 +211,13 @@ export async function completeAgentJob(job: DurableJob): Promise<void> {
   await sql`
     update durable_job
     set lease_until = null,
+        lease_token = null,
         claimed_request_at = null,
         due_at = least(due_at, now()),
         updated_at = now()
     where id = ${job.id}
       and organization_id = ${job.organizationId}
+      and lease_token = ${job.leaseToken}
   `;
 }
 
@@ -217,6 +227,7 @@ export async function completeLabJob(job: DurableJob): Promise<void> {
     delete from durable_job
     where id = ${job.id}
       and organization_id = ${job.organizationId}
+      and lease_token = ${job.leaseToken}
   `;
 }
 
@@ -240,24 +251,28 @@ export async function releaseFailedJob(
     await sql`
       update durable_job
       set lease_until = null,
+          lease_token = null,
           claimed_request_at = null,
           last_error = ${detail},
           dead_letter_at = now(),
           updated_at = now()
       where id = ${job.id}
         and organization_id = ${job.organizationId}
+        and lease_token = ${job.leaseToken}
     `;
     return "dead_letter";
   }
   await sql`
     update durable_job
     set lease_until = null,
+        lease_token = null,
         claimed_request_at = null,
         due_at = now() + (${retryDelay} * interval '1 millisecond'),
         last_error = ${detail},
         updated_at = now()
     where id = ${job.id}
       and organization_id = ${job.organizationId}
+      and lease_token = ${job.leaseToken}
   `;
   return "retry";
 }

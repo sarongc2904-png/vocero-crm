@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 
 const [mode] = process.argv.slice(2);
@@ -7,6 +8,7 @@ if (!url || !mode) process.exit(2);
 const sql = postgres(url, { max: 1, onnotice: () => {} });
 
 async function claimAgent() {
+  const leaseToken = randomUUID();
   const rows = await sql`
     with candidate as (
       select id from durable_job
@@ -21,12 +23,13 @@ async function claimAgent() {
     )
     update durable_job j
     set lease_until = now() + interval '10 minutes',
+        lease_token = ${leaseToken},
         claimed_request_at = j.requested_at,
         attempts = j.attempts + 1,
         updated_at = now()
     from candidate
     where j.id = candidate.id
-    returning j.id, j.organization_id, j.attempts
+    returning j.id, j.organization_id, j.attempts, j.lease_token
   `;
   return rows[0] ?? null;
 }
@@ -61,9 +64,17 @@ try {
   } else if (mode === "recover-agent") {
     const job = await claimAgent();
     if (job) {
-      await sql`delete from durable_job where id = ${job.id} and organization_id = ${job.organization_id}`;
+      await sql`
+        delete from durable_job
+        where id = ${job.id}
+          and organization_id = ${job.organization_id}
+          and lease_token = ${job.lease_token}
+      `;
     }
     console.log(job?.id ?? "NONE");
+  } else if (mode === "claim-agent-with-token") {
+    const job = await claimAgent();
+    console.log(job ? JSON.stringify(job) : "NONE");
   } else if (mode === "claim-automation-crash") {
     const job = await claimAutomation();
     console.log(job?.id ?? "NONE");
@@ -83,8 +94,11 @@ try {
       await sql`
         update durable_job
         set lease_until = null, claimed_request_at = null,
-            last_error = 'release gate poison job', dead_letter_at = now(), updated_at = now()
-        where id = ${job.id} and organization_id = ${job.organization_id}
+            lease_token = null, last_error = 'release gate poison job',
+            dead_letter_at = now(), updated_at = now()
+        where id = ${job.id}
+          and organization_id = ${job.organization_id}
+          and lease_token = ${job.lease_token}
       `;
     }
     console.log(job?.id ?? "NONE");
