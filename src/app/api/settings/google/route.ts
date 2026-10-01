@@ -3,6 +3,7 @@ import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import { auditPrivilegedAction } from "@/server/auth/audit";
 import { googleConnector } from "@/server/agenda/connectors/google";
+import { getGoogleOAuthConfig } from "@/server/agenda/connectors/google-oauth";
 import {
   deleteGoogleCredentials,
   getGoogleCredentials,
@@ -17,8 +18,10 @@ export const dynamic = "force-dynamic";
 export const GET = withOrgPermissions(["settings.read"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
   const creds = await getGoogleCredentials(session.organizationId);
-  if (!creds) return Response.json({ connection: null });
+  const oauthAvailable = Boolean(getGoogleOAuthConfig());
+  if (!creds) return Response.json({ connection: null, oauthAvailable });
   return Response.json({
+    oauthAvailable,
     connection: {
       status: creds.status,
       secretLast4: secretLast4(creds.clientSecret),

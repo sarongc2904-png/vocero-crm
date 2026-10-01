@@ -94,6 +94,7 @@ export function ConnectorCredentials({
   const [connection, setConnection] = useState<Connection | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [oauthAvailable, setOauthAvailable] = useState(false);
   const [message, setMessage] = useState<{
     kind: "ok" | "error";
     text: string;
@@ -106,7 +107,11 @@ export function ConnectorCredentials({
     void (async () => {
       const res = await fetch(`/api/settings/${connector}`).catch(() => null);
       if (!res?.ok) return;
-      const data = (await res.json()) as { connection: Connection | null };
+      const data = (await res.json()) as {
+        connection: Connection | null;
+        oauthAvailable?: boolean;
+      };
+      setOauthAvailable(Boolean(data.oauthAvailable));
       setConnection(data.connection);
       if (data.connection) setValues({ ...data.connection.fields });
     })();
@@ -162,14 +167,20 @@ export function ConnectorCredentials({
     <Card>
       <CardHeader>
         <CardTitle>Conectar {meta.label}</CardTitle>
-        <CardDescription>{help.title}.</CardDescription>
+        <CardDescription>
+          {connector === "google" && oauthAvailable
+            ? "Autoriza tu cuenta de Google; no necesitas copiar credenciales."
+            : `${help.title}.`}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <ul className="list-disc space-y-1 pl-5 text-xs text-text-2">
-          {help.items.map((item, i) => (
-            <li key={i}>{item}</li>
-          ))}
-        </ul>
+        {!(connector === "google" && oauthAvailable) && (
+          <ul className="list-disc space-y-1 pl-5 text-xs text-text-2">
+            {help.items.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        )}
 
         {connection?.status === "error" && (
           <p className="rounded-sm border border-danger-soft bg-danger-tint px-3 py-2 text-sm text-danger-text">
@@ -178,57 +189,87 @@ export function ConnectorCredentials({
           </p>
         )}
 
-        <div className="space-y-3">
-          {fields.map((f) => (
-            <div key={f.name} className="space-y-1.5">
-              <Label htmlFor={`${connector}-${f.name}`}>{f.label}</Label>
-              <Input
-                id={`${connector}-${f.name}`}
-                type={f.secret ? "password" : "text"}
-                value={values[f.name] ?? ""}
-                placeholder={
-                  f.secret && connection?.secretLast4
-                    ? `•••• ${connection.secretLast4}`
-                    : f.placeholder
-                }
-                onChange={(e) =>
-                  setValues((v) => ({ ...v, [f.name]: e.target.value }))
-                }
-              />
-              {f.help && <p className="text-xs text-text-3">{f.help}</p>}
+        {connector === "google" && oauthAvailable ? (
+          <div className="space-y-3">
+            <p className="text-sm text-text-2">
+              {connection
+                ? "Google Calendar está conectado a esta organización."
+                : "Conecta tu cuenta de Google sin copiar Client ID, secretos ni refresh tokens."}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                onClick={() => window.location.assign("/api/settings/google/oauth/start")}
+                disabled={busy}
+              >
+                {connection ? "Reconectar Google Calendar" : "Conectar Google Calendar"}
+              </Button>
+              {connection && (
+                <button
+                  type="button"
+                  onClick={disconnect}
+                  disabled={busy}
+                  className="text-sm text-text-3 hover:text-foreground"
+                >
+                  Desconectar
+                </button>
+              )}
             </div>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-3">
+              {fields.map((f) => (
+                <div key={f.name} className="space-y-1.5">
+                  <Label htmlFor={`${connector}-${f.name}`}>{f.label}</Label>
+                  <Input
+                    id={`${connector}-${f.name}`}
+                    type={f.secret ? "password" : "text"}
+                    value={values[f.name] ?? ""}
+                    placeholder={
+                      f.secret && connection?.secretLast4
+                        ? `•••• ${connection.secretLast4}`
+                        : f.placeholder
+                    }
+                    onChange={(e) =>
+                      setValues((v) => ({ ...v, [f.name]: e.target.value }))
+                    }
+                  />
+                  {f.help && <p className="text-xs text-text-3">{f.help}</p>}
+                </div>
+              ))}
+            </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="outline" onClick={() => submit("test")} disabled={busy}>
-            Probar
-          </Button>
-          <Button onClick={() => submit("save")} disabled={busy}>
-            {connection ? "Actualizar" : "Conectar"}
-          </Button>
-          {connection && (
-            <button
-              type="button"
-              onClick={disconnect}
-              disabled={busy}
-              className="text-sm text-text-3 hover:text-foreground"
-            >
-              Desconectar
-            </button>
-          )}
-          {message && (
-            <span
-              className={
-                message.kind === "ok"
-                  ? "text-sm text-brand-text"
-                  : "text-sm text-destructive"
-              }
-            >
-              {message.text}
-            </span>
-          )}
-        </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button variant="outline" onClick={() => submit("test")} disabled={busy}>
+                Probar
+              </Button>
+              <Button onClick={() => submit("save")} disabled={busy}>
+                {connection ? "Actualizar" : "Conectar"}
+              </Button>
+              {connection && (
+                <button
+                  type="button"
+                  onClick={disconnect}
+                  disabled={busy}
+                  className="text-sm text-text-3 hover:text-foreground"
+                >
+                  Desconectar
+                </button>
+              )}
+              {message && (
+                <span
+                  className={
+                    message.kind === "ok"
+                      ? "text-sm text-brand-text"
+                      : "text-sm text-destructive"
+                  }
+                >
+                  {message.text}
+                </span>
+              )}
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );
