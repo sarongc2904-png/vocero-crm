@@ -43,13 +43,15 @@ export async function POST(req: Request) {
   const conv = rows[0];
   if (!conv) return apiError(404, "not_found", "Conversación no encontrada");
 
+  const now = new Date();
   await db
     .update(schema.conversation)
     .set({
       aiEnabled: true,
       handoffAt: null,
       handoffReason: null,
-      updatedAt: new Date(),
+      aiContextResetAt: now,
+      updatedAt: now,
     })
     .where(
       and(
