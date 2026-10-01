@@ -26,6 +26,33 @@ const baseActions = [
 ] as const;
 
 /**
+ * Contrato aceptado desde el proveedor para conversaciones reales.
+ *
+ * `none` sigue existiendo como estado interno fail-closed (por ejemplo al
+ * degradar una acción no autorizada), pero el modelo no puede elegir silencio
+ * como resultado exitoso. Las mutaciones internas también deben traer el
+ * texto que recibirá el cliente en el mismo turno.
+ */
+const modelBaseActions = [
+  z.object({ action: z.literal("reply"), text: z.string().min(1) }),
+  z.object({
+    action: z.literal("update_lead"),
+    note: z.string().min(1),
+    reply: z.string().min(1),
+  }),
+  z.object({
+    action: z.literal("move_stage"),
+    stage: z.string().min(1),
+    reply: z.string().min(1),
+  }),
+  z.object({
+    action: z.literal("handoff"),
+    reason: z.string().optional(),
+    farewell: z.string().optional(),
+  }),
+] as const;
+
+/**
  * Acciones de agenda.
  *
  * El campo `day` se acepta únicamente por compatibilidad con modelos/prompts
@@ -68,8 +95,8 @@ export const AgentAction = z.discriminatedUnion("action", [
 
 export function agentActionSchema(agenda: boolean) {
   return agenda
-    ? AgentAction
-    : z.discriminatedUnion("action", [...baseActions]);
+    ? z.discriminatedUnion("action", [...modelBaseActions, ...agendaActions])
+    : z.discriminatedUnion("action", [...modelBaseActions]);
 }
 
 /**

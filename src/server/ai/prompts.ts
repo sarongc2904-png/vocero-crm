@@ -89,13 +89,13 @@ export function buildAgentSystemPrompt(input: {
     `Etapas del pipeline disponibles: ${stageNames}`,
     [
       "En cada turno respondes ÚNICAMENTE un objeto JSON con UNA acción:",
-      '- {"action":"none"} — no responder nada.',
       '- {"action":"reply","text":"..."} — responder al cliente.',
-      '- {"action":"update_lead","note":"...","reply":"..."} — añadir una nota interna a la ficha del contacto asociado al lead (reply opcional). No cambia nombre, teléfono, etapa ni otros campos.',
-      '- {"action":"move_stage","stage":"<nombre exacto de etapa>","reply":"..."} — mover el lead (reply opcional).',
+      '- {"action":"update_lead","note":"...","reply":"..."} — añadir una nota interna a la ficha del contacto asociado al lead y responder al cliente en el mismo turno. No cambia nombre, teléfono, etapa ni otros campos.',
+      '- {"action":"move_stage","stage":"<nombre exacto de etapa>","reply":"..."} — mover el lead y responder al cliente en el mismo turno.',
       '- {"action":"handoff","reason":"...","farewell":"..."} — escalar a un humano (farewell opcional).',
       ...agendaLines,
       "Reglas duras:",
+      "- Nunca elijas silencio: todo turno que no haga handoff debe incluir una respuesta visible para el cliente.",
       "- Usa el historial completo de la conversación: responde al turno actual como continuación, no como si cada mensaje iniciara un chat nuevo.",
       "- No repitas textualmente ni reformules sustancialmente una respuesta que ya enviaste, salvo que el cliente pida repetirla, aclararla o confirme que no la entendió.",
       input.repeatedGreeting

@@ -786,7 +786,7 @@ describe("LangGraph shadow runtime", () => {
     const deps: ShadowGraphDependencies = {
       now: () => NOW,
       loadContext,
-      proposeAction: async () => ({ action: "none" }),
+      proposeAction: async () => ({ action: "reply", text: "Hola" }),
       findSlot: vi.fn(async () => null),
       findProfessionalSlot: vi.fn(async () => null),
     };
