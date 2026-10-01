@@ -5,6 +5,7 @@ import { apiError, parseBody } from "@/lib/api";
 import { authenticateBotRequest } from "@/server/bot/auth";
 import { publish } from "@/server/events/bus";
 import { moveLeadToStage } from "@/server/leads/stage-history";
+import { updateConversation } from "@/server/inbox/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -43,22 +44,10 @@ export async function POST(req: Request) {
   const conv = rows[0];
   if (!conv) return apiError(404, "not_found", "Conversación no encontrada");
 
-  const now = new Date();
-  await db
-    .update(schema.conversation)
-    .set({
-      aiEnabled: true,
-      handoffAt: null,
-      handoffReason: null,
-      aiContextResetAt: now,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(schema.conversation.organizationId, organizationId),
-        eq(schema.conversation.id, conv.id)
-      )
-    );
+  await updateConversation(organizationId, conv.id, {
+    aiEnabled: true,
+    reactivate: true,
+  });
 
   // Etapa al inicio del funnel (best-effort: sin etapas no revienta el reset).
   try {
