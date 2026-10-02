@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Eye, FileText, Plus, Sparkles, Trash2, Upload } from "lucide-react";
+import { Check, Eye, FileText, Plus, Settings2, Sparkles, Trash2, Upload } from "lucide-react";
+import { AgentWizard } from "@/components/agent/agent-wizard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,6 +60,7 @@ export function AgentClient() {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [kbSize, setKbSize] = useState<{ chars: number; warnAt: number; warning: boolean } | null>(null);
   const [saved, setSaved] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const refetch = useCallback(async () => {
     const [p, kb, size, docs] = await Promise.all([
@@ -89,14 +91,42 @@ export function AgentClient() {
   }
 
   async function saveProfile(patch: Partial<Profile>) {
-    await fetch("/api/agent/profile", {
+    const response = await fetch("/api/agent/profile", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
-    }).catch(() => null);
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.error?.message ?? "No se pudo guardar el perfil");
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-    void refetch();
+    await refetch();
+  }
+
+  if (wizardOpen) {
+    return (
+      <div className="h-full overflow-y-auto">
+        <AgentWizard
+          profile={profile}
+          entries={entries}
+          documents={documents}
+          aiConfigured={aiConfigured}
+          onClose={() => setWizardOpen(false)}
+          onSaveProfile={saveProfile}
+          onChanged={refetch}
+          knowledgePanel={
+            <KbSection
+              entries={entries}
+              documents={documents}
+              kbSize={kbSize}
+              onChanged={() => void refetch()}
+            />
+          }
+        />
+      </div>
+    );
   }
 
   return (
@@ -104,6 +134,9 @@ export function AgentClient() {
       <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-6 sm:py-4">
         <h2 className="text-[17px] font-bold tracking-tight">Agente IA</h2>
         <div className="flex items-center gap-3">
+          <Button size="sm" variant="outline" onClick={() => setWizardOpen(true)}>
+            <Settings2 className="h-4 w-4" /> Configurar agente
+          </Button>
           {saved && <span className="text-xs text-primary">Guardado ✓</span>}
           <span className="text-sm text-muted-foreground">
             {profile.enabled ? "Encendido" : "Apagado"}
@@ -113,7 +146,7 @@ export function AgentClient() {
             aria-checked={profile.enabled}
             aria-label="Agente encendido"
             disabled={!aiConfigured}
-            onClick={() => void saveProfile({ enabled: !profile.enabled })}
+            onClick={() => void saveProfile({ enabled: !profile.enabled }).catch(() => null)}
             className={`relative h-6 w-11 rounded-full transition-colors disabled:opacity-40 ${
               profile.enabled ? "bg-brand" : "bg-border-strong"
             }`}
