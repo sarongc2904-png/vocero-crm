@@ -75,6 +75,8 @@ const envSchema = z.object({
   BOT_API_KEY: z.string().optional(),
   // 008: volumen local de adjuntos (constitución II: sin S3/R2).
   MEDIA_DIR: z.string().default("./.dev-media"),
+  // Documentos internos de conocimiento. Separado de los adjuntos de WhatsApp.
+  KNOWLEDGE_DIR: z.string().default("./.dev-knowledge"),
   NODE_ENV: z.string().default("development"),
 });
 
