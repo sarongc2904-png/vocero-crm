@@ -101,13 +101,13 @@ describe("A no ve ni edita KB / perfil de B", () => {
 
   it("GET /api/kb/size solo cuenta KB de la org de la sesión", async () => {
     const { GET } = await import("@/app/api/kb/size/route");
-    await GET(new Request("http://x/api"));
+    await (GET as () => Promise<Response>)();
     expect(render(h.wheres[0]).params).toContain(ORG_A);
   });
 
   it("GET /api/agent/profile lee solo el perfil de la org de la sesión", async () => {
     const { GET } = await import("@/app/api/agent/profile/route");
-    const res = await GET(new Request("http://x/api"));
+    const res = await (GET as () => Promise<Response>)();
     expect(res.status).toBe(404);
     expect(render(h.wheres[0]).params).toContain(ORG_A);
   });
