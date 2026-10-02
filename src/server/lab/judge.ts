@@ -77,6 +77,17 @@ function actionTraceHasHandoff(actionTrace: AgentActionTrace): boolean {
   );
 }
 
+function actionTraceSupportsOfferedSlots(
+  message: string,
+  actionTrace: AgentActionTrace
+): boolean {
+  return actionTrace.some(
+    (trace) =>
+      trace.observedActions.includes("offer_slots") &&
+      trace.agentMessages.includes(message)
+  );
+}
+
 function normalizeForSafetyCheck(text: string): string {
   return text
     .normalize("NFD")
@@ -186,22 +197,38 @@ function normalizeVerdictConsistency(input: {
       }
     }
 
-    if (finding.tipo === "alucinacion" && hasHandoff) {
-      const citedAgentMessages = findingAgentEvidence(finding, input.transcript);
-      const handoffClaim = citedAgentMessages.some((message) => {
-        const value = normalizeForSafetyCheck(message);
-        return (
-          /\b(voy a|puedo|te puedo|prefieres que te)\b.{0,50}\b(escalar|transferir|pasar|comunicar)\b/.test(
-            value
-          ) ||
-          /\b(asesor|persona|equipo)\b.{0,50}\b(continu|atender|contact|comunicar)\b/.test(
-            value
-          )
-        );
-      });
+    if (finding.tipo === "alucinacion") {
+      const citedAgentMessages = findingAgentEvidence(
+        finding,
+        input.transcript
+      );
 
-      if (handoffClaim) {
+      const backedByRealAvailability =
+        citedAgentMessages.length > 0 &&
+        citedAgentMessages.every((message) =>
+          actionTraceSupportsOfferedSlots(message, input.actionTrace)
+        );
+
+      if (backedByRealAvailability) {
         return false;
+      }
+
+      if (hasHandoff) {
+        const handoffClaim = citedAgentMessages.some((message) => {
+          const value = normalizeForSafetyCheck(message);
+          return (
+            /\b(voy a|puedo|te puedo|prefieres que te)\b.{0,50}\b(escalar|transferir|pasar|comunicar)\b/.test(
+              value
+            ) ||
+            /\b(asesor|persona|equipo)\b.{0,50}\b(continu|atender|contact|comunicar)\b/.test(
+              value
+            )
+          );
+        });
+
+        if (handoffClaim) {
+          return false;
+        }
       }
     }
 

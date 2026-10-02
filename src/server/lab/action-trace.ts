@@ -6,7 +6,12 @@ export type AgentActionTraceEntry = {
   customerMessage: string;
   agentMessages: string[];
   observedActions: Array<
-    "reply" | "handoff" | "update_lead" | "move_stage" | "book_slot"
+    | "reply"
+    | "handoff"
+    | "update_lead"
+    | "move_stage"
+    | "offer_slots"
+    | "book_slot"
   >;
   result: {
     handoffReason: string | null;

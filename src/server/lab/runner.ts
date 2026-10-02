@@ -254,6 +254,7 @@ type TraceSnapshot = {
   contactNotes: string | null;
   stageId: string | null;
   bookingIds: string[];
+  offeredSlotIds: string[];
   agentMessages: string[];
 };
 
@@ -263,8 +264,14 @@ async function captureTraceSnapshot(input: {
   contactId: string;
 }): Promise<TraceSnapshot> {
   const db = getDb();
-  const [convRows, contactRows, leadRows, bookingRows, outboundRows] =
-    await Promise.all([
+  const [
+    convRows,
+    contactRows,
+    leadRows,
+    bookingRows,
+    offeredSlotRows,
+    outboundRows,
+  ] = await Promise.all([
       db
         .select({ handoffReason: schema.conversation.handoffReason })
         .from(schema.conversation)
@@ -305,6 +312,15 @@ async function captureTraceSnapshot(input: {
           )
         ),
       db
+        .select({ id: schema.offeredSlot.id })
+        .from(schema.offeredSlot)
+        .where(
+          and(
+            eq(schema.offeredSlot.organizationId, input.organizationId),
+            eq(schema.offeredSlot.conversationId, input.conversationId)
+          )
+        ),
+      db
         .select({ text: schema.message.text })
         .from(schema.message)
         .where(
@@ -322,6 +338,7 @@ async function captureTraceSnapshot(input: {
     contactNotes: contactRows[0]?.notes ?? null,
     stageId: leadRows[0]?.stageId ?? null,
     bookingIds: bookingRows.map((row) => row.id),
+    offeredSlotIds: offeredSlotRows.map((row) => row.id),
     agentMessages: outboundRows
       .map((row) => row.text)
       .filter((text): text is string => Boolean(text)),
@@ -346,6 +363,9 @@ function buildTraceEntry(input: {
   const bookingCreated = input.after.bookingIds.some(
     (id) => !input.before.bookingIds.includes(id)
   );
+  const offerSlotsChanged = input.after.offeredSlotIds.some(
+    (id) => !input.before.offeredSlotIds.includes(id)
+  );
   const handoffChanged =
     input.before.handoffReason !== input.after.handoffReason &&
     input.after.handoffReason !== null;
@@ -355,6 +375,7 @@ function buildTraceEntry(input: {
   if (handoffChanged) observedActions.push("handoff");
   if (contactNotesChanged) observedActions.push("update_lead");
   if (stageChanged) observedActions.push("move_stage");
+  if (offerSlotsChanged) observedActions.push("offer_slots");
   if (bookingCreated) observedActions.push("book_slot");
 
   return {
