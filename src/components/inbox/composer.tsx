@@ -151,9 +151,8 @@ export function Composer({
     let coords = parseCoords(coordsRaw);
     let formattedAddress: string | null = null;
 
-    // Un Plus Code compuesto (ej. "FFJW+PX Nuevo Laredo, Tamaulipas") no
-    // contiene lat/long. Se resuelve en servidor para que la API key de Maps
-    // nunca llegue al navegador.
+    // Enlaces compartidos/cortos de Google Maps y Plus Codes completos se
+    // resuelven en servidor sin depender de una API de pago.
     if (!coords) {
       const resolveRes = await fetch("/api/maps/resolve", {
         method: "POST",
@@ -168,7 +167,7 @@ export function Composer({
         setSending(false);
         setError(
           data?.error?.message ??
-            "No se pudo resolver la ubicación. Usa coordenadas o un Plus Code con ciudad."
+            "No se pudo resolver la ubicación. Comparte un enlace de Google Maps, coordenadas o un Plus Code completo."
         );
         return;
       }
@@ -308,11 +307,11 @@ export function Composer({
       {panel === "location" && (
         <div className="mb-2.5 flex flex-wrap items-end gap-2 rounded-md border bg-subtle p-2.5">
           <label className="min-w-0 flex-1 text-xs text-text-2">
-            Coordenadas, Plus Code o enlace de Google Maps
+            Coordenadas, Plus Code completo o enlace de Google Maps
             <input
               value={coordsRaw}
               onChange={(e) => setCoordsRaw(e.target.value)}
-              placeholder="FFJW+PX Nuevo Laredo, Tamaulipas"
+              placeholder="Pega aquí Compartir → Copiar enlace de Google Maps"
               className="mt-1 w-full rounded-md border border-border-strong bg-background px-2.5 py-1.5 text-sm outline-none transition-[border-color,box-shadow] focus:border-brand focus:ring-[3px] focus:ring-brand-soft"
             />
           </label>
