@@ -16,6 +16,14 @@ describe("resolución de ubicaciones sin API de pago", () => {
     ).toEqual({ latitude: 27.48187, longitude: -99.50516 });
   });
 
+  it("prefiere las coordenadas exactas del lugar sobre el viewport del mapa", () => {
+    expect(
+      parseCoordinates(
+        "https://www.google.com/maps/place/Elektra/@27.494449,-99.549372,17z/data=!4m6!3m5!1s0x0:0x0!8m2!3d27.497001!4d-99.546002!16s%2Fg%2F1"
+      )
+    ).toEqual({ latitude: 27.497001, longitude: -99.546002 });
+  });
+
   it("decodifica un Plus Code completo localmente", () => {
     const result = decodeFullPlusCode("849VCWC8+R9");
     expect(result).not.toBeNull();
