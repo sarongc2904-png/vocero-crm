@@ -5,7 +5,7 @@
  * objeto humano — "somos 4 personas" NO matchea (test unitario).
  */
 export const HANDOFF_BACKUP_REGEX =
-  /(hablar|comunicar|contactar)[\s\S]{0,40}?(asesor|humano|persona|alguien)|un asesor|atenci[oó]n humana/i;
+  /(hablar|comunicar|contactar)[\s\S]{0,40}?(asesor|humano|persona|alguien)|un asesor|atenci[oó]n humana|prefier[oa][\s\S]{0,60}?(asesor|humano|persona|alguien)|(?:que\s+)?me\s+(?:lo\s+)?(?:confirme|revise|atienda)[\s\S]{0,35}?(asesor|humano|persona|alguien)/i;
 
 export function matchesHandoffIntent(text: string): boolean {
   return HANDOFF_BACKUP_REGEX.test(text);

@@ -554,6 +554,9 @@ function HallazgoCard({
   const [respuesta, setRespuesta] = useState(hallazgo.sugerencia?.respuesta ?? "");
   const [applied, setApplied] = useState(false);
   const [saving, setSaving] = useState(false);
+  const canAddToKnowledge =
+    hallazgo.tipo === "alucinacion" ||
+    hallazgo.tipo === "fuera_de_kb";
 
   async function apply() {
     setSaving(true);
@@ -574,7 +577,7 @@ function HallazgoCard({
     <div className="rounded-md border border-warning-soft bg-warning-tint p-3">
       <div className="flex items-center justify-between">
         <Badge variant="warning">{TIPO_LABELS[hallazgo.tipo]}</Badge>
-        {hallazgo.sugerencia && !applied && !editing && (
+        {canAddToKnowledge && hallazgo.sugerencia && !applied && !editing && (
           <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
             Agregar al conocimiento
           </Button>
@@ -587,7 +590,7 @@ function HallazgoCard({
         <span className="font-medium text-foreground">Evidencia:</span>{" "}
         {hallazgo.evidencia}
       </p>
-      {editing && hallazgo.sugerencia && (
+      {editing && canAddToKnowledge && hallazgo.sugerencia && (
         <div className="mt-3 space-y-2 rounded-md border bg-card p-3">
           <div className="space-y-1">
             <Label htmlFor={`sug-q-${caseId}-${index}`}>Pregunta</Label>

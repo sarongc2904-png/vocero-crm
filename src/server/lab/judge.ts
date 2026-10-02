@@ -2,6 +2,10 @@ import { z } from "zod";
 import { chatJson } from "@/lib/ai";
 import { buildJudgePrompt } from "@/server/ai/prompts";
 import type { AgentActionTrace } from "@/server/lab/action-trace";
+import {
+  matchesConfiguredEscalation,
+  matchesHandoffIntent,
+} from "@/server/ai/handoff";
 
 export const EvidenceRef = z.discriminatedUnion("source", [
   z.object({
@@ -119,12 +123,24 @@ function findingAgentEvidence(
   );
 }
 
+function escalationRulesFromBehavior(behaviorText?: string): string | null {
+  if (!behaviorText) return null;
+
+  const line = behaviorText
+    .split("\n")
+    .find((value) => value.trim().toLowerCase().startsWith("escalado:"));
+
+  return line ? line.slice(line.indexOf(":") + 1).trim() : null;
+}
+
 function normalizeVerdictConsistency(input: {
   verdict: VerdictType;
   transcript: { role: "cliente" | "agente"; text: string }[];
   actionTrace: AgentActionTrace;
+  behaviorText?: string;
 }): VerdictType {
   const hasHandoff = actionTraceHasHandoff(input.actionTrace);
+  const escalationRules = escalationRulesFromBehavior(input.behaviorText);
 
   const hallazgos = input.verdict.hallazgos.filter((finding) => {
     // Si el backend observó un handoff real, no puede existir un hallazgo
@@ -132,6 +148,42 @@ function normalizeVerdictConsistency(input: {
     // action_trace, así que la consistencia se valida contra TODO el trace.
     if (finding.tipo === "debio_escalar" && hasHandoff) {
       return false;
+    }
+
+    if (finding.tipo === "handoff_innecesario") {
+      const citedHandoffs = finding.evidenceRefs.flatMap((ref) => {
+        if (ref.source !== "action_trace") return [];
+
+        const trace = input.actionTrace[ref.index];
+        if (!trace) return [];
+
+        const observed =
+          trace.observedActions.includes("handoff") ||
+          trace.result.handoffReason !== null;
+
+        return observed ? [trace] : [];
+      });
+
+      if (citedHandoffs.length === 0) {
+        return false;
+      }
+
+      const justified = citedHandoffs.some((trace) => {
+        if (trace.result.handoffReason === "cliente") return true;
+
+        if (matchesHandoffIntent(trace.customerMessage)) {
+          return true;
+        }
+
+        return matchesConfiguredEscalation(
+          trace.customerMessage,
+          escalationRules
+        );
+      });
+
+      if (justified) {
+        return false;
+      }
     }
 
     if (finding.tipo === "alucinacion" && hasHandoff) {
@@ -186,6 +238,7 @@ export function validateAndAnchorVerdict(input: {
   verdict: VerdictType;
   transcript: { role: "cliente" | "agente"; text: string }[];
   actionTrace: AgentActionTrace;
+  behaviorText?: string;
 }): { ok: true; verdict: VerdictType } | { ok: false; detail: string } {
   const messages = agentMessages(input.transcript);
 
@@ -234,6 +287,7 @@ export function validateAndAnchorVerdict(input: {
       verdict: input.verdict,
       transcript: input.transcript,
       actionTrace: input.actionTrace,
+      behaviorText: input.behaviorText,
     }),
   };
 }
@@ -283,6 +337,7 @@ export async function judgeCase(input: {
     verdict: result.data,
     transcript: input.transcript,
     actionTrace: input.actionTrace,
+    behaviorText: input.behaviorText,
   });
   if (!anchored.ok) {
     console.error(`[lab] evidencia inválida para ${input.personaKey}: ${anchored.detail}`);
