@@ -92,8 +92,16 @@ export const POST = withOrgPermissions(
     }
 
     const first = data.results[0];
-    const latitude = first?.geometry?.location?.lat;
-    const longitude = first?.geometry?.location?.lng;
+    if (!first) {
+      return apiError(
+        422,
+        "location_not_found",
+        "Google Maps no devolvió resultados para esa ubicación"
+      );
+    }
+
+    const latitude = first.geometry?.location?.lat;
+    const longitude = first.geometry?.location?.lng;
 
     if (
       typeof latitude !== "number" ||
