@@ -337,16 +337,16 @@ export function AgentWizard({
         {step === 0 && (
           <WizardCard title="Negocio" description="Información esencial que el agente puede usar al responder.">
             <Field label="Nombre del negocio">
-              <Input value={business.name} maxLength={120} onChange={(event) => setBusiness({ ...business, name: event.target.value })} />
+              <Input placeholder="Ej. Clínica Dental Sonrisa" value={business.name} maxLength={120} onChange={(event) => setBusiness({ ...business, name: event.target.value })} />
             </Field>
             <Field label="Descripción breve">
-              <Textarea rows={2} value={business.description} maxLength={1000} onChange={(event) => setBusiness({ ...business, description: event.target.value })} />
+              <Textarea rows={2} placeholder="Ej. [NOMBRE DEL NEGOCIO] ofrece [SERVICIOS PRINCIPALES] para [TIPO DE CLIENTE]." value={business.description} maxLength={1000} onChange={(event) => setBusiness({ ...business, description: event.target.value })} />
             </Field>
             <Field label="Qué vende o qué servicio ofrece">
-              <Textarea rows={2} value={business.offer} maxLength={1500} onChange={(event) => setBusiness({ ...business, offer: event.target.value })} />
+              <Textarea rows={2} placeholder="Ej. Limpiezas dentales, ortodoncia, resinas, blanqueamiento y consultas de valoración." value={business.offer} maxLength={1500} onChange={(event) => setBusiness({ ...business, offer: event.target.value })} />
             </Field>
             <Field label="Información esencial">
-              <Textarea rows={3} value={business.essentials} maxLength={3000} onChange={(event) => setBusiness({ ...business, essentials: event.target.value })} />
+              <Textarea rows={3} placeholder="Ej. [NOMBRE DEL NEGOCIO] atiende en [CIUDAD]. Horario: [HORARIO]. Para agendar, solicitar nombre, teléfono y servicio de interés." value={business.essentials} maxLength={3000} onChange={(event) => setBusiness({ ...business, essentials: event.target.value })} />
             </Field>
             <Button disabled={busy || !business.name.trim()} onClick={() => void withSave(saveBusiness, "Negocio guardado")}> <Save className="h-4 w-4" /> Guardar negocio</Button>
           </WizardCard>
@@ -354,15 +354,15 @@ export function AgentWizard({
 
         {step === 1 && (
           <WizardCard title="Tono y personalidad" description="Actualiza directamente el perfil actual del agente.">
-            <Field label="Nombre del agente"><Input maxLength={60} value={personality.name} onChange={(event) => setPersonality({ ...personality, name: event.target.value })} /></Field>
+            <Field label="Nombre del agente"><Input placeholder="Ej. Asistente de [NOMBRE DEL NEGOCIO]" maxLength={60} value={personality.name} onChange={(event) => setPersonality({ ...personality, name: event.target.value })} /></Field>
             <Field label="Tono">
               <div className="flex flex-wrap gap-2">
                 {TONES.map((tone) => <Button key={tone} type="button" size="sm" variant={personality.tone === tone ? "default" : "outline"} onClick={() => setPersonality({ ...personality, tone })}>{tone}</Button>)}
               </div>
-              <Input className="mt-2" maxLength={500} placeholder="O escribe un tono personalizado" value={personality.tone} onChange={(event) => setPersonality({ ...personality, tone: event.target.value })} />
+              <Input className="mt-2" maxLength={500} placeholder="Ej. Cercano, profesional y directo. Tratar al cliente de usted y responder de forma breve." value={personality.tone} onChange={(event) => setPersonality({ ...personality, tone: event.target.value })} />
             </Field>
-            <Field label="Instrucciones"><Textarea rows={4} maxLength={8000} value={personality.instructions} onChange={(event) => setPersonality({ ...personality, instructions: event.target.value })} /></Field>
-            <Field label="Saludo"><Input maxLength={1000} value={personality.greeting} onChange={(event) => setPersonality({ ...personality, greeting: event.target.value })} /></Field>
+            <Field label="Instrucciones"><Textarea rows={4} placeholder="Ej. Responde solo con información confirmada. No inventes precios ni disponibilidad. Si no tienes una respuesta segura, ofrece pasar la conversación con un asesor." maxLength={8000} value={personality.instructions} onChange={(event) => setPersonality({ ...personality, instructions: event.target.value })} /></Field>
+            <Field label="Saludo"><Input placeholder="Ej. ¡Hola! Soy el asistente de [NOMBRE DEL NEGOCIO]. ¿En qué puedo ayudarle hoy?" maxLength={1000} value={personality.greeting} onChange={(event) => setPersonality({ ...personality, greeting: event.target.value })} /></Field>
             <Button disabled={busy || !personality.name.trim()} onClick={() => void withSave(() => onSaveProfile(personality), "Personalidad guardada")}><Save className="h-4 w-4" /> Guardar personalidad</Button>
           </WizardCard>
         )}
@@ -373,10 +373,10 @@ export function AgentWizard({
               <ul className="space-y-2">{services.map((service) => <li key={service.id} className="flex items-center justify-between rounded-md border p-3 text-sm"><span><strong>{service.name}</strong><br /><span className="text-muted-foreground">{service.durationMinutes} min</span></span><span>{new Intl.NumberFormat("es-MX", { style: "currency", currency: service.currency }).format(service.priceCents / 100)}</span></li>)}</ul>
             )}
             <div className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
-              <Field label="Servicio"><Input maxLength={120} value={serviceForm.name} onChange={(event) => setServiceForm({ ...serviceForm, name: event.target.value })} /></Field>
-              <Field label="Precio MXN"><Input type="number" min="0" step="0.01" value={serviceForm.price} onChange={(event) => setServiceForm({ ...serviceForm, price: event.target.value })} /></Field>
-              <Field label="Duración (minutos)"><Input type="number" min="5" max="1440" value={serviceForm.duration} onChange={(event) => setServiceForm({ ...serviceForm, duration: event.target.value })} /></Field>
-              <Field label="Descripción"><Input maxLength={2000} value={serviceForm.description} onChange={(event) => setServiceForm({ ...serviceForm, description: event.target.value })} /></Field>
+              <Field label="Servicio"><Input placeholder="Ej. Limpieza dental" maxLength={120} value={serviceForm.name} onChange={(event) => setServiceForm({ ...serviceForm, name: event.target.value })} /></Field>
+              <Field label="Precio MXN"><Input placeholder="Ej. 800" type="number" min="0" step="0.01" value={serviceForm.price} onChange={(event) => setServiceForm({ ...serviceForm, price: event.target.value })} /></Field>
+              <Field label="Duración (minutos)"><Input placeholder="Ej. 45" type="number" min="5" max="1440" value={serviceForm.duration} onChange={(event) => setServiceForm({ ...serviceForm, duration: event.target.value })} /></Field>
+              <Field label="Descripción"><Input placeholder="Ej. Incluye valoración, limpieza y recomendaciones posteriores." maxLength={2000} value={serviceForm.description} onChange={(event) => setServiceForm({ ...serviceForm, description: event.target.value })} /></Field>
             </div>
             <div className="flex flex-wrap gap-2"><Button disabled={busy || !serviceForm.name.trim()} onClick={() => void withSave(addService, "Servicio guardado")}><Save className="h-4 w-4" /> Agregar servicio</Button><Button variant="outline" onClick={() => window.location.assign("/settings/calendar")}>Administrar catálogo completo</Button></div>
           </WizardCard>
@@ -384,7 +384,7 @@ export function AgentWizard({
 
         {step === 3 && (
           <WizardCard title="Horarios y políticas" description="Se guarda como conocimiento manual disponible para el agente.">
-            <Field label="Políticas e información operativa"><Textarea rows={10} maxLength={7900} placeholder="Horario de atención, citas, cancelaciones, anticipos, pagos, zona de servicio…" value={policies} onChange={(event) => setPolicies(event.target.value)} /></Field>
+            <Field label="Políticas e información operativa"><Textarea rows={10} maxLength={7900} placeholder="Ej. Horario: lunes a viernes de 9:00 a 19:00. Las citas pueden reprogramarse con 4 horas de anticipación. Aceptamos efectivo y transferencia." value={policies} onChange={(event) => setPolicies(event.target.value)} /></Field>
             <Button disabled={busy || !policies.trim()} onClick={() => void withSave(() => saveKbBlock(POLICIES_KB_PREFIX, policies), "Políticas guardadas")}><Save className="h-4 w-4" /> Guardar políticas</Button>
           </WizardCard>
         )}
@@ -398,7 +398,7 @@ export function AgentWizard({
 
         {step === 5 && (
           <WizardCard title="Escalamiento a humano" description="Actualiza las reglas existentes de handoff; no crea un flujo paralelo.">
-            <Field label="Cuándo pasar a una persona"><Textarea rows={8} maxLength={4000} placeholder="Cliente pide asesor, está molesto, negociación especial…" value={escalationRules} onChange={(event) => setEscalationRules(event.target.value)} /></Field>
+            <Field label="Cuándo pasar a una persona"><Textarea rows={8} maxLength={4000} placeholder="Ej. Pasar a una persona cuando el cliente solicite hablar con un asesor, presente una queja, pida un descuento especial o el agente no tenga una respuesta confirmada." value={escalationRules} onChange={(event) => setEscalationRules(event.target.value)} /></Field>
             <Button disabled={busy || !escalationRules.trim()} onClick={() => void withSave(() => onSaveProfile({ escalationRules }), "Reglas de escalamiento guardadas")}><Save className="h-4 w-4" /> Guardar escalamiento</Button>
           </WizardCard>
         )}
@@ -414,7 +414,7 @@ export function AgentWizard({
         {step === 7 && (
           <WizardCard title="Probar agente" description="Prueba segura con el pipeline real. No envía mensajes por WhatsApp.">
             <Badge variant="secondary">Conversación de prueba</Badge>
-            <Field label="Mensaje del cliente"><Textarea rows={4} maxLength={2000} placeholder="Escribe una pregunta para el agente…" value={testMessage} onChange={(event) => setTestMessage(event.target.value)} /></Field>
+            <Field label="Mensaje del cliente"><Textarea rows={4} maxLength={2000} placeholder="Ej. ¿Cuál es el precio de [SERVICIO]? ¿Qué horarios tienen? ¿Cómo puedo agendar una cita?" value={testMessage} onChange={(event) => setTestMessage(event.target.value)} /></Field>
             <Button disabled={busy || !aiConfigured || !testMessage.trim()} onClick={() => void withSave(runTest, "Prueba completada")}><Play className="h-4 w-4" /> Ejecutar prueba</Button>
             {!aiConfigured && <p className="text-sm text-warning-text">Conecta el proveedor de IA antes de probar.</p>}
             {testResponse && <div className="rounded-md border bg-secondary p-4"><p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Respuesta del agente</p><p className="whitespace-pre-wrap text-sm">{testResponse}</p></div>}
