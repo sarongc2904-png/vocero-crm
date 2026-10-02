@@ -395,13 +395,20 @@ export function ConversationList({
                       <span className="flex items-center justify-between gap-2">
                         <span className="flex min-w-0 items-center gap-1.5">
                           {multiChannel && <ChannelBadge channel={c.channel} />}
-                          <span
-                            className={cn(
-                              "truncate text-sm",
-                              unread ? "font-[680]" : "font-semibold"
+                          <span className="min-w-0">
+                            <span
+                              className={cn(
+                                "block truncate text-sm",
+                                unread ? "font-[680]" : "font-semibold"
+                              )}
+                            >
+                              {c.contact.name}
+                            </span>
+                            {c.contact.phone && (
+                              <span className="block truncate font-mono text-[10.5px] text-text-3">
+                                {c.contact.phone}
+                              </span>
                             )}
-                          >
-                            {c.contact.name}
                           </span>
                         </span>
                         <span
