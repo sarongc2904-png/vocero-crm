@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   matchesConfiguredEscalation,
   matchesHandoffIntent,
+  rejectedHandoffFallback,
   shouldAllowModelHandoff,
 } from "@/server/ai/handoff";
 
@@ -104,5 +105,36 @@ describe("política determinista de handoff del modelo", () => {
         "Escalar descuentos y negociaciones especiales"
       )
     ).toBe(false);
+  });
+});
+
+
+describe("fallback tras handoff rechazado", () => {
+  it("reconoce frustración y pide contexto para resolver", () => {
+    expect(
+      rejectedHandoffFallback(
+        "Estoy molesto porque tuve un problema y necesito una solución."
+      )
+    ).toBe(
+      "Entiendo que tuvo un problema y quiero ayudarle a resolverlo. ¿Puede contarme qué ocurrió?"
+    );
+  });
+
+  it("mantiene el fallback genérico cuando no hay queja o frustración", () => {
+    expect(rejectedHandoffFallback("Tengo una consulta importante")).toBe(
+      "Claro, puedo ayudarte con eso. Dime qué información necesitas."
+    );
+  });
+
+  it("pipeline usa el fallback contextual después del retry rechazado", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+
+    const source = readFileSync(
+      resolve(process.cwd(), "src/server/ai/pipeline.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain("rejectedHandoffFallback(inboundText)");
   });
 });

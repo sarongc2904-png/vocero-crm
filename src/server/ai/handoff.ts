@@ -65,3 +65,23 @@ export function shouldAllowModelHandoff(
     matchesConfiguredEscalation(text, escalationRules)
   );
 }
+
+
+/**
+ * Respuesta segura cuando el modelo insiste en escalar pero el backend no
+ * autoriza el handoff. Reconoce una queja o frustración sin escalar por sí sola.
+ */
+export function rejectedHandoffFallback(text: string): string {
+  const message = normalizeHandoffText(text);
+
+  const expressesProblem =
+    /molest|enoj|frustr|quej|reclam|inconform|problema|no funciona|no sirve|necesito una solucion|quiero una solucion/.test(
+      message
+    );
+
+  if (expressesProblem) {
+    return "Entiendo que tuvo un problema y quiero ayudarle a resolverlo. ¿Puede contarme qué ocurrió?";
+  }
+
+  return "Claro, puedo ayudarte con eso. Dime qué información necesitas.";
+}
