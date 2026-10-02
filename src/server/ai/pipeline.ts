@@ -14,7 +14,10 @@ import {
   resolveStage,
   type AgentActionType,
 } from "@/server/ai/actions";
-import { matchesHandoffIntent } from "@/server/ai/handoff";
+import {
+  matchesHandoffIntent,
+  shouldAllowModelHandoff,
+} from "@/server/ai/handoff";
 import { matchesCancellationIntent } from "@/server/agenda/cancel-intent";
 import {
   buildAgentSystemPrompt,
@@ -539,6 +542,34 @@ export async function runAgentTurn(
 
   let action: AgentActionType = result.data;
 
+  // El modelo puede sugerir handoff, pero el backend conserva la última
+  // palabra. Si no hay petición explícita ni una regla configurada aplicable,
+  // reintentamos una sola vez sin escalado y, si insiste, respondemos sin
+  // pausar la conversación.
+  if (
+    action.action === "handoff" &&
+    inboundText &&
+    !shouldAllowModelHandoff(inboundText, profile.escalationRules)
+  ) {
+    const retry = await chatJson(agentActionSchema(agenda), [
+      ...messages,
+      {
+        role: "system",
+        content:
+          "El handoff NO está autorizado para este turno. Responde al cliente con la información disponible o pide el dato mínimo necesario. Elige una acción distinta de handoff.",
+      },
+    ]);
+
+    if (retry.ok && retry.data.action !== "handoff") {
+      action = retry.data;
+    } else {
+      action = {
+        action: "reply",
+        text: "Claro, puedo ayudarte con eso. Dime qué información necesitas.",
+      };
+    }
+  }
+
   if (action.action === "cancel_booking") {
     if (agenda) await handleCancellation(conversation);
     return;
@@ -795,17 +826,15 @@ export async function runAgentTurn(
         stage.id
       );
       if (moveResult === "lead_missing" || moveResult === "rejected") {
-        const claimed = await applyHandoff(
-          conversationId,
-          organizationId,
-          "error"
+        console.warn(
+          `[agente] move_stage no se pudo aplicar (${moveResult}); se conserva la conversación con IA`
         );
-        if (claimed) {
-          await deliverReply(
-            conversation,
-            "Voy a pasar tu solicitud a un asesor para continuar."
-          );
-        }
+        await deliverReply(
+          conversation,
+          action.reply
+            ? safeModelReply(action.reply)
+            : "Entendido. Puedo seguir ayudándote por aquí."
+        );
         return;
       }
       if (moveResult === "moved") {
@@ -834,17 +863,15 @@ export async function runAgentTurn(
         action.note
       );
       if (!updated) {
-        const claimed = await applyHandoff(
-          conversationId,
-          organizationId,
-          "error"
+        console.warn(
+          "[agente] update_lead no se pudo aplicar; se conserva la conversación con IA"
         );
-        if (claimed) {
-          await deliverReply(
-            conversation,
-            "Voy a pasar tu solicitud a un asesor para continuar."
-          );
-        }
+        await deliverReply(
+          conversation,
+          action.reply
+            ? safeModelReply(action.reply)
+            : "Entendido. Puedo seguir ayudándote por aquí."
+        );
         return;
       }
       if (action.reply) {

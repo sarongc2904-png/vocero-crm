@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { matchesHandoffIntent } from "@/server/ai/handoff";
+import {
+  matchesConfiguredEscalation,
+  matchesHandoffIntent,
+  shouldAllowModelHandoff,
+} from "@/server/ai/handoff";
 
 describe("patrón de respaldo de handoff (FR-022 / SC-006)", () => {
   it.each([
@@ -54,5 +58,51 @@ describe("handoff durable", () => {
     expect(prompt).toContain("Preguntas normales sobre precio");
     expect(prompt).toContain("NO son handoff por sí solas");
     expect(prompt).toContain("NO inventes ni escales automáticamente");
+  });
+});
+
+
+describe("política determinista de handoff del modelo", () => {
+  it.each([
+    "Hola, me interesa lo que ofrecen",
+    "¿Qué opciones manejan?",
+    "¿Cuánto cuesta?",
+    "Tengo una consulta importante",
+    "ola, me interesa lo q ofrecen",
+  ])("NO permite handoff comercial prematuro: %s", (text) => {
+    expect(shouldAllowModelHandoff(text, null)).toBe(false);
+  });
+
+  it("permite petición explícita de humano", () => {
+    expect(
+      shouldAllowModelHandoff("Prefiero hablar con una persona", null)
+    ).toBe(true);
+  });
+
+  it("una regla de quejas solo aplica cuando el mensaje contiene una queja", () => {
+    const rules = "Escalar quejas, reclamos y clientes enojados.";
+    expect(matchesConfiguredEscalation("Tengo una consulta importante", rules)).toBe(false);
+    expect(matchesConfiguredEscalation("Estoy molesto por un problema", rules)).toBe(true);
+  });
+
+  it("una regla de urgencia no convierte una consulta normal en handoff", () => {
+    const rules = "Escalar urgencias, emergencias o situaciones de riesgo.";
+    expect(matchesConfiguredEscalation("Quiero conocer sus servicios", rules)).toBe(false);
+    expect(matchesConfiguredEscalation("Es una urgencia, necesito ayuda", rules)).toBe(true);
+  });
+
+  it("reglas de pagos y descuentos requieren señal equivalente del cliente", () => {
+    expect(
+      matchesConfiguredEscalation(
+        "Necesito ayuda con una factura",
+        "Escalar problemas de pagos y facturación"
+      )
+    ).toBe(true);
+    expect(
+      matchesConfiguredEscalation(
+        "¿Qué opciones manejan?",
+        "Escalar descuentos y negociaciones especiales"
+      )
+    ).toBe(false);
   });
 });
