@@ -17,9 +17,12 @@ function validCoords(latitude: number, longitude: number): boolean {
 }
 
 export function parseCoordinates(raw: string): ResolvedLocation | null {
+  // En URLs de lugares de Google Maps, !3d/!4d representa la ubicación
+  // exacta del POI. El segmento @lat,lng suele ser solo el centro/viewport
+  // del mapa y puede quedar a decenas o cientos de metros del negocio.
   const patterns = [
-    /@(-?\d{1,3}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/,
     /!3d(-?\d{1,3}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/,
+    /@(-?\d{1,3}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/,
     /(?:^|[?&](?:q|query|ll)=)(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)(?:&|$)/,
     /(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)/,
   ];
