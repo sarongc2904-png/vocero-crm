@@ -253,6 +253,13 @@
       "when": 1791137600000,
       "tag": "0035_tenant_composite_foreign_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791224000000,
+      "tag": "0036_agent_observability_v2",
+      "breakpoints": true
     }
   ]
 }

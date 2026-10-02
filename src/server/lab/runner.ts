@@ -4,8 +4,7 @@ import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
 import { runAgentTurn } from "@/server/ai/pipeline";
 import { renderKb } from "@/server/ai/prompts";
-import { retrieveRelevantDocumentChunks } from "@/server/kb/documents/retrieval";
-import { computeScore, judgeCase } from "@/server/lab/judge";
+import { computeScore, judgeCase, ADJUDICATION_VERSION } from "@/server/lab/judge";
 import { type Persona } from "@/server/lab/personas";
 import { getLabPersonas } from "@/server/lab/profile";
 import { enqueueLabRun } from "@/server/jobs/queue";
@@ -15,6 +14,11 @@ import {
   type AgentActionTrace,
   type AgentActionTraceEntry,
 } from "@/server/lab/action-trace";
+import {
+  bindEvidenceToTrace,
+  collectJudgeEvidence,
+  persistEvidenceSnapshot,
+} from "@/server/lab/evidence-snapshot";
 
 /**
  * Runner del Laboratorio (FR-030/FR-034).
@@ -27,36 +31,20 @@ const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class RunConflictError extends Error {}
 
+/**
+ * Conocimiento del juez: KB base + fragmentos documentales.
+ *
+ * Desde v2 el texto se deriva de un Evidence Snapshot congelado
+ * (`collectJudgeEvidence`), para que lo que vio el juez sea auditable y
+ * reproducible. Se conserva esta función como contrato estable.
+ */
 export async function buildJudgeKnowledgeText(input: {
   organizationId: string;
   baseKbText: string;
   transcript: { role: "cliente" | "agente"; text: string }[];
 }): Promise<string> {
-  const chunks = new Map<string, string>();
-
-  for (const message of input.transcript) {
-    if (message.role !== "cliente" || !message.text.trim()) continue;
-
-    const retrieved = await retrieveRelevantDocumentChunks({
-      organizationId: input.organizationId,
-      query: message.text,
-      maxChunks: 5,
-      maxCharacters: 7_500,
-    });
-
-    for (const chunk of retrieved) {
-      if (!chunks.has(chunk.id)) {
-        chunks.set(chunk.id, chunk.content);
-      }
-    }
-  }
-
-  return [
-    input.baseKbText.trim(),
-    [...chunks.values()].join("\n\n").trim(),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const evidence = await collectJudgeEvidence(input);
+  return evidence.kbText;
 }
 
 export async function startRun(organizationId: string): Promise<string> {
@@ -121,10 +109,14 @@ async function runAllCases(
     )
     .orderBy(asc(schema.agentTestCase.createdAt));
 
+  // Orden total explícito: sin él, dos filas de KB con el mismo `created_at`
+  // pueden volver en distinto orden entre corridas y cambiar el prompt del
+  // juez (bytes distintos ⇒ veredicto no comparable).
   const kbEntries = await db
     .select()
     .from(schema.kbEntry)
-    .where(eq(schema.kbEntry.organizationId, organizationId));
+    .where(eq(schema.kbEntry.organizationId, organizationId))
+    .orderBy(asc(schema.kbEntry.createdAt), asc(schema.kbEntry.id));
   const kbText = renderKb(kbEntries);
 
   const profileRows = await db
@@ -181,25 +173,46 @@ async function runAllCases(
       persona
     );
 
-    await persistActionTrace({
-      organizationId,
-      testCaseId: testCase.id,
-      trace: actionTrace,
-    });
-
-    const judgeKbText = await buildJudgeKnowledgeText({
+    // v2 — la evidencia se congela ANTES de juzgar: lo que el juez lea queda
+    // persistido y verificable, en vez de recalcularse en cada lectura.
+    const evidence = await collectJudgeEvidence({
       organizationId,
       baseKbText: kbText,
       transcript,
+    });
+    const tracedActions = bindEvidenceToTrace(actionTrace, evidence);
+
+    await persistActionTrace({
+      organizationId,
+      testCaseId: testCase.id,
+      trace: tracedActions,
+    });
+
+    // Se persiste el snapshot aunque el juez falle después: la evidencia es el
+    // artefacto de auditoría y no debe depender del proveedor de IA.
+    await persistEvidenceSnapshot({
+      organizationId,
+      testCaseId: testCase.id,
+      snapshot: evidence,
+      adjudicationVersion: ADJUDICATION_VERSION,
     });
 
     const outcome = await judgeCase({
       personaKey: persona.key,
       transcript,
-      kbText: judgeKbText,
+      kbText: evidence.kbText,
       behaviorText,
-      actionTrace,
+      actionTrace: tracedActions,
       agendaEnabled: agendaEnabled(),
+      evidenceDigest: evidence.digest,
+    });
+
+    await persistEvidenceSnapshot({
+      organizationId,
+      testCaseId: testCase.id,
+      snapshot: evidence,
+      adjudicationVersion: ADJUDICATION_VERSION,
+      judgeRecord: outcome.record,
     });
 
     await db
@@ -256,6 +269,8 @@ type TraceSnapshot = {
   bookingIds: string[];
   offeredSlotIds: string[];
   agentMessages: string[];
+  /** v2 — ids de las filas salientes, para anclar evidencia a filas y no a posiciones. */
+  agentMessageIds: string[];
 };
 
 async function captureTraceSnapshot(input: {
@@ -321,7 +336,7 @@ async function captureTraceSnapshot(input: {
           )
         ),
       db
-        .select({ text: schema.message.text })
+        .select({ id: schema.message.id, text: schema.message.text })
         .from(schema.message)
         .where(
           and(
@@ -330,7 +345,8 @@ async function captureTraceSnapshot(input: {
             eq(schema.message.direction, "out")
           )
         )
-        .orderBy(asc(schema.message.createdAt)),
+        // Orden total (created_at puede empatar al insertar rápido).
+        .orderBy(asc(schema.message.createdAt), asc(schema.message.id)),
     ]);
 
   return {
@@ -342,17 +358,22 @@ async function captureTraceSnapshot(input: {
     agentMessages: outboundRows
       .map((row) => row.text)
       .filter((text): text is string => Boolean(text)),
+    agentMessageIds: outboundRows.map((row) => row.id),
   };
 }
 
 function buildTraceEntry(input: {
   turn: number;
   customerMessage: string;
+  customerMessageId?: string;
   before: TraceSnapshot;
   after: TraceSnapshot;
 }): AgentActionTraceEntry {
   const newAgentMessages = input.after.agentMessages.slice(
     input.before.agentMessages.length
+  );
+  const newAgentMessageIds = input.after.agentMessageIds.slice(
+    input.before.agentMessageIds.length
   );
   const contactNotesChanged =
     input.before.contactNotes !== input.after.contactNotes;
@@ -369,6 +390,13 @@ function buildTraceEntry(input: {
   const handoffChanged =
     input.before.handoffReason !== input.after.handoffReason &&
     input.after.handoffReason !== null;
+  // v2 — recursos concretos del turno: explican POR QUÉ se observó la acción.
+  const newBookingIds = input.after.bookingIds.filter(
+    (id) => !input.before.bookingIds.includes(id)
+  );
+  const newOfferedSlotIds = input.after.offeredSlotIds.filter(
+    (id) => !input.before.offeredSlotIds.includes(id)
+  );
 
   const observedActions: AgentActionTraceEntry["observedActions"] = [];
   if (newAgentMessages.length > 0) observedActions.push("reply");
@@ -389,6 +417,10 @@ function buildTraceEntry(input: {
       stageChanged,
       bookingCreated,
     },
+    customerMessageId: input.customerMessageId ?? null,
+    agentMessageIds: newAgentMessageIds,
+    offeredSlotIds: newOfferedSlotIds,
+    bookingIds: newBookingIds,
   };
 }
 
@@ -419,8 +451,9 @@ async function runConversation(
   for (const line of persona.script) {
     turn += 1;
     const now = new Date();
+    const customerMessageId = newId("message");
     await db.insert(schema.message).values({
-      id: newId("message"),
+      id: customerMessageId,
       organizationId,
       conversationId: convId,
       direction: "in",
@@ -455,7 +488,13 @@ async function runConversation(
       contactId,
     });
     actionTrace.push(
-      buildTraceEntry({ turn, customerMessage: line, before, after })
+      buildTraceEntry({
+        turn,
+        customerMessage: line,
+        customerMessageId,
+        before,
+        after,
+      })
     );
 
     if (after.handoffReason) break;
@@ -470,7 +509,8 @@ async function runConversation(
         eq(schema.message.conversationId, convId)
       )
     )
-    .orderBy(asc(schema.message.createdAt));
+    // Orden total: el transcript del juez no puede depender del orden físico.
+    .orderBy(asc(schema.message.createdAt), asc(schema.message.id));
 
   return {
     conversationId: convId,

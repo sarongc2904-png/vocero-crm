@@ -10,6 +10,42 @@ import { CABECERA_HUECOS } from "@/server/agenda/offers";
 
 type InMessage = { role: string; content: string };
 
+/**
+ * Referencias de evidencia para el veredicto del mock.
+ *
+ * El juez exige `evidenceRefs` (mínimo una) con índices de las fuentes que el
+ * backend indexa en el prompt: `[agent_message:N]` y `[action_trace:N]`. Sin
+ * esto, todo hallazgo del mock es inválido para el esquema y la corrida entera
+ * termina en `judge_failed` — el self-test del Laboratorio dejaba de probar el
+ * camino real sin avisar.
+ *
+ * Se cita el ÚLTIMO mensaje del agente (la respuesta que motivó el hallazgo) y,
+ * si no hay ninguno, el primer efecto observado.
+ */
+function mockEvidenceRefs(
+  lastUser: string
+): Array<{ source: string; index: number }> {
+  const matches = [
+    ...lastUser.matchAll(/\[(agent_message|action_trace):(\d+)\]/g),
+  ];
+
+  const agentMessage = matches
+    .filter((match) => match[1] === "agent_message")
+    .at(-1);
+  const agentIndex = Number(agentMessage?.[2]);
+  if (Number.isInteger(agentIndex)) {
+    return [{ source: "agent_message", index: agentIndex }];
+  }
+
+  const actionTrace = matches.find((match) => match[1] === "action_trace");
+  const traceIndex = Number(actionTrace?.[2]);
+  if (Number.isInteger(traceIndex)) {
+    return [{ source: "action_trace", index: traceIndex }];
+  }
+
+  return [];
+}
+
 export function aiMockCompletion(messages: InMessage[]): string {
   const system = messages.find((m) => m.role === "system")?.content ?? "";
   const lastUser =
@@ -24,7 +60,12 @@ export function aiMockCompletion(messages: InMessage[]): string {
         .split("CONOCIMIENTO CONFIGURADO:")[1]
         ?.split("TRANSCRIPT COMPLETO:")[0] ?? "";
     const kbCoversWarranty = /garant|devoluc/i.test(kbSection);
-    if (lastUser.includes("fuera_de_kb") && !kbCoversWarranty) {
+    const evidenceRefs = mockEvidenceRefs(lastUser);
+    if (
+      lastUser.includes("fuera_de_kb") &&
+      !kbCoversWarranty &&
+      evidenceRefs.length > 0
+    ) {
       return JSON.stringify({
         veredicto: "rojo",
         hallazgos: [
@@ -33,6 +74,7 @@ export function aiMockCompletion(messages: InMessage[]): string {
             severity: "grave",
             evidencia:
               "El cliente preguntó por garantías y devoluciones y el conocimiento no lo cubre.",
+            evidenceRefs,
             reason:
               "El agente no tenía conocimiento configurado para responder ni redirigir con una alternativa concreta.",
             sugerencia: {
