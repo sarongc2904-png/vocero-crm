@@ -51,8 +51,8 @@ export function decodeFullPlusCode(raw: string): ResolvedLocation | null {
 
   let latLo = -90;
   let lngLo = -180;
-  let latResolution = PAIR_RESOLUTIONS[PAIR_RESOLUTIONS.length - 1];
-  let lngResolution = latResolution;
+  let latResolution: number = 0.000125;
+  let lngResolution: number = 0.000125;
 
   const pairLength = Math.min(clean.length, 10);
   for (let i = 0; i < pairLength; i += 2) {
