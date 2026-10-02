@@ -104,8 +104,11 @@ export async function persistActionTrace(input: {
   trace: AgentActionTrace;
 }): Promise<void> {
   const sql = getSql();
-  const normalized = normalizeActionTrace(input.trace);
-  const traceJson = JSON.stringify(normalized);
+  // Se normaliza ANTES de serializar, en el propio contenedor de entrada: así
+  // la fila y su digest describen siempre la misma forma v2, venga el trace de
+  // donde venga. Reasignar `input.trace` no toca el array del llamador.
+  input.trace = normalizeActionTrace(input.trace);
+  const traceJson = JSON.stringify(input.trace);
   await sql`
     INSERT INTO agent_test_action_trace (
       id, organization_id, test_case_id, trace, version, digest
@@ -115,7 +118,7 @@ export async function persistActionTrace(input: {
       ${input.testCaseId},
       ${traceJson}::jsonb,
       ${ACTION_TRACE_VERSION},
-      ${canonicalDigest(normalized)}
+      ${canonicalDigest(input.trace)}
     )
     ON CONFLICT (organization_id, test_case_id)
     DO UPDATE SET
