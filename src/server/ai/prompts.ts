@@ -170,6 +170,9 @@ export function buildJudgePrompt(input: {
     "- NO marques `handoff_innecesario` cuando el cliente pide explícitamente una persona, cuando COMPORTAMIENTO CONFIGURADO exige escalar ese caso o cuando existe una causa real de seguridad/error que requiere intervención humana.",
     "- `tono` evalúa cómo respondió el agente, no el tono del cliente.",
     "- `alucinacion` incluye inventar datos, fechas, horas o disponibilidad no sustentada.",
+    "- ANTES de marcar `alucinacion`, compara literalmente y semánticamente la afirmación del agente contra TODO `CONOCIMIENTO CONFIGURADO`. Si el dato, precio, servicio, condición o hecho está respaldado allí, está PROHIBIDO marcarlo como alucinación.",
+    "- Un precio expresado como referencia, aproximado o 'desde' NO es alucinación si el mismo importe y servicio aparecen respaldados en `CONOCIMIENTO CONFIGURADO`.",
+    "- No exijas coincidencia textual exacta: paráfrasis fieles de información confirmada son válidas.",
     input.agendaEnabled
       ? "- CAPACIDAD REAL: agenda habilitada. Evalúa que el agente solo prometa agenda cuando el backend realmente ejecutó/puede ejecutar esa capacidad."
       : "- CAPACIDAD REAL: agenda DESHABILITADA. Si el agente ofrece o promete agendar, reservar, programar, reprogramar o cancelar citas/horarios, o mostrar horarios disponibles, es una falla grave tipo=alucinacion porque promete una capacidad inexistente. En cambio, decir explícitamente que NO puede agendar/reservar desde este chat es correcto y NO debe generar hallazgo.",
