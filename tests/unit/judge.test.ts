@@ -345,3 +345,119 @@ describe("computeScore (FR-033: judge_failed excluido del denominador)", () => {
     expect(computeScore(rojos)).toBe(0);
   });
 });
+
+describe("evidencia de disponibilidad de agenda", () => {
+  it("elimina alucinacion cuando el horario proviene de offer_slots real", async () => {
+    chatJson.mockResolvedValue({
+      ok: true,
+      data: {
+        veredicto: "rojo",
+        hallazgos: [
+          {
+            tipo: "alucinacion",
+            severity: "grave",
+            evidencia: "horarios inventados",
+            evidenceRefs: [{ source: "agent_message", index: 0 }],
+            reason: "El juez creyó que la disponibilidad fue inventada.",
+          },
+        ],
+      },
+      raw: "{}",
+    });
+
+    const availability =
+      "Tengo estos horarios disponibles:\\nHoy viernes, 2 de octubre\\n• 09:00\\n• 09:30\\n• 10:00";
+
+    const outcome = await judgeCase({
+      personaKey: "comprador_decidido",
+      transcript: [
+        {
+          role: "cliente",
+          text: "Perfecto, quiero avanzar hoy. ¿Cuál es el siguiente paso?",
+        },
+        { role: "agente", text: availability },
+      ],
+      kbText: "",
+      behaviorText: "",
+      agendaEnabled: true,
+      actionTrace: [
+        {
+          turn: 1,
+          customerMessage:
+            "Perfecto, quiero avanzar hoy. ¿Cuál es el siguiente paso?",
+          agentMessages: [availability],
+          observedActions: ["reply", "offer_slots"],
+          result: {
+            handoffReason: null,
+            contactNotesChanged: false,
+            stageChanged: null,
+            bookingCreated: false,
+          },
+        },
+      ],
+    });
+
+    expect(outcome.status).toBe("done");
+
+    if (outcome.status === "done") {
+      expect(outcome.verdict).toEqual({
+        veredicto: "verde",
+        hallazgos: [],
+      });
+    }
+  });
+
+  it("mantiene alucinacion si el horario no tiene offer_slots real", async () => {
+    chatJson.mockResolvedValue({
+      ok: true,
+      data: {
+        veredicto: "rojo",
+        hallazgos: [
+          {
+            tipo: "alucinacion",
+            severity: "grave",
+            evidencia: "horarios inventados",
+            evidenceRefs: [{ source: "agent_message", index: 0 }],
+            reason: "La disponibilidad no está respaldada por el backend.",
+          },
+        ],
+      },
+      raw: "{}",
+    });
+
+    const availability =
+      "Tengo estos horarios disponibles: 09:00, 09:30 y 10:00.";
+
+    const outcome = await judgeCase({
+      personaKey: "comprador_decidido",
+      transcript: [
+        { role: "cliente", text: "¿Qué horarios hay?" },
+        { role: "agente", text: availability },
+      ],
+      kbText: "",
+      behaviorText: "",
+      agendaEnabled: true,
+      actionTrace: [
+        {
+          turn: 1,
+          customerMessage: "¿Qué horarios hay?",
+          agentMessages: [availability],
+          observedActions: ["reply"],
+          result: {
+            handoffReason: null,
+            contactNotesChanged: false,
+            stageChanged: null,
+            bookingCreated: false,
+          },
+        },
+      ],
+    });
+
+    expect(outcome.status).toBe("done");
+
+    if (outcome.status === "done") {
+      expect(outcome.verdict.veredicto).toBe("rojo");
+      expect(outcome.verdict.hallazgos[0]?.tipo).toBe("alucinacion");
+    }
+  });
+});

@@ -46,7 +46,10 @@ const GROUPS = {
     "tests/unit/agenda-contract.test.ts",
     "tests/unit/agenda-sandbox.test.ts",
   ],
-  "db migrations": ["tests/unit/migration-journal.test.ts"],
+  "db migrations": [
+    "tests/unit/migration-journal.test.ts",
+    "tests/unit/tenant-composite-fks.test.ts",
+  ],
 };
 
 const files = Object.values(GROUPS).flat();

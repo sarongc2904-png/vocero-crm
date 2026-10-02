@@ -4,6 +4,7 @@ import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
 import { runAgentTurn } from "@/server/ai/pipeline";
 import { renderKb } from "@/server/ai/prompts";
+import { retrieveRelevantDocumentChunks } from "@/server/kb/documents/retrieval";
 import { computeScore, judgeCase } from "@/server/lab/judge";
 import { type Persona } from "@/server/lab/personas";
 import { getLabPersonas } from "@/server/lab/profile";
@@ -25,6 +26,38 @@ import {
 const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class RunConflictError extends Error {}
+
+export async function buildJudgeKnowledgeText(input: {
+  organizationId: string;
+  baseKbText: string;
+  transcript: { role: "cliente" | "agente"; text: string }[];
+}): Promise<string> {
+  const chunks = new Map<string, string>();
+
+  for (const message of input.transcript) {
+    if (message.role !== "cliente" || !message.text.trim()) continue;
+
+    const retrieved = await retrieveRelevantDocumentChunks({
+      organizationId: input.organizationId,
+      query: message.text,
+      maxChunks: 5,
+      maxCharacters: 7_500,
+    });
+
+    for (const chunk of retrieved) {
+      if (!chunks.has(chunk.id)) {
+        chunks.set(chunk.id, chunk.content);
+      }
+    }
+  }
+
+  return [
+    input.baseKbText.trim(),
+    [...chunks.values()].join("\n\n").trim(),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 export async function startRun(organizationId: string): Promise<string> {
   const db = getDb();
@@ -154,10 +187,16 @@ async function runAllCases(
       trace: actionTrace,
     });
 
+    const judgeKbText = await buildJudgeKnowledgeText({
+      organizationId,
+      baseKbText: kbText,
+      transcript,
+    });
+
     const outcome = await judgeCase({
       personaKey: persona.key,
       transcript,
-      kbText,
+      kbText: judgeKbText,
       behaviorText,
       actionTrace,
       agendaEnabled: agendaEnabled(),
@@ -215,6 +254,7 @@ type TraceSnapshot = {
   contactNotes: string | null;
   stageId: string | null;
   bookingIds: string[];
+  offeredSlotIds: string[];
   agentMessages: string[];
 };
 
@@ -224,8 +264,14 @@ async function captureTraceSnapshot(input: {
   contactId: string;
 }): Promise<TraceSnapshot> {
   const db = getDb();
-  const [convRows, contactRows, leadRows, bookingRows, outboundRows] =
-    await Promise.all([
+  const [
+    convRows,
+    contactRows,
+    leadRows,
+    bookingRows,
+    offeredSlotRows,
+    outboundRows,
+  ] = await Promise.all([
       db
         .select({ handoffReason: schema.conversation.handoffReason })
         .from(schema.conversation)
@@ -266,6 +312,15 @@ async function captureTraceSnapshot(input: {
           )
         ),
       db
+        .select({ id: schema.offeredSlot.id })
+        .from(schema.offeredSlot)
+        .where(
+          and(
+            eq(schema.offeredSlot.organizationId, input.organizationId),
+            eq(schema.offeredSlot.conversationId, input.conversationId)
+          )
+        ),
+      db
         .select({ text: schema.message.text })
         .from(schema.message)
         .where(
@@ -283,6 +338,7 @@ async function captureTraceSnapshot(input: {
     contactNotes: contactRows[0]?.notes ?? null,
     stageId: leadRows[0]?.stageId ?? null,
     bookingIds: bookingRows.map((row) => row.id),
+    offeredSlotIds: offeredSlotRows.map((row) => row.id),
     agentMessages: outboundRows
       .map((row) => row.text)
       .filter((text): text is string => Boolean(text)),
@@ -307,6 +363,9 @@ function buildTraceEntry(input: {
   const bookingCreated = input.after.bookingIds.some(
     (id) => !input.before.bookingIds.includes(id)
   );
+  const offerSlotsChanged = input.after.offeredSlotIds.some(
+    (id) => !input.before.offeredSlotIds.includes(id)
+  );
   const handoffChanged =
     input.before.handoffReason !== input.after.handoffReason &&
     input.after.handoffReason !== null;
@@ -316,6 +375,7 @@ function buildTraceEntry(input: {
   if (handoffChanged) observedActions.push("handoff");
   if (contactNotesChanged) observedActions.push("update_lead");
   if (stageChanged) observedActions.push("move_stage");
+  if (offerSlotsChanged) observedActions.push("offer_slots");
   if (bookingCreated) observedActions.push("book_slot");
 
   return {

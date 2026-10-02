@@ -16,6 +16,7 @@ import {
 } from "@/server/ai/actions";
 import {
   matchesHandoffIntent,
+  rejectedHandoffFallback,
   shouldAllowModelHandoff,
 } from "@/server/ai/handoff";
 import { matchesCancellationIntent } from "@/server/agenda/cancel-intent";
@@ -565,7 +566,7 @@ export async function runAgentTurn(
     } else {
       action = {
         action: "reply",
-        text: "Claro, puedo ayudarte con eso. Dime qué información necesitas.",
+        text: rejectedHandoffFallback(inboundText),
       };
     }
   }
