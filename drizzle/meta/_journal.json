@@ -246,6 +246,13 @@
       "when": 1791051200000,
       "tag": "0034_knowledge_documents",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791137600000,
+      "tag": "0035_tenant_composite_foreign_keys",
+      "breakpoints": true
     }
   ]
 }

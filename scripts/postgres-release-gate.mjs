@@ -101,6 +101,82 @@ try {
   `;
   ok("tablas críticas presentes", requiredTables.length === 5);
 
+  const tenantFkGaps = await sql`
+    with simple_tenant_fks as (
+      select
+        fk.conrelid,
+        fk.confrelid,
+        child.relname as child_table,
+        parent.relname as parent_table,
+        child_column.attname::text as child_column
+      from pg_constraint fk
+      join pg_class child on child.oid = fk.conrelid
+      join pg_class parent on parent.oid = fk.confrelid
+      join pg_namespace child_namespace on child_namespace.oid = child.relnamespace
+      join pg_namespace parent_namespace on parent_namespace.oid = parent.relnamespace
+      join lateral unnest(fk.conkey, fk.confkey) with ordinality
+        as key_pair(child_attnum, parent_attnum, position)
+        on key_pair.position = 1
+      join pg_attribute child_column
+        on child_column.attrelid = fk.conrelid
+       and child_column.attnum = key_pair.child_attnum
+      join pg_attribute parent_column
+        on parent_column.attrelid = fk.confrelid
+       and parent_column.attnum = key_pair.parent_attnum
+      where fk.contype = 'f'
+        and array_length(fk.conkey, 1) = 1
+        and child_namespace.nspname = 'public'
+        and parent_namespace.nspname = 'public'
+        and parent_column.attname = 'id'
+        and exists (
+          select 1 from pg_attribute organization_column
+          where organization_column.attrelid = child.oid
+            and organization_column.attname = 'organization_id'
+            and not organization_column.attisdropped
+        )
+        and exists (
+          select 1 from pg_attribute organization_column
+          where organization_column.attrelid = parent.oid
+            and organization_column.attname = 'organization_id'
+            and not organization_column.attisdropped
+        )
+    )
+    select child_table, child_column, parent_table
+    from simple_tenant_fks simple
+    where not exists (
+      select 1
+      from pg_constraint candidate
+      where candidate.contype = 'f'
+        and candidate.conrelid = simple.conrelid
+        and candidate.confrelid = simple.confrelid
+        and array(
+          select attribute.attname::text
+          from unnest(candidate.conkey) with ordinality key(attnum, position)
+          join pg_attribute attribute
+            on attribute.attrelid = candidate.conrelid
+           and attribute.attnum = key.attnum
+          order by key.position
+        ) = array['organization_id', simple.child_column]
+        and array(
+          select attribute.attname::text
+          from unnest(candidate.confkey) with ordinality key(attnum, position)
+          join pg_attribute attribute
+            on attribute.attrelid = candidate.confrelid
+           and attribute.attnum = key.attnum
+          order by key.position
+        ) = array['organization_id', 'id']
+        and candidate.convalidated
+    )
+    order by child_table, child_column
+  `;
+  ok(
+    "todas las FKs entre tablas tenant-aware tienen respaldo compuesto validado",
+    tenantFkGaps.length === 0,
+    tenantFkGaps
+      .map((row) => `${row.child_table}.${row.child_column}->${row.parent_table}`)
+      .join(", ")
+  );
+
   const exclusion = await sql`
     select conname, pg_get_constraintdef(oid) as def
     from pg_constraint
@@ -184,19 +260,37 @@ try {
   ]);
   ok("profesional distinto, slot no superpuesto y tenant distinto coexisten", true);
 
-  // SEC-V2 — El caso que la constraint de la 0021 no cubría: MISMO
-  // professional_id y MISMO rango en dos organizaciones distintas. Con la
-  // constraint org-agnóstica, la segunda fila fallaba con 23P01 y el tenant B
-  // veía `slot_taken` sobre una agenda que no era la suya.
+  // La FK compuesta debe rechazar la combinación orgB + professionalA(orgA)
+  // antes de que la exclusion constraint evalúe el rango.
+  await insertBooking(
+    `bk_same_pro_a_${suffix}`,
+    orgA,
+    professionalA,
+    "2031-01-20T16:00:00.000Z"
+  );
   const crossTenant = await Promise.allSettled([
-    insertBooking(`bk_same_pro_a_${suffix}`, orgA, professionalA, "2031-01-20T16:00:00.000Z"),
-    insertBooking(`bk_same_pro_b_${suffix}`, orgB, professionalA, "2031-01-20T16:00:00.000Z"),
+    insertBooking(
+      `bk_cross_tenant_professional_fk_${suffix}`,
+      orgB,
+      professionalA,
+      "2031-01-20T16:00:00.000Z"
+    ),
   ]);
   ok(
-    "dos tenants con profesional y rango equivalentes no se interfieren",
-    crossTenant.every((result) => result.status === "fulfilled"),
-    crossTenant.find((result) => result.status === "rejected")?.reason?.code
+    "booking cross-tenant es rechazado por FK",
+    crossTenant[0]?.status === "rejected" &&
+      crossTenant[0]?.reason?.code === "23503",
+    crossTenant[0]?.status === "rejected"
+      ? crossTenant[0]?.reason?.code
+      : "fulfilled"
   );
+  await insertBooking(
+    `bk_same_range_org_b_${suffix}`,
+    orgB,
+    professionalB,
+    "2031-01-20T16:00:00.000Z"
+  );
+  ok("dos tenants con profesionales propios usan el mismo rango sin interferirse", true);
 
   await sql`
     insert into contact (id, organization_id, wa_identity, name)
