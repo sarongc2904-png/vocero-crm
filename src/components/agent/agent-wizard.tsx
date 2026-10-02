@@ -132,7 +132,7 @@ export function AgentWizard({
     name: "",
     description: "",
     price: "",
-    duration: "60",
+    duration: "",
   });
   const [testMessage, setTestMessage] = useState("");
   const [testResponse, setTestResponse] = useState<string | null>(null);
@@ -250,6 +250,9 @@ export function AgentWizard({
     if (!normalized || !Number.isFinite(price) || price < 0) {
       throw new Error("Captura un servicio y un precio válido");
     }
+    if (!serviceForm.duration.trim() || !Number.isFinite(duration) || duration < 5 || duration > 1440) {
+      throw new Error("Captura una duración válida entre 5 y 1440 minutos");
+    }
     const response = await fetch("/api/services", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -267,7 +270,7 @@ export function AgentWizard({
     }
     const body = await response.json();
     setServices((current) => [...current, body.service]);
-    setServiceForm({ name: "", description: "", price: "", duration: "60" });
+    setServiceForm({ name: "", description: "", price: "", duration: "" });
   }
 
   async function runTest() {
