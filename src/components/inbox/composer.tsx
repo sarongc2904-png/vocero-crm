@@ -145,19 +145,56 @@ export function Composer({
   }
 
   async function submitLocation() {
-    const coords = parseCoords(coordsRaw);
-    if (!coords) {
-      setError("Coordenadas inválidas — pega «lat, long» o un enlace de Google Maps");
-      return;
-    }
     setSending(true);
     setError(null);
+
+    let coords = parseCoords(coordsRaw);
+    let formattedAddress: string | null = null;
+
+    // Un Plus Code compuesto (ej. "FFJW+PX Nuevo Laredo, Tamaulipas") no
+    // contiene lat/long. Se resuelve en servidor para que la API key de Maps
+    // nunca llegue al navegador.
+    if (!coords) {
+      const resolveRes = await fetch("/api/maps/resolve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: coordsRaw.trim() }),
+      }).catch(() => null);
+
+      if (!resolveRes?.ok) {
+        const data = (await resolveRes?.json().catch(() => null)) as {
+          error?: { message?: string };
+        } | null;
+        setSending(false);
+        setError(
+          data?.error?.message ??
+            "No se pudo resolver la ubicación. Usa coordenadas o un Plus Code con ciudad."
+        );
+        return;
+      }
+
+      const resolved = (await resolveRes.json()) as {
+        latitude: number;
+        longitude: number;
+        formattedAddress?: string | null;
+      };
+      coords = {
+        latitude: resolved.latitude,
+        longitude: resolved.longitude,
+      };
+      formattedAddress = resolved.formattedAddress ?? null;
+    }
+
     const err = await apiSend(`/api/conversations/${conversation.id}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         type: "location",
-        location: { ...coords, ...(placeName.trim() ? { name: placeName.trim() } : {}) },
+        location: {
+          ...coords,
+          ...(placeName.trim() ? { name: placeName.trim() } : {}),
+          ...(formattedAddress ? { address: formattedAddress } : {}),
+        },
       }),
     });
     setSending(false);
@@ -271,11 +308,11 @@ export function Composer({
       {panel === "location" && (
         <div className="mb-2.5 flex flex-wrap items-end gap-2 rounded-md border bg-subtle p-2.5">
           <label className="min-w-0 flex-1 text-xs text-text-2">
-            Coordenadas o enlace de Google Maps
+            Coordenadas, Plus Code o enlace de Google Maps
             <input
               value={coordsRaw}
               onChange={(e) => setCoordsRaw(e.target.value)}
-              placeholder="21.019, -101.257"
+              placeholder="FFJW+PX Nuevo Laredo, Tamaulipas"
               className="mt-1 w-full rounded-md border border-border-strong bg-background px-2.5 py-1.5 text-sm outline-none transition-[border-color,box-shadow] focus:border-brand focus:ring-[3px] focus:ring-brand-soft"
             />
           </label>
