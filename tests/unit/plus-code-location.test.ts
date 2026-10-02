@@ -1,30 +1,55 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  decodeFullPlusCode,
+  parseCoordinates,
+  resolveGoogleMapsShareLink,
+} from "@/server/maps/resolve-location";
 
-function source(path: string): string {
-  return readFileSync(new URL(`../../${path}`, import.meta.url), "utf8").replace(
-    /\r\n/g,
-    "\n"
-  );
-}
+describe("resolución de ubicaciones sin API de pago", () => {
+  it("extrae coordenadas de enlaces directos de Google Maps", () => {
+    expect(
+      parseCoordinates("https://www.google.com/maps/place/X/@27.48187,-99.50516,17z")
+    ).toEqual({ latitude: 27.48187, longitude: -99.50516 });
 
-describe("Plus Code location resolver", () => {
-  it("keeps the Google Maps key server-side", () => {
-    const env = source("src/lib/env.ts");
-    const compose = source("docker-compose.yml");
-    const route = source("src/app/api/maps/resolve/route.ts");
-
-    expect(env).toContain("GOOGLE_MAPS_API_KEY");
-    expect(compose).toContain("GOOGLE_MAPS_API_KEY:");
-    expect(route).toContain('url.searchParams.set("key", apiKey)');
-    expect(route).toContain('withOrgPermissions(\n  ["conversations.reply"]');
+    expect(
+      parseCoordinates("https://www.google.com/maps/place/X/data=!3d27.48187!4d-99.50516")
+    ).toEqual({ latitude: 27.48187, longitude: -99.50516 });
   });
 
-  it("composer resolves Plus Codes before sending a WhatsApp location", () => {
-    const composer = source("src/components/inbox/composer.tsx");
+  it("decodifica un Plus Code completo localmente", () => {
+    const result = decodeFullPlusCode("849VCWC8+R9");
+    expect(result).not.toBeNull();
+    expect(result!.latitude).toBeCloseTo(37.42206, 4);
+    expect(result!.longitude).toBeCloseTo(-122.08406, 4);
+  });
 
-    expect(composer).toContain("/api/maps/resolve");
-    expect(composer).toContain("Plus Code");
-    expect(composer).toContain("formattedAddress");
+  it("sigue un enlace compartido corto y extrae coordenadas de la redirección", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(null, {
+        status: 302,
+        headers: {
+          location:
+            "https://www.google.com/maps/place/X/@27.48187,-99.50516,17z",
+        },
+      })
+    );
+
+    const result = await resolveGoogleMapsShareLink(
+      "https://maps.app.goo.gl/abc123",
+      fetchMock as unknown as typeof fetch
+    );
+
+    expect(result).toEqual({ latitude: 27.48187, longitude: -99.50516 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechaza hosts ajenos a Google Maps", async () => {
+    const fetchMock = vi.fn();
+    const result = await resolveGoogleMapsShareLink(
+      "https://example.com/maps/27,-99",
+      fetchMock as unknown as typeof fetch
+    );
+    expect(result).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
