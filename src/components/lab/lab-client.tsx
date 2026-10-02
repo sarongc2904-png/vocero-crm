@@ -33,7 +33,12 @@ type Run = {
 };
 
 type Hallazgo = {
-  tipo: "alucinacion" | "fuera_de_kb" | "debio_escalar" | "tono";
+  tipo:
+    | "alucinacion"
+    | "fuera_de_kb"
+    | "debio_escalar"
+    | "handoff_innecesario"
+    | "tono";
   evidencia: string;
   sugerencia?: { pregunta: string; respuesta: string };
 };
@@ -75,6 +80,7 @@ const TIPO_LABELS: Record<Hallazgo["tipo"], string> = {
   alucinacion: "Alucinación",
   fuera_de_kb: "Fuera del conocimiento",
   debio_escalar: "Debió escalar",
+  handoff_innecesario: "Handoff innecesario",
   tono: "Tono",
 };
 

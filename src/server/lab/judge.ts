@@ -26,7 +26,13 @@ export const Verdict = z.object({
   veredicto: z.enum(["verde", "amarillo", "rojo"]),
   hallazgos: z.array(
     z.object({
-      tipo: z.enum(["alucinacion", "fuera_de_kb", "debio_escalar", "tono"]),
+      tipo: z.enum([
+        "alucinacion",
+        "fuera_de_kb",
+        "debio_escalar",
+        "handoff_innecesario",
+        "tono",
+      ]),
       severity: z.enum(["grave", "menor"]),
       evidencia: z.string(),
       evidenceRefs: z.array(EvidenceRef).min(1),
@@ -87,20 +93,18 @@ function isSafeKnowledgeAbstention(text: string): boolean {
       value
     );
 
-  const explicitHandoff =
-    /\b(voy a|puedo|te puedo|prefieres que te)\b.{0,50}\b(escalar|transferir|pasar|comunicar)\b/.test(
-      value
-    ) ||
-    /\b(asesor|persona|equipo)\b.{0,50}\b(ayud|continu|confirm)/.test(value);
-
-  // Una abstención segura no puede colar a la vez un precio/fecha/hora
-  // concreta, que sí sería una afirmación factual evaluable.
+  // Una transferencia a humano NO equivale por sí sola a una abstención
+  // segura. "No tengo ese dato, necesito verificarlo" sí lo es; "voy a
+  // pasarte con un asesor" es un handoff y debe evaluarse por separado.
+  //
+  // Esto evita ocultar handoffs innecesarios detrás de la protección contra
+  // falsos positivos de fuera_de_kb.
   const concreteUnsupportedFact =
     /(?:\$|mxn|usd)\s*\d/i.test(text) ||
     /\b\d{1,2}[:.]\d{2}\b/.test(text) ||
     /\b\d{4}-\d{2}-\d{2}\b/.test(text);
 
-  return (explicitlyUnknown || explicitHandoff) && !concreteUnsupportedFact;
+  return explicitlyUnknown && !concreteUnsupportedFact;
 }
 
 function findingAgentEvidence(
