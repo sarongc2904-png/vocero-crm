@@ -1,5 +1,6 @@
 import { apiError, withOrgRoles } from "@/lib/api";
 import { auditPrivilegedAction } from "@/server/auth/audit";
+import { listKnowledgeDocuments } from "@/server/kb/documents/lifecycle";
 import { createAndProcessKnowledgeDocument } from "@/server/kb/documents/upload";
 import {
   KnowledgeUploadError,
@@ -8,6 +9,11 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+export const GET = withOrgRoles(["owner", "admin"], async (session) => {
+  const documents = await listKnowledgeDocuments(session.organizationId);
+  return Response.json({ documents });
+});
 
 export const POST = withOrgRoles(
   ["owner", "admin"],
