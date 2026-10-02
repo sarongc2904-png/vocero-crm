@@ -35,6 +35,7 @@ services:
       AGENT_COALESCE_MS: ${AGENT_COALESCE_MS:-6000}
       BOT_API_KEY: ${BOT_API_KEY:-}
       MEDIA_DIR: /data/media
+      KNOWLEDGE_DIR: /data/knowledge
       ZERNIO_BASE_URL: ${ZERNIO_BASE_URL:-}
       ZOOM_BASE_URL: ${ZOOM_BASE_URL:-}
       ZOOM_OAUTH_BASE_URL: ${ZOOM_OAUTH_BASE_URL:-}
@@ -45,6 +46,7 @@ services:
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
     volumes:
       - vocero_media:/data/media
+      - vocero_knowledge:/data/knowledge
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,5 +90,6 @@ services:
 volumes:
   vocero_pg:
   vocero_media:
+  vocero_knowledge:
   vocero_caddy_data:
   vocero_caddy_config:

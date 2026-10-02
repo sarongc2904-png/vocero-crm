@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Plus, Sparkles, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Check, Eye, FileText, Plus, Settings2, Sparkles, Trash2, Upload } from "lucide-react";
+import { AgentWizard } from "@/components/agent/agent-wizard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,25 +27,55 @@ type KbEntry = {
   content: string | null;
 };
 
+type KnowledgeDocumentStatus =
+  | "uploaded"
+  | "processing"
+  | "review"
+  | "ready"
+  | "failed";
+
+type KnowledgeDocument = {
+  id: string;
+  filename: string;
+  mimeType: "text/plain" | "application/pdf";
+  fileSize: number;
+  status: KnowledgeDocumentStatus;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type KnowledgeDocumentChunk = {
+  id: string;
+  content: string;
+  position: number;
+  page: number | null;
+  approved: boolean;
+};
+
 export function AgentClient() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [aiConfigured, setAiConfigured] = useState(true);
   const [entries, setEntries] = useState<KbEntry[]>([]);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [kbSize, setKbSize] = useState<{ chars: number; warnAt: number; warning: boolean } | null>(null);
   const [saved, setSaved] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const refetch = useCallback(async () => {
-    const [p, kb, size] = await Promise.all([
+    const [p, kb, size, docs] = await Promise.all([
       fetch("/api/agent/profile").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/kb").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/kb/size").then((r) => (r.ok ? r.json() : null)),
-    ]).catch(() => [null, null, null]);
+      fetch("/api/kb/documents").then((r) => (r.ok ? r.json() : null)),
+    ]).catch(() => [null, null, null, null]);
     if (p) {
       setProfile(p.profile);
       setAiConfigured(p.aiConfigured);
     }
     if (kb) setEntries(kb.entries);
     if (size) setKbSize(size);
+    if (docs) setDocuments(docs.documents);
   }, []);
 
   useEffect(() => {
@@ -60,14 +91,42 @@ export function AgentClient() {
   }
 
   async function saveProfile(patch: Partial<Profile>) {
-    await fetch("/api/agent/profile", {
+    const response = await fetch("/api/agent/profile", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
-    }).catch(() => null);
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.error?.message ?? "No se pudo guardar el perfil");
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-    void refetch();
+    await refetch();
+  }
+
+  if (wizardOpen) {
+    return (
+      <div className="h-full overflow-y-auto">
+        <AgentWizard
+          profile={profile}
+          entries={entries}
+          documents={documents}
+          aiConfigured={aiConfigured}
+          onClose={() => setWizardOpen(false)}
+          onSaveProfile={saveProfile}
+          onChanged={refetch}
+          knowledgePanel={
+            <KbSection
+              entries={entries}
+              documents={documents}
+              kbSize={kbSize}
+              onChanged={() => void refetch()}
+            />
+          }
+        />
+      </div>
+    );
   }
 
   return (
@@ -75,6 +134,9 @@ export function AgentClient() {
       <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-6 sm:py-4">
         <h2 className="text-[17px] font-bold tracking-tight">Agente IA</h2>
         <div className="flex items-center gap-3">
+          <Button size="sm" variant="outline" onClick={() => setWizardOpen(true)}>
+            <Settings2 className="h-4 w-4" /> Configurar agente
+          </Button>
           {saved && <span className="text-xs text-primary">Guardado ✓</span>}
           <span className="text-sm text-muted-foreground">
             {profile.enabled ? "Encendido" : "Apagado"}
@@ -84,7 +146,7 @@ export function AgentClient() {
             aria-checked={profile.enabled}
             aria-label="Agente encendido"
             disabled={!aiConfigured}
-            onClick={() => void saveProfile({ enabled: !profile.enabled })}
+            onClick={() => void saveProfile({ enabled: !profile.enabled }).catch(() => null)}
             className={`relative h-6 w-11 rounded-full transition-colors disabled:opacity-40 ${
               profile.enabled ? "bg-brand" : "bg-border-strong"
             }`}
@@ -118,7 +180,12 @@ export function AgentClient() {
 
       <div className="grid gap-4 p-4 sm:gap-6 sm:p-6 lg:grid-cols-2">
         <ProfileSection profile={profile} onSave={saveProfile} />
-        <KbSection entries={entries} kbSize={kbSize} onChanged={() => void refetch()} />
+        <KbSection
+          entries={entries}
+          documents={documents}
+          kbSize={kbSize}
+          onChanged={() => void refetch()}
+        />
       </div>
     </div>
   );
@@ -197,16 +264,26 @@ function ProfileSection({
 
 function KbSection({
   entries,
+  documents,
   kbSize,
   onChanged,
 }: {
   entries: KbEntry[];
+  documents: KnowledgeDocument[];
   kbSize: { chars: number; warnAt: number; warning: boolean } | null;
   onChanged: () => void;
 }) {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [block, setBlock] = useState("");
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentBusy, setDocumentBusy] = useState<string | null>(null);
+  const [documentError, setDocumentError] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState<{
+    document: KnowledgeDocument;
+    chunks: KnowledgeDocumentChunk[];
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function addQa() {
     if (!question.trim() || !answer.trim()) return;
@@ -234,6 +311,105 @@ function KbSection({
   async function remove(id: string) {
     await fetch(`/api/kb/${id}`, { method: "DELETE" }).catch(() => null);
     onChanged();
+  }
+
+  async function uploadDocument() {
+    if (!documentFile) return;
+    setDocumentBusy("upload");
+    setDocumentError(null);
+    const form = new FormData();
+    form.set("file", documentFile);
+    try {
+      const response = await fetch("/api/kb/documents", {
+        method: "POST",
+        body: form,
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setDocumentError(body.error?.message ?? "No se pudo subir el documento");
+        return;
+      }
+      setDocumentFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      onChanged();
+    } catch {
+      setDocumentError("No se pudo subir el documento");
+    } finally {
+      setDocumentBusy(null);
+    }
+  }
+
+  async function reviewDocument(id: string) {
+    setDocumentBusy(id);
+    setDocumentError(null);
+    try {
+      const response = await fetch(`/api/kb/documents/${id}`);
+      const body = await response.json();
+      if (!response.ok) {
+        setDocumentError(body.error?.message ?? "No se pudo abrir el documento");
+        return;
+      }
+      setReviewing(body);
+    } catch {
+      setDocumentError("No se pudo abrir el documento");
+    } finally {
+      setDocumentBusy(null);
+    }
+  }
+
+  async function approveDocument(id: string) {
+    setDocumentBusy(id);
+    setDocumentError(null);
+    try {
+      const response = await fetch(`/api/kb/documents/${id}/approve`, {
+        method: "POST",
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setDocumentError(body.error?.message ?? "No se pudo aprobar el documento");
+        return;
+      }
+      setReviewing((current) =>
+        current?.document.id === id
+          ? {
+              document: body.document,
+              chunks: current.chunks.map((chunk) => ({
+                ...chunk,
+                approved: true,
+              })),
+            }
+          : current
+      );
+      onChanged();
+    } catch {
+      setDocumentError("No se pudo aprobar el documento");
+    } finally {
+      setDocumentBusy(null);
+    }
+  }
+
+  async function removeDocument(document: KnowledgeDocument) {
+    if (!window.confirm(`¿Eliminar “${document.filename}” y todo su contenido?`)) {
+      return;
+    }
+    setDocumentBusy(document.id);
+    setDocumentError(null);
+    try {
+      const response = await fetch(`/api/kb/documents/${document.id}`, {
+        method: "DELETE",
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setDocumentError(body.error?.message ?? "No se pudo eliminar el documento");
+        return;
+      }
+      if (reviewing?.document.id === document.id) setReviewing(null);
+      onChanged();
+    } catch {
+      setDocumentError("No se pudo eliminar el documento");
+    } finally {
+      setDocumentBusy(null);
+    }
   }
 
   return (
@@ -325,7 +501,162 @@ function KbSection({
             </p>
           )}
         </ul>
+
+        <div className="space-y-3 border-t pt-5">
+          <div>
+            <p className="text-sm font-semibold">Documentos</p>
+            <p className="text-xs text-muted-foreground">
+              Sube TXT o PDF. Revisa los fragmentos antes de activarlos.
+            </p>
+          </div>
+
+          <div className="space-y-2 rounded-md border p-3">
+            <Label htmlFor="knowledge-document">Archivo TXT o PDF</Label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                ref={fileInputRef}
+                id="knowledge-document"
+                type="file"
+                accept=".txt,.pdf,text/plain,application/pdf"
+                onChange={(event) =>
+                  setDocumentFile(event.target.files?.[0] ?? null)
+                }
+              />
+              <Button
+                type="button"
+                size="sm"
+                className="shrink-0"
+                disabled={!documentFile || documentBusy === "upload"}
+                onClick={() => void uploadDocument()}
+              >
+                <Upload className="h-4 w-4" />
+                {documentBusy === "upload" ? "Procesando…" : "Subir documento"}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">Máximo 10 MB.</p>
+          </div>
+
+          {documentError && (
+            <p role="alert" className="rounded-md bg-danger-tint p-3 text-xs text-danger-text">
+              {documentError}
+            </p>
+          )}
+
+          <ul className="space-y-2">
+            {documents.map((document) => {
+              const status = documentStatus(document.status);
+              return (
+                <li key={document.id} className="rounded-md border p-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <FileText className="hidden h-5 w-5 shrink-0 text-muted-foreground sm:block" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{document.filename}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatFileSize(document.fileSize)} ·{" "}
+                        {new Date(document.createdAt).toLocaleDateString("es-MX")}
+                      </p>
+                    </div>
+                    <Badge variant={status.variant}>{status.label}</Badge>
+                    <div className="flex gap-1 self-end sm:self-auto">
+                      {(document.status === "review" || document.status === "ready") && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={documentBusy === document.id}
+                          onClick={() => void reviewDocument(document.id)}
+                        >
+                          <Eye className="h-4 w-4" /> Revisar
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Eliminar ${document.filename}`}
+                        disabled={documentBusy === document.id}
+                        onClick={() => void removeDocument(document)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  {document.status === "failed" && document.error && (
+                    <p className="mt-2 text-xs text-danger-text">{document.error}</p>
+                  )}
+                </li>
+              );
+            })}
+            {documents.length === 0 && (
+              <p className="py-2 text-center text-xs text-muted-foreground">
+                No hay documentos cargados.
+              </p>
+            )}
+          </ul>
+
+          {reviewing && (
+            <div className="space-y-3 rounded-md border border-brand-soft bg-brand-tint p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold">Revisión: {reviewing.document.filename}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {reviewing.chunks.length} fragmentos extraídos
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {reviewing.document.status === "review" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={documentBusy === reviewing.document.id}
+                      onClick={() => void approveDocument(reviewing.document.id)}
+                    >
+                      <Check className="h-4 w-4" /> Aprobar y activar
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setReviewing(null)}
+                  >
+                    Cerrar
+                  </Button>
+                </div>
+              </div>
+              <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                {reviewing.chunks.map((chunk) => (
+                  <div key={chunk.id} className="rounded-md border bg-background p-3">
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      {chunk.page ? `Página ${chunk.page} · ` : ""}
+                      Fragmento {chunk.position + 1}
+                    </p>
+                    <p className="whitespace-pre-wrap text-sm text-foreground">
+                      {chunk.content}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function documentStatus(status: KnowledgeDocumentStatus): {
+  label: string;
+  variant: "secondary" | "warning" | "success" | "destructive";
+} {
+  if (status === "review") return { label: "Revisión pendiente", variant: "warning" };
+  if (status === "ready") return { label: "Activo", variant: "success" };
+  if (status === "failed") return { label: "Error", variant: "destructive" };
+  return { label: "Procesando", variant: "secondary" };
 }

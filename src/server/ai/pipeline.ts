@@ -16,7 +16,11 @@ import {
 } from "@/server/ai/actions";
 import { matchesHandoffIntent } from "@/server/ai/handoff";
 import { matchesCancellationIntent } from "@/server/agenda/cancel-intent";
-import { buildAgentSystemPrompt } from "@/server/ai/prompts";
+import {
+  buildAgentSystemPrompt,
+  buildDocumentKnowledgeMessages,
+} from "@/server/ai/prompts";
+import { retrieveRelevantDocumentChunks } from "@/server/kb/documents/retrieval";
 import { agendaEnabled } from "@/server/agenda/flag";
 import {
   bookSlot,
@@ -302,6 +306,12 @@ export async function runAgentTurn(
     .from(schema.pipelineStage)
     .where(eq(schema.pipelineStage.organizationId, organizationId))
     .orderBy(asc(schema.pipelineStage.position));
+  const documentChunks = await retrieveRelevantDocumentChunks({
+    organizationId,
+    query: lastInbound.text ?? "",
+    maxChunks: 5,
+    maxCharacters: 7_500,
+  });
 
   const agenda = agendaEnabled();
   const safeModelReply = (text: string) =>
@@ -507,6 +517,7 @@ export async function runAgentTurn(
         repeatedGreeting,
       }),
     },
+    ...buildDocumentKnowledgeMessages(documentChunks),
     ...history
       .filter((m) => m.text)
       .map((m) => ({

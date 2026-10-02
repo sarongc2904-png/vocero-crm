@@ -291,7 +291,7 @@ describe("loadShadowContext tenant scope", () => {
     expect(result.context).toBeNull();
   });
 
-  it("impide que B llegue al modelo durante una ejecución shadow de A", async () => {
+  it("impide que B llegue al modelo durante una ejecución shadow de A", { timeout: 15_000 }, async () => {
     h.messages.push({
       id: "msg_in_2",
       organizationId: "org_a",

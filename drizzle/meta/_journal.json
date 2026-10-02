@@ -239,6 +239,13 @@
       "when": 1790964800000,
       "tag": "0033_ai_context_reset",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790914405949,
+      "tag": "0034_knowledge_documents",
+      "breakpoints": true
     }
   ]
 }

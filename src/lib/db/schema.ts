@@ -1,6 +1,7 @@
 import {
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -730,6 +731,88 @@ export const kbEntry = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [index("kb_org_idx").on(t.organizationId)]
+);
+
+export const kbDocument = pgTable(
+  "kb_document",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    mimeType: text("mime_type").notNull(),
+    fileSize: integer("file_size").notNull(),
+    /** Ruta relativa dentro de KNOWLEDGE_DIR; nunca una ruta aportada por el usuario. */
+    storagePath: text("storage_path").notNull(),
+    status: text("status", {
+      enum: ["uploaded", "processing", "review", "ready", "failed"],
+    })
+      .notNull()
+      .default("uploaded"),
+    error: text("error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("kb_document_org_id_uq").on(t.organizationId, t.id),
+    uniqueIndex("kb_document_org_storage_path_uq").on(
+      t.organizationId,
+      t.storagePath
+    ),
+    index("kb_document_org_status_idx").on(t.organizationId, t.status),
+    index("kb_document_org_created_idx").on(t.organizationId, t.createdAt),
+    check("kb_document_file_size_nonnegative", sql`${t.fileSize} >= 0`),
+    check(
+      "kb_document_mime_type_allowed",
+      sql`${t.mimeType} in ('text/plain', 'application/pdf')`
+    ),
+    check(
+      "kb_document_status_allowed",
+      sql`${t.status} in ('uploaded', 'processing', 'review', 'ready', 'failed')`
+    ),
+  ]
+);
+
+export const kbDocumentChunk = pgTable(
+  "kb_document_chunk",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    documentId: text("document_id").notNull(),
+    content: text("content").notNull(),
+    position: integer("position").notNull(),
+    page: integer("page"),
+    approved: boolean("approved").notNull().default(false),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      columns: [t.organizationId, t.documentId],
+      foreignColumns: [kbDocument.organizationId, kbDocument.id],
+      name: "kb_document_chunk_org_document_fk",
+    }).onDelete("cascade"),
+    uniqueIndex("kb_document_chunk_org_document_position_uq").on(
+      t.organizationId,
+      t.documentId,
+      t.position
+    ),
+    index("kb_document_chunk_org_approved_idx").on(
+      t.organizationId,
+      t.approved
+    ),
+    check("kb_document_chunk_position_nonnegative", sql`${t.position} >= 0`),
+    check(
+      "kb_document_chunk_page_positive",
+      sql`${t.page} is null or ${t.page} > 0`
+    ),
+    check(
+      "kb_document_chunk_content_nonempty",
+      sql`length(btrim(${t.content})) > 0`
+    ),
+  ]
 );
 
 export const template = pgTable(

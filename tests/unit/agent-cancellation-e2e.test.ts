@@ -25,7 +25,7 @@ vi.mock("@/server/agenda/service", async (importOriginal) => {
 vi.mock("@/lib/db", () => {
   const chain = (rows: unknown[]) => {
     const value: Record<string, unknown> = {};
-    for (const method of ["from", "where", "orderBy", "limit"]) {
+    for (const method of ["from", "innerJoin", "where", "orderBy", "limit"]) {
       value[method] = () => value;
     }
     value.then = (resolve: (rows: unknown[]) => void) => Promise.resolve(rows).then(resolve);

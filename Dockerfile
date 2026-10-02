@@ -36,9 +36,9 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup -S vocero && adduser -S vocero -G vocero
 # 008: punto de montaje del volumen de adjuntos, propiedad del usuario de la
-# app — el volumen nombrado hereda este dueño al montarse vacío (sin esto,
-# monta como root y el guardado de adjuntos falla con EACCES).
-RUN mkdir -p /data/media && chown -R vocero:vocero /data
+# app — los volúmenes nombrados heredan este dueño al montarse vacíos (sin
+# esto, montan como root y el guardado falla con EACCES).
+RUN mkdir -p /data/media /data/knowledge && chown -R vocero:vocero /data
 
 COPY --from=builder --chown=vocero:vocero /app/.next/standalone ./
 COPY --from=builder --chown=vocero:vocero /app/.next/static ./.next/static
