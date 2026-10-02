@@ -4,6 +4,7 @@ import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
 import { runAgentTurn } from "@/server/ai/pipeline";
 import { renderKb } from "@/server/ai/prompts";
+import { retrieveRelevantDocumentChunks } from "@/server/kb/documents/retrieval";
 import { computeScore, judgeCase } from "@/server/lab/judge";
 import { type Persona } from "@/server/lab/personas";
 import { getLabPersonas } from "@/server/lab/profile";
@@ -25,6 +26,38 @@ import {
 const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class RunConflictError extends Error {}
+
+export async function buildJudgeKnowledgeText(input: {
+  organizationId: string;
+  baseKbText: string;
+  transcript: { role: "cliente" | "agente"; text: string }[];
+}): Promise<string> {
+  const chunks = new Map<string, string>();
+
+  for (const message of input.transcript) {
+    if (message.role !== "cliente" || !message.text.trim()) continue;
+
+    const retrieved = await retrieveRelevantDocumentChunks({
+      organizationId: input.organizationId,
+      query: message.text,
+      maxChunks: 5,
+      maxCharacters: 7_500,
+    });
+
+    for (const chunk of retrieved) {
+      if (!chunks.has(chunk.id)) {
+        chunks.set(chunk.id, chunk.content);
+      }
+    }
+  }
+
+  return [
+    input.baseKbText.trim(),
+    [...chunks.values()].join("\n\n").trim(),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 export async function startRun(organizationId: string): Promise<string> {
   const db = getDb();
@@ -154,10 +187,16 @@ async function runAllCases(
       trace: actionTrace,
     });
 
+    const judgeKbText = await buildJudgeKnowledgeText({
+      organizationId,
+      baseKbText: kbText,
+      transcript,
+    });
+
     const outcome = await judgeCase({
       personaKey: persona.key,
       transcript,
-      kbText,
+      kbText: judgeKbText,
       behaviorText,
       actionTrace,
       agendaEnabled: agendaEnabled(),
