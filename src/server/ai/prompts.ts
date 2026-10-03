@@ -29,13 +29,19 @@ function appointmentRequirementsPresent(knowledgeText: string): boolean {
   );
 }
 
-function mentionedService(conversationText: string, knowledgeText: string): boolean {
-  const conversation = normalizePolicyText(conversationText);
-  const serviceNames = knowledgeText
-    .split(/\r?\n/)
-    .map((line) => line.match(/^\s*-\s*([^:\n]+):\s*(?:desde\s*)?\$/i)?.[1])
-    .filter((name): name is string => Boolean(name))
+/**
+ * Nombres de servicio del conocimiento: el texto antes de los dos puntos de
+ * cada línea de lista con precio, con el mismo criterio que knowledgePriceLines.
+ */
+function knowledgeServiceNames(knowledgeText: string): string[] {
+  return knowledgePriceLines(knowledgeText)
+    .lines.map((line) => line.slice(1, line.indexOf(":")).trim())
+    .filter(Boolean)
     .map(normalizePolicyText);
+}
+
+function mentionedService(conversationText: string, serviceNames: string[]): boolean {
+  const conversation = normalizePolicyText(conversationText);
   return serviceNames.some((name) => {
     if (conversation.includes(name)) return true;
     const distinctiveTerms = name
@@ -265,7 +271,13 @@ export function groundedConversationReply(input: {
       missing.push("name");
     }
     if (!/(?:\d[\s()-]*){10,}/.test(input.customerHistoryText)) missing.push("phone");
-    if (!mentionedService(input.customerHistoryText, input.knowledgeText)) {
+    // Si la KB de este negocio no permite extraer nombres de servicio, el
+    // servicio no es verificable: no se pide aquí y esa pregunta queda al modelo.
+    const serviceNames = knowledgeServiceNames(input.knowledgeText);
+    if (
+      serviceNames.length > 0 &&
+      !mentionedService(input.customerHistoryText, serviceNames)
+    ) {
       missing.push("service");
     }
     if (missing.length === 0) return null;

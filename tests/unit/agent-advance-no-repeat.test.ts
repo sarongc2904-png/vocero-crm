@@ -336,6 +336,65 @@ describe("líneas de precio del documento — nunca una lista parcial", () => {
     expect(answer).not.toBeNull();
     expect(answer).toContain("- Ortodoncia: valoración inicial $500 MXN");
   });
+
+  it("'quiero contratar ortodoncia' cuenta como servicio mencionado y no se vuelve a pedir", () => {
+    const history = [
+      { role: "customer" as const, text: "Me llamo Juan Pérez, mi teléfono es 867 123 4567" },
+      { role: "agent" as const, text: "Gracias. ¿Qué servicio o motivo de consulta le interesa?" },
+      { role: "customer" as const, text: "quiero contratar ortodoncia" },
+    ];
+    expect(
+      reply({ inbound: "quiero contratar ortodoncia", knowledge: DEMO_KNOWLEDGE, conversation: history })
+    ).toBeNull();
+
+    // Sin nombre: la petición combinada tampoco incluye el servicio ya dicho.
+    const combined = reply({
+      inbound: "quiero contratar ortodoncia",
+      knowledge: DEMO_KNOWLEDGE,
+      conversation: [
+        { role: "customer", text: "Quiero avanzar hoy" },
+        { role: "agent", text: ASK_NAME },
+        { role: "customer", text: "quiero contratar ortodoncia" },
+      ],
+    });
+    expect(combined).toMatch(/nombre completo/);
+    expect(combined).not.toMatch(/servicio o motivo/);
+  });
+});
+
+describe("KB sin lista de precios — el servicio no se pide de forma determinista", () => {
+  const NO_PRICE_KNOWLEDGE = [
+    "Para agendar una cita solicitar:",
+    "- Nombre completo",
+    "- Número de teléfono",
+    "- Servicio o motivo de consulta",
+    "Atendemos de lunes a viernes.",
+  ].join("\n");
+
+  it("con nombre y teléfono, no pregunta el servicio: queda al modelo", () => {
+    expect(
+      groundedConversationReply({
+        inboundText: "Quiero avanzar hoy",
+        customerHistoryText: "Soy Juan Pérez. Mi teléfono es 867 123 4567. Quiero avanzar hoy",
+        knowledgeText: NO_PRICE_KNOWLEDGE,
+      })
+    ).toBeNull();
+  });
+
+  it("la petición combinada no incluye el servicio", () => {
+    const combined = reply({
+      inbound: "Quiero avanzar hoy",
+      knowledge: NO_PRICE_KNOWLEDGE,
+      conversation: [
+        { role: "customer", text: "Quiero avanzar hoy" },
+        { role: "agent", text: ASK_NAME },
+        { role: "customer", text: "Quiero avanzar hoy" },
+      ],
+    });
+    expect(combined).toMatch(/nombre completo/);
+    expect(combined).toMatch(/tel[eé]fono/);
+    expect(combined).not.toMatch(/servicio o motivo/);
+  });
 });
 
 describe("evasivas tras la pregunta de nombre no cuentan como nombre", () => {
