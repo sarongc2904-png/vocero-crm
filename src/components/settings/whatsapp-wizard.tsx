@@ -21,8 +21,8 @@ type Connection = {
   phoneNumberId: string;
   displayPhoneNumber: string | null;
   verifiedName: string | null;
-  status: "connected" | "reconnect_required";
-  tokenLast4: string;
+  status: "connected" | "reconnect_required" | "error";
+  errorMessage: string | null;
 };
 
 type WebhookInfo = {
@@ -33,7 +33,13 @@ type WebhookInfo = {
 };
 
 type EmbeddedSignupInfo =
-  | { available: true; appId: string; configId: string; graphVersion: string }
+  | {
+      available: true;
+      appId: string;
+      configId: string;
+      graphVersion: string;
+      state: string;
+    }
   | { available: false };
 
 export function WhatsappWizard() {
@@ -43,9 +49,11 @@ export function WhatsappWizard() {
     available: false,
   });
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const refetch = useCallback(async () => {
+    setLoadError(null);
     const [c, w] = await Promise.all([
       fetch("/api/settings/whatsapp").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/settings/webhook").then((r) => (r.ok ? r.json() : null)),
@@ -55,6 +63,7 @@ export function WhatsappWizard() {
       setEmbeddedSignup(c.embeddedSignup ?? { available: false });
     }
     if (w) setWebhook(w);
+    if (!c) setLoadError("No pudimos consultar el estado de WhatsApp.");
     setLoaded(true);
   }, []);
 
@@ -83,23 +92,57 @@ export function WhatsappWizard() {
         </div>
       )}
 
+      {loadError && (
+        <div className="flex items-start gap-2 rounded-lg border border-danger-soft bg-danger-tint p-4 text-sm text-danger-text">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-medium">{loadError}</p>
+            <Button className="mt-2" variant="outline" onClick={() => void refetch()}>
+              Intentar de nuevo
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {connection?.status === "error" && (
+        <div className="flex items-start gap-2 rounded-lg border border-danger-soft bg-danger-tint p-4 text-sm text-danger-text">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-medium">No pudimos verificar la conexión con Meta.</p>
+            <p className="opacity-80">{connection.errorMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {!connection && !loadError && (
+        <div className="rounded-lg border bg-subtle/40 p-4 text-sm">
+          <p className="font-medium">WhatsApp no conectado</p>
+          <p className="mt-1 text-text-3">
+            Conecta tu WhatsApp Business para recibir y responder mensajes desde el CRM.
+          </p>
+        </div>
+      )}
+
       {connection && connection.status === "connected" && (
         <div className="flex items-center gap-3 rounded-lg border border-success-soft bg-success-tint p-4">
           <CheckCircle2 className="h-5 w-5 text-success" />
           <div className="flex-1 text-sm">
             <p className="font-medium text-success-text">
-              Número conectado: {connection.displayPhoneNumber ?? connection.phoneNumberId}
+              WhatsApp conectado
             </p>
             <p className="text-success-text opacity-80">
               {connection.verifiedName ? `${connection.verifiedName} · ` : ""}
-              token …{connection.tokenLast4}
+              {connection.displayPhoneNumber ?? connection.phoneNumberId}
+            </p>
+            <p className="mt-1 text-xs text-success-text opacity-70">
+              WABA: {connection.wabaId} · Phone Number ID: {connection.phoneNumberId}
             </p>
           </div>
           <Badge variant="success">Conectado</Badge>
         </div>
       )}
 
-      {embeddedSignup.available && (
+      {!loadError && embeddedSignup.available && (
         <Card>
           <CardHeader>
             <CardTitle>
@@ -114,26 +157,27 @@ export function WhatsappWizard() {
           <CardContent>
             <EmbeddedSignupButton
               config={embeddedSignup}
+              reconnect={Boolean(connection)}
               onConnected={() => void refetch()}
             />
           </CardContent>
         </Card>
       )}
 
-      {embeddedSignup.available ? (
+      {!loadError && embeddedSignup.available ? (
         <div className="rounded-lg border bg-subtle/40 p-4">
           <p className="text-sm font-medium">Conexión guiada por Meta</p>
           <p className="mt-1 text-xs text-text-3">
             No necesitas copiar tokens, IDs ni configurar el webhook manualmente.
           </p>
         </div>
-      ) : (
+      ) : !loadError ? (
         <div className="rounded-lg border border-warning-soft bg-warning-tint p-4 text-sm text-warning-text">
           La conexión guiada no está disponible en esta instancia. Usa las credenciales manuales.
         </div>
-      )}
+      ) : null}
 
-      {!embeddedSignup.available && (
+      {!loadError && !embeddedSignup.available && (
         <ConnectForm existing={connection} onSaved={() => void refetch()} />
       )}
 
@@ -154,9 +198,53 @@ export function WhatsappWizard() {
             <ConnectForm existing={connection} onSaved={() => void refetch()} />
           )}
           {webhook && <WebhookCard webhook={webhook} />}
+          {connection && (
+            <DisconnectButton onDisconnected={() => void refetch()} />
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function DisconnectButton({
+  onDisconnected,
+}: {
+  onDisconnected: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function disconnect() {
+    if (!window.confirm("¿Desconectar WhatsApp de esta organización?")) return;
+    setBusy(true);
+    setError(null);
+    const response = await fetch("/api/settings/whatsapp", {
+      method: "DELETE",
+    }).catch(() => null);
+    setBusy(false);
+    if (!response?.ok) {
+      setError("No pudimos desconectar WhatsApp. Intenta de nuevo.");
+      return;
+    }
+    onDisconnected();
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Desconectar WhatsApp</CardTitle>
+        <CardDescription>
+          El CRM dejará de recibir y enviar mensajes para esta organización hasta que vuelvas a conectarlo.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button variant="outline" disabled={busy} onClick={() => void disconnect()}>
+          {busy ? "Desconectando…" : "Desconectar WhatsApp"}
+        </Button>
+        {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -294,7 +382,7 @@ function ConnectForm({
           <Input
             id="token"
             type="password"
-            placeholder={existing ? `Guardado (…${existing.tokenLast4}) — pega uno nuevo para cambiarlo` : "EAAG…"}
+            placeholder={existing ? "Pega un token nuevo para reemplazar la conexión" : "EAAG…"}
             value={token}
             onChange={(e) => {
               setToken(e.target.value);

@@ -15,6 +15,13 @@ export type Credentials = {
   token: string;
 };
 
+export class CredentialsOwnershipError extends Error {
+  constructor() {
+    super("El número de WhatsApp ya está conectado a otra organización");
+    this.name = "CredentialsOwnershipError";
+  }
+}
+
 type Row = typeof schema.metaCredentials.$inferSelect;
 
 function toCredentials(row: Row): Credentials {
@@ -72,6 +79,21 @@ export async function getCredentialsByOrg(
   return rows[0] ? toCredentials(rows[0]) : null;
 }
 
+/** Impide que un tenant intente reclamar el Phone Number ID de otro. */
+export async function assertPhoneNumberAvailableForOrg(
+  organizationId: string,
+  phoneNumberId: string
+): Promise<void> {
+  const db = getDb();
+  const rows = await db
+    .select({ organizationId: schema.metaCredentials.organizationId })
+    .from(schema.metaCredentials)
+    .where(eq(schema.metaCredentials.phoneNumberId, phoneNumberId))
+    .limit(1);
+  const owner = rows[0]?.organizationId;
+  if (owner && owner !== organizationId) throw new CredentialsOwnershipError();
+}
+
 export async function saveCredentials(input: {
   organizationId: string;
   wabaId: string;
@@ -123,7 +145,12 @@ export async function markReconnectRequired(
     .where(scoped(schema.metaCredentials.organizationId, organizationId));
 }
 
-/** Últimos 4 caracteres del token para mostrar en UI (jamás el token). */
-export function tokenLast4(token: string): string {
-  return token.slice(-4);
+/** Desconecta exclusivamente las credenciales del tenant activo. */
+export async function deleteCredentialsByOrg(
+  organizationId: string
+): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(schema.metaCredentials)
+    .where(scoped(schema.metaCredentials.organizationId, organizationId));
 }

@@ -1,20 +1,26 @@
 import { z } from "zod";
-import { apiError, parseBody, withOrgRoles } from "@/lib/api";
+import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { isEmbeddedSignupConfigured } from "@/lib/env";
 import { auditPrivilegedAction } from "@/server/auth/audit";
-import { saveCredentials } from "@/server/whatsapp/credentials";
+import {
+  assertPhoneNumberAvailableForOrg,
+  CredentialsOwnershipError,
+  saveCredentials,
+} from "@/server/whatsapp/credentials";
 import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
 import {
   EmbeddedSignupError,
   exchangeCodeForToken,
   extendToken,
   registerPhoneNumberIfNeeded,
+  verifyEmbeddedSignupState,
 } from "@/server/whatsapp/embedded-signup";
 
 export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({
   code: z.string().trim().min(1),
+  state: z.string().trim().min(1),
   wabaId: z.string().trim().min(1),
   phoneNumberId: z.string().trim().min(1),
 });
@@ -24,7 +30,7 @@ const bodySchema = z.object({
  * `code` de un solo uso (nunca un token — el App Secret no sale de aquí) más
  * el waba_id/phone_number_id que el cliente eligió en el login de Meta.
  */
-export const POST = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
+export const POST = withOrgPermissions(["settings.update"], async (session, req: Request) => {
   if (!isEmbeddedSignupConfigured()) {
     return apiError(
       501,
@@ -35,6 +41,32 @@ export const POST = withOrgRoles(["owner", "admin"], async (session, req: Reques
 
   const body = await parseBody(req, bodySchema);
   if (!body.ok) return body.response;
+
+  if (
+    !verifyEmbeddedSignupState({
+      state: body.data.state,
+      sessionId: session.sessionId,
+      organizationId: session.organizationId,
+    })
+  ) {
+    return apiError(
+      422,
+      "invalid_signup_state",
+      "La sesión de conexión expiró. Inicia nuevamente desde Ajustes."
+    );
+  }
+
+  try {
+    await assertPhoneNumberAvailableForOrg(
+      session.organizationId,
+      body.data.phoneNumberId
+    );
+  } catch (err) {
+    if (err instanceof CredentialsOwnershipError) {
+      return apiError(409, "phone_already_connected", err.message);
+    }
+    throw err;
+  }
 
   let token: string;
   try {
@@ -55,8 +87,10 @@ export const POST = withOrgRoles(["owner", "admin"], async (session, req: Reques
 
   // Best-effort, en ese orden: registrar el número y suscribir el webhook no
   // deben impedir guardar una conexión que Meta ya validó arriba.
-  await registerPhoneNumberIfNeeded(body.data.phoneNumberId, token).catch((err) =>
-    console.warn("[embedded-signup] registro falló:", err)
+  await registerPhoneNumberIfNeeded(body.data.phoneNumberId, token).catch(() =>
+    console.warn(
+      "[embedded-signup] no se pudo registrar el número; la conexión validada continuará"
+    )
   );
 
   await saveCredentials({

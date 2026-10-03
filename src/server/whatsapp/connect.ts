@@ -74,10 +74,9 @@ export async function subscribeAppToWaba(
       method: "POST",
       token,
     });
-  } catch (err) {
+  } catch {
     console.warn(
-      "[connect] subscribed_apps falló (esperado en modo agencia):",
-      err instanceof Error ? err.message : err
+      "[connect] subscribed_apps falló (esperado en modo agencia)"
     );
   }
 }

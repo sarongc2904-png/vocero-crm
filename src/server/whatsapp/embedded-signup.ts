@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getEnv } from "@/lib/env";
 import { MetaApiError, graphRequest } from "@/lib/meta/client";
 
@@ -18,6 +19,60 @@ export class EmbeddedSignupError extends Error {
     super(message);
     this.name = "EmbeddedSignupError";
   }
+}
+
+const SIGNUP_STATE_TTL_MS = 10 * 60 * 1000;
+
+function signupStateSignature(input: {
+  sessionId: string;
+  organizationId: string;
+  expiresAt: number;
+  nonce: string;
+}): string {
+  return createHmac("sha256", getEnv().BETTER_AUTH_SECRET)
+    .update(
+      `${input.sessionId}\n${input.organizationId}\n${input.expiresAt}\n${input.nonce}`
+    )
+    .digest("base64url");
+}
+
+/** Token CSRF/correlación, corto y ligado a la sesión + tenant activos. */
+export function createEmbeddedSignupState(input: {
+  sessionId: string;
+  organizationId: string;
+  now?: number;
+}): string {
+  const expiresAt = (input.now ?? Date.now()) + SIGNUP_STATE_TTL_MS;
+  const nonce = randomBytes(18).toString("base64url");
+  const signature = signupStateSignature({ ...input, expiresAt, nonce });
+  return `${expiresAt}.${nonce}.${signature}`;
+}
+
+export function verifyEmbeddedSignupState(input: {
+  state: string;
+  sessionId: string;
+  organizationId: string;
+  now?: number;
+}): boolean {
+  const [expiresRaw, nonce, signature, extra] = input.state.split(".");
+  if (!expiresRaw || !nonce || !signature || extra !== undefined) return false;
+  const expiresAt = Number(expiresRaw);
+  const now = input.now ?? Date.now();
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) return false;
+  if (expiresAt - now > SIGNUP_STATE_TTL_MS) return false;
+
+  const expected = signupStateSignature({
+    sessionId: input.sessionId,
+    organizationId: input.organizationId,
+    expiresAt,
+    nonce,
+  });
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    actualBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(actualBuffer, expectedBuffer)
+  );
 }
 
 /** Intercambia el `code` de un solo uso por un token de acceso de usuario. */
@@ -93,7 +148,9 @@ export async function registerPhoneNumberIfNeeded(
     if (err instanceof MetaApiError && err.status >= 400 && err.status < 500) {
       // Ya registrado, o el negocio aún no completó verificación: en ambos
       // casos el resto de la conexión (guardar credenciales) sigue sirviendo.
-      console.warn("[embedded-signup] registro de número omitido:", err.message);
+      console.warn(
+        "[embedded-signup] registro de número omitido por respuesta de Meta"
+      );
       return;
     }
     throw err;
