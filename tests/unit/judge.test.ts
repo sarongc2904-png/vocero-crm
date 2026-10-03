@@ -51,12 +51,54 @@ describe("judge prompt contract", () => {
 describe("judgeCase (FR-032)", () => {
   beforeEach(() => chatJson.mockReset());
 
+  it("no permite verde cuando una respuesta genérica evade una pregunta concreta de precio respaldada por KB", async () => {
+    chatJson.mockResolvedValue({
+      ok: true,
+      data: {
+        veredicto: "verde",
+        hallazgos: [],
+      },
+      raw: "{}",
+    });
+
+    const outcome = await judgeCase({
+      personaKey: "pregunton_precios",
+      transcript: [
+        { role: "cliente", text: "¿Cuánto cuesta cada opción?" },
+        {
+          role: "agente",
+          text: "Claro, puedo ayudarte con eso. Dime qué información necesitas.",
+        },
+      ],
+      kbText:
+        "Limpieza dental: $700 MXN. Incluye evaluación y procedimiento de limpieza.",
+      behaviorText:
+        "Responde preguntas comerciales con la información disponible.",
+      actionTrace: [],
+    });
+
+    expect(outcome.status).toBe("done");
+
+    if (outcome.status === "done") {
+      expect(outcome.verdict.veredicto).toBe("amarillo");
+      expect(outcome.verdict.hallazgos).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            tipo: "respuesta_generica",
+            severity: "menor",
+          }),
+        ])
+      );
+    }
+  });
+
   it("veredicto válido → done", async () => {
     chatJson.mockResolvedValue({
       ok: true,
       data: { veredicto: "verde", hallazgos: [] },
       raw: "{}",
     });
+
     const outcome = await judgeCase({
       personaKey: "comprador_decidido",
       transcript: [{ role: "cliente", text: "hola" }],
@@ -64,7 +106,9 @@ describe("judgeCase (FR-032)", () => {
       behaviorText: "b",
       actionTrace: [],
     });
+
     expect(outcome.status).toBe("done");
+
     // usa el modelo del juez (opts.judge)
     expect(chatJson.mock.calls[0]![2]).toMatchObject({ judge: true });
   });
@@ -82,7 +126,8 @@ describe("judgeCase (FR-032)", () => {
               severity: "grave",
               evidencia: "handoff prematuro",
               evidenceRefs: [{ source: "action_trace", index: 0 }],
-              reason: "El agente transfirió una consulta comercial que podía continuar.",
+              reason:
+                "El agente transfirió una consulta comercial que podía continuar.",
             },
           ],
         },
@@ -96,7 +141,8 @@ describe("judgeCase (FR-032)", () => {
           { role: "agente", text: "Voy a pasarte con un asesor." },
         ],
         kbText: "Servicio A: $500 MXN. Servicio B: $900 MXN.",
-        behaviorText: "Responde consultas comerciales con la información disponible.",
+        behaviorText:
+          "Responde consultas comerciales con la información disponible.",
         actionTrace: [
           {
             turn: 1,
@@ -118,7 +164,9 @@ describe("judgeCase (FR-032)", () => {
       if (outcome.status === "done") {
         expect(outcome.verdict.veredicto).toBe("rojo");
         expect(outcome.verdict.hallazgos).toHaveLength(1);
-        expect(outcome.verdict.hallazgos[0]?.tipo).toBe("handoff_innecesario");
+        expect(outcome.verdict.hallazgos[0]?.tipo).toBe(
+          "handoff_innecesario"
+        );
       }
     }
   );
@@ -302,6 +350,7 @@ describe("judgeCase (FR-032)", () => {
       error: "invalid_output",
       detail: "no cumple el esquema (raw=...)",
     });
+
     const outcome = await judgeCase({
       personaKey: "fuera_de_kb",
       transcript: [],
@@ -309,6 +358,7 @@ describe("judgeCase (FR-032)", () => {
       behaviorText: "",
       actionTrace: [],
     });
+
     expect(outcome.status).toBe("judge_failed");
   });
 });
@@ -320,6 +370,7 @@ describe("computeScore (FR-033: judge_failed excluido del denominador)", () => {
       { status: "done", veredicto: "amarillo" },
       { status: "done", veredicto: "rojo" },
     ]);
+
     expect(score).toBe(50); // (1 + 0.5 + 0) / 3 = 0.5
   });
 
@@ -329,6 +380,7 @@ describe("computeScore (FR-033: judge_failed excluido del denominador)", () => {
       { status: "done", veredicto: "verde" },
       { status: "judge_failed", veredicto: null },
     ]);
+
     expect(score).toBe(100); // 2/2, no 2/3
   });
 
@@ -339,8 +391,16 @@ describe("computeScore (FR-033: judge_failed excluido del denominador)", () => {
   });
 
   it("6 verdes → 100; 6 rojos → 0", () => {
-    const verdes = Array(6).fill({ status: "done", veredicto: "verde" });
-    const rojos = Array(6).fill({ status: "done", veredicto: "rojo" });
+    const verdes = Array(6).fill({
+      status: "done",
+      veredicto: "verde",
+    });
+
+    const rojos = Array(6).fill({
+      status: "done",
+      veredicto: "rojo",
+    });
+
     expect(computeScore(verdes)).toBe(100);
     expect(computeScore(rojos)).toBe(0);
   });
@@ -375,7 +435,10 @@ describe("evidencia de disponibilidad de agenda", () => {
           role: "cliente",
           text: "Perfecto, quiero avanzar hoy. ¿Cuál es el siguiente paso?",
         },
-        { role: "agente", text: availability },
+        {
+          role: "agente",
+          text: availability,
+        },
       ],
       kbText: "",
       behaviorText: "",
@@ -431,8 +494,14 @@ describe("evidencia de disponibilidad de agenda", () => {
     const outcome = await judgeCase({
       personaKey: "comprador_decidido",
       transcript: [
-        { role: "cliente", text: "¿Qué horarios hay?" },
-        { role: "agente", text: availability },
+        {
+          role: "cliente",
+          text: "¿Qué horarios hay?",
+        },
+        {
+          role: "agente",
+          text: availability,
+        },
       ],
       kbText: "",
       behaviorText: "",
