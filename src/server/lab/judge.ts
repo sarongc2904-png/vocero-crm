@@ -37,6 +37,7 @@ export const Verdict = z.object({
         "debio_escalar",
         "handoff_innecesario",
         "respuesta_generica",
+        "eco_cliente",
         "repeticion",
         "tono",
       ]),
@@ -61,7 +62,7 @@ export type EvidenceRefType = z.infer<typeof EvidenceRef>;
  * partir del mismo veredicto crudo. Un registro persistido con otra versión no
  * se considera replayable sin revisar el cambio.
  */
-export const ADJUDICATION_VERSION = 4;
+export const ADJUDICATION_VERSION = 5;
 
 /**
  * Temperatura del juez. El juez no es creativo: es un evaluador con rúbrica.
@@ -212,6 +213,58 @@ function customerRequestedRepeat(text: string | null): boolean {
   );
 }
 
+const ECHO_FRAME_WORDS = new Set([
+  "claro",
+  "comprendo",
+  "entiendo",
+  "entonces",
+  "perfecto",
+  "dices",
+  "comentas",
+  "mencionas",
+]);
+
+function echoWords(text: string): string[] {
+  return normalizeForSafetyCheck(text)
+    .replace(/[^a-z0-9ñ\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) =>
+      /^(quiero|quieres|quiere|queremos|quieren)$/.test(word)
+        ? "querer"
+        : word
+    );
+}
+
+/**
+ * Detecta un eco improductivo del turno inmediatamente anterior.
+ *
+ * Es deliberadamente conservador: exige un mensaje sustancial, conserva al
+ * menos 80 % de las palabras del cliente y tolera como máximo dos palabras
+ * nuevas de encuadre ("entiendo", "claro", etc.). Una respuesta que añade
+ * precio, explicación, pregunta útil o siguiente paso deja de cumplir la
+ * regla y no se penaliza.
+ */
+function isCustomerEcho(customerText: string, agentText: string): boolean {
+  const customerWords = echoWords(customerText);
+  const agentWords = echoWords(agentText);
+
+  if (customerWords.length < 4 || agentWords.length < 4) return false;
+
+  const customerSet = new Set(customerWords);
+  const agentMeaningful = agentWords.filter(
+    (word) => !ECHO_FRAME_WORDS.has(word) && word !== "que" && word !== "me"
+  );
+  const agentSet = new Set(agentMeaningful);
+  const shared = [...customerSet].filter((word) => agentSet.has(word)).length;
+  const customerCoverage = shared / customerSet.size;
+  const novelAgentWords = [...agentSet].filter(
+    (word) => !customerSet.has(word)
+  ).length;
+
+  return customerCoverage >= 0.8 && novelAgentWords <= 2;
+}
+
 function deterministicQualityFindings(input: {
   transcript: { role: "cliente" | "agente"; text: string }[];
   evidenceText?: string;
@@ -260,6 +313,26 @@ function deterministicQualityFindings(input: {
         ],
         reason:
           "El cliente hizo una pregunta concreta de precio respaldada por el conocimiento disponible, pero el agente respondió de forma genérica sin contestarla.",
+      });
+    }
+
+    if (
+      lastCustomerMessage !== null &&
+      isCustomerEcho(lastCustomerMessage, item.text) &&
+      !existingAgentRefs.has(currentAgentIndex)
+    ) {
+      findings.push({
+        tipo: "eco_cliente",
+        severity: "menor",
+        evidencia: item.text,
+        evidenceRefs: [
+          {
+            source: "agent_message",
+            index: currentAgentIndex,
+          },
+        ],
+        reason:
+          "El agente repitió o reformuló el mensaje del cliente sin responderlo ni aportar un avance útil.",
       });
     }
 
@@ -408,8 +481,9 @@ const FINDING_TYPE_RANK: Record<
   debio_escalar: 2,
   handoff_innecesario: 3,
   respuesta_generica: 4,
-  repeticion: 5,
-  tono: 6,
+  eco_cliente: 5,
+  repeticion: 6,
+  tono: 7,
 };
 
 function evidenceRefKey(
