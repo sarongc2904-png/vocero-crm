@@ -46,6 +46,10 @@ function hallucination(overrides: Partial<VerdictType["hallazgos"][number]> = {}
 describe("juez determinista — muestreo fijo", () => {
   beforeEach(() => chatJson.mockReset());
 
+  it("identifica la revisión determinista Judge Quality v6", () => {
+    expect(ADJUDICATION_VERSION).toBe(6);
+  });
+
   it("pide temperatura 0 al proveedor para que el veredicto no dependa del muestreo", async () => {
     chatJson.mockResolvedValue({
       ok: true,
@@ -392,6 +396,87 @@ describe("registro del juez y replay offline", () => {
     // coincide aunque el proveedor devuelva lo mismo.
     expect(first.judgeInputDigest).toBe(second.judgeInputDigest);
     expect(first.verdictDigest).toBe(second.verdictDigest);
+  });
+
+  it("replay v6 completo con hallazgos de calidad aceptados, rechazados y deterministas", async () => {
+    const generic =
+      "Claro, puedo ayudarte con eso. Dime qué información necesitas.";
+    const qualityTranscript = [
+      { role: "cliente" as const, text: "Hola, ¿qué opciones manejan?" },
+      { role: "agente" as const, text: generic },
+      { role: "cliente" as const, text: "¿Cuánto cuesta cada opción?" },
+      { role: "agente" as const, text: generic },
+    ];
+    const accepted = {
+      tipo: "repeticion" as const,
+      severity: "grave" as const,
+      evidencia: "repetición",
+      evidenceRefs: [
+        { source: "agent_message" as const, index: 0 },
+        { source: "agent_message" as const, index: 1 },
+      ],
+      reason: "El agente repitió su respuesta.",
+    };
+    const rejected = {
+      tipo: "respuesta_generica" as const,
+      severity: "grave" as const,
+      evidencia: "genérica",
+      evidenceRefs: [{ source: "agent_message" as const, index: 0 }],
+      reason: "El agente no respondió cuánto cuesta cada opción.",
+    };
+    const runQualityJudge = async (): Promise<JudgeRecord> => {
+      chatJson.mockResolvedValue({
+        ok: true,
+        data: { veredicto: "rojo", hallazgos: [rejected, accepted] },
+        raw: "{}",
+      });
+      const outcome = await judgeCase({
+        personaKey: "pregunton_precios",
+        transcript: qualityTranscript,
+        kbText: evidenceText,
+        behaviorText: "Escalado: solo si el cliente lo pide",
+        actionTrace: [],
+        evidenceDigest: "evidencia-digest-v6",
+      });
+      return outcome.record;
+    };
+
+    const record = await runQualityJudge();
+    expect(record.version).toBe(6);
+    expect(record.status).toBe("done");
+    expect(record.finalVerdict).toEqual({
+      veredicto: "amarillo",
+      hallazgos: [
+        expect.objectContaining({
+          tipo: "respuesta_generica",
+          severity: "menor",
+          evidenceRefs: [{ source: "agent_message", index: 1 }],
+        }),
+        expect.objectContaining({
+          tipo: "repeticion",
+          severity: "menor",
+          reason: accepted.reason,
+        }),
+      ],
+    });
+
+    chatJson.mockClear();
+    const replayed = replayJudgeVerdict({
+      record,
+      transcript: qualityTranscript,
+      actionTrace: [],
+      evidenceText,
+    });
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(replayed.ok).toBe(true);
+    if (replayed.ok) {
+      expect(replayed.matches).toBe(true);
+      expect(replayed.verdict).toEqual(record.finalVerdict);
+      expect(replayed.verdictDigest).toBe(record.verdictDigest);
+    }
+
+    const second = await runQualityJudge();
+    expect(second.verdictDigest).toBe(record.verdictDigest);
   });
 });
 
