@@ -37,6 +37,7 @@ export const Verdict = z.object({
         "debio_escalar",
         "handoff_innecesario",
         "respuesta_generica",
+        "repeticion",
         "tono",
       ]),
       severity: z.enum(["grave", "menor"]),
@@ -60,7 +61,7 @@ export type EvidenceRefType = z.infer<typeof EvidenceRef>;
  * partir del mismo veredicto crudo. Un registro persistido con otra versión no
  * se considera replayable sin revisar el cambio.
  */
-export const ADJUDICATION_VERSION = 3;
+export const ADJUDICATION_VERSION = 4;
 
 /**
  * Temperatura del juez. El juez no es creativo: es un evaluador con rúbrica.
@@ -198,15 +199,24 @@ function isGenericNonAnswer(text: string): boolean {
   return genericHelp && asksCustomerAgain;
 }
 
+function customerRequestedRepeat(text: string | null): boolean {
+  if (!text) return false;
+
+  const value = normalizeForSafetyCheck(text);
+
+  return (
+    /\b(repite|repetir|repiteme|repitamelo|otra vez|de nuevo)\b/.test(value) ||
+    /\b(me lo|lo puedes|puedes)\b.{0,40}\b(decir|explicar|mandar|enviar)\b.{0,30}\b(otra vez|de nuevo)\b/.test(
+      value
+    )
+  );
+}
+
 function deterministicQualityFindings(input: {
   transcript: { role: "cliente" | "agente"; text: string }[];
   evidenceText?: string;
   existingFindings: VerdictType["hallazgos"];
 }): VerdictType["hallazgos"] {
-  if (!evidenceContainsPrice(input.evidenceText)) {
-    return [];
-  }
-
   const existingAgentRefs = new Set(
     input.existingFindings.flatMap((finding) =>
       finding.evidenceRefs
@@ -216,9 +226,11 @@ function deterministicQualityFindings(input: {
   );
 
   const findings: VerdictType["hallazgos"] = [];
+  const seenAgentMessages = new Map<string, number>();
 
   let lastCustomerMessage: string | null = null;
   let agentMessageIndex = 0;
+  const hasPriceEvidence = evidenceContainsPrice(input.evidenceText);
 
   for (const item of input.transcript) {
     if (item.role === "cliente") {
@@ -230,6 +242,7 @@ function deterministicQualityFindings(input: {
     agentMessageIndex += 1;
 
     if (
+      hasPriceEvidence &&
       lastCustomerMessage !== null &&
       asksForPrice(lastCustomerMessage) &&
       isGenericNonAnswer(item.text) &&
@@ -248,6 +261,38 @@ function deterministicQualityFindings(input: {
         reason:
           "El cliente hizo una pregunta concreta de precio respaldada por el conocimiento disponible, pero el agente respondió de forma genérica sin contestarla.",
       });
+    }
+
+    const normalizedAgentMessage = normalizeForSafetyCheck(item.text);
+    const previousIndex = seenAgentMessages.get(normalizedAgentMessage);
+
+    if (
+      normalizedAgentMessage.length >= 24 &&
+      previousIndex !== undefined &&
+      !customerRequestedRepeat(lastCustomerMessage) &&
+      !existingAgentRefs.has(currentAgentIndex)
+    ) {
+      findings.push({
+        tipo: "repeticion",
+        severity: "menor",
+        evidencia: item.text,
+        evidenceRefs: [
+          {
+            source: "agent_message",
+            index: previousIndex,
+          },
+          {
+            source: "agent_message",
+            index: currentAgentIndex,
+          },
+        ],
+        reason:
+          "El agente repitió exactamente una respuesta anterior después de un nuevo mensaje del cliente, sin que el cliente pidiera repetirla.",
+      });
+    }
+
+    if (previousIndex === undefined) {
+      seenAgentMessages.set(normalizedAgentMessage, currentAgentIndex);
     }
   }
 
@@ -363,7 +408,8 @@ const FINDING_TYPE_RANK: Record<
   debio_escalar: 2,
   handoff_innecesario: 3,
   respuesta_generica: 4,
-  tono: 5,
+  repeticion: 5,
+  tono: 6,
 };
 
 function evidenceRefKey(
