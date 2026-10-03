@@ -33,7 +33,7 @@ const baseActions = [
  * como resultado exitoso. Las mutaciones internas también deben traer el
  * texto que recibirá el cliente en el mismo turno.
  */
-const modelBaseActions = [
+const modelReplyActions = [
   z.object({ action: z.literal("reply"), text: z.string().min(1) }),
   z.object({
     action: z.literal("update_lead"),
@@ -45,6 +45,10 @@ const modelBaseActions = [
     stage: z.string().min(1),
     reply: z.string().min(1),
   }),
+] as const;
+
+const modelBaseActions = [
+  ...modelReplyActions,
   z.object({
     action: z.literal("handoff"),
     reason: z.string().optional(),
@@ -93,7 +97,20 @@ export const AgentAction = z.discriminatedUnion("action", [
   ...agendaActions,
 ]);
 
-export function agentActionSchema(agenda: boolean) {
+/**
+ * `allowHandoff: false` excluye `handoff` del contrato: se usa en el reintento
+ * cuando el backend ya rechazó el handoff del turno, para que el modelo no
+ * pueda volver a proponerlo.
+ */
+export function agentActionSchema(
+  agenda: boolean,
+  options: { allowHandoff?: boolean } = {}
+) {
+  if (options.allowHandoff === false) {
+    return agenda
+      ? z.discriminatedUnion("action", [...modelReplyActions, ...agendaActions])
+      : z.discriminatedUnion("action", [...modelReplyActions]);
+  }
   return agenda
     ? z.discriminatedUnion("action", [...modelBaseActions, ...agendaActions])
     : z.discriminatedUnion("action", [...modelBaseActions]);
