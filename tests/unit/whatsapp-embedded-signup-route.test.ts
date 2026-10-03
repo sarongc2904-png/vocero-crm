@@ -18,6 +18,7 @@ const h = vi.hoisted(() => {
     audits: [] as unknown[],
     validState: true,
     metaFailure: false,
+    subscriptionSucceeds: true,
     connectionCheck: {
       ok: true as boolean,
       displayPhoneNumber: "+52 55 0000 0000",
@@ -120,7 +121,7 @@ vi.mock("@/server/whatsapp/credentials", () => ({
 
 vi.mock("@/server/whatsapp/connect", () => ({
   testConnection: vi.fn(async () => h.connectionCheck),
-  subscribeAppToWaba: vi.fn(async () => undefined),
+  subscribeAppToWaba: vi.fn(async () => h.subscriptionSucceeds),
 }));
 
 vi.mock("@/server/whatsapp/embedded-signup", () => ({
@@ -173,6 +174,7 @@ beforeEach(() => {
   h.audits.length = 0;
   h.validState = true;
   h.metaFailure = false;
+  h.subscriptionSucceeds = true;
   h.connectionCheck = {
     ok: true,
     displayPhoneNumber: "+52 55 0000 0000",
@@ -222,6 +224,18 @@ describe("Meta Embedded Signup — contrato MVP multi-tenant", () => {
     const response = await completeEmbeddedSignup(signupRequest());
 
     expect(response.status).toBe(422);
+    expect(h.credentials.size).toBe(0);
+  });
+
+  it("no declara connected si Meta no confirma la suscripción del webhook", async () => {
+    session("org_a");
+    h.subscriptionSucceeds = false;
+    const response = await completeEmbeddedSignup(signupRequest());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).error.code).toBe(
+      "webhook_subscription_failed"
+    );
     expect(h.credentials.size).toBe(0);
   });
 

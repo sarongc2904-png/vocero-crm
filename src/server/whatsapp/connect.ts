@@ -68,15 +68,17 @@ export async function testConnection(
 export async function subscribeAppToWaba(
   wabaId: string,
   token: string
-): Promise<void> {
+): Promise<boolean> {
   try {
     await graphRequest(`${wabaId}/subscribed_apps`, {
       method: "POST",
       token,
     });
+    return true;
   } catch {
     console.warn(
       "[connect] subscribed_apps falló (esperado en modo agencia)"
     );
+    return false;
   }
 }

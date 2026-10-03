@@ -93,6 +93,15 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     )
   );
 
+  const subscribed = await subscribeAppToWaba(body.data.wabaId, token);
+  if (!subscribed) {
+    return apiError(
+      422,
+      "webhook_subscription_failed",
+      "Meta autorizó el número, pero no pudimos activar la recepción de mensajes. Intenta nuevamente."
+    );
+  }
+
   await saveCredentials({
     organizationId: session.organizationId,
     wabaId: body.data.wabaId,
@@ -101,8 +110,6 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     displayPhoneNumber: check.displayPhoneNumber,
     verifiedName: check.verifiedName,
   });
-
-  await subscribeAppToWaba(body.data.wabaId, token);
 
   // SEC-V6b: conectar el canal por Embedded Signup rota las credenciales del
   // tenant. El `code` y el token NUNCA entran al log.
