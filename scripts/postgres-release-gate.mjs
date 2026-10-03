@@ -97,9 +97,12 @@ try {
   const requiredTables = await sql`
     select table_name from information_schema.tables
     where table_schema = 'public'
-      and table_name in ('durable_job','scheduled_automation','organization_entitlement','service','professional')
+      and table_name in (
+        'durable_job','scheduled_automation','organization_entitlement','service','professional',
+        'agent_run','agent_action_event','agent_evidence','agent_test_evidence_snapshot'
+      )
   `;
-  ok("tablas críticas presentes", requiredTables.length === 5);
+  ok("tablas críticas presentes", requiredTables.length === 9);
 
   const tenantFkGaps = await sql`
     with simple_tenant_fks as (
@@ -300,6 +303,57 @@ try {
     insert into conversation (id, organization_id, contact_id)
     values (${conversationA}, ${orgA}, ${contactA})
   `;
+
+  const observableRunId = `agent_run_${suffix}`;
+  await sql`
+    insert into agent_run (id, organization_id, conversation_id, trace_id)
+    values (${observableRunId}, ${orgA}, ${conversationA}, ${`trace_${suffix}`})
+  `;
+  const crossTenantAction = await Promise.allSettled([
+    sql`insert into agent_action_event
+      (id, organization_id, run_id, action, success, status)
+      values (${`action_cross_${suffix}`}, ${orgB}, ${observableRunId}, 'reply', true, 'completed')`,
+  ]);
+  ok(
+    "run A no acepta action event de org B",
+    crossTenantAction[0]?.status === "rejected" &&
+      crossTenantAction[0]?.reason?.code === "23503",
+    crossTenantAction[0]?.status === "rejected"
+      ? crossTenantAction[0]?.reason?.code
+      : "fulfilled"
+  );
+  const crossTenantEvidence = await Promise.allSettled([
+    sql`insert into agent_evidence
+      (id, organization_id, run_id, source_type, snapshot, content_hash, ordinal)
+      values (${`evidence_cross_${suffix}`}, ${orgB}, ${observableRunId},
+        'conversation_context', '{}'::jsonb, 'digest', 0)`,
+  ]);
+  ok(
+    "run A no acepta evidence de org B",
+    crossTenantEvidence[0]?.status === "rejected" &&
+      crossTenantEvidence[0]?.reason?.code === "23503",
+    crossTenantEvidence[0]?.status === "rejected"
+      ? crossTenantEvidence[0]?.reason?.code
+      : "fulfilled"
+  );
+
+  const labRunId = `lab_run_fk_${suffix}`;
+  const labCaseId = `lab_case_fk_${suffix}`;
+  await sql`insert into agent_test_run (id, organization_id, status) values (${labRunId}, ${orgA}, 'done')`;
+  await sql`insert into agent_test_case (id, organization_id, run_id, persona) values (${labCaseId}, ${orgA}, ${labRunId}, 'fk_gate')`;
+  const crossTenantSnapshot = await Promise.allSettled([
+    sql`insert into agent_test_evidence_snapshot
+      (id, organization_id, test_case_id, evidence, evidence_digest)
+      values (${`snapshot_cross_${suffix}`}, ${orgB}, ${labCaseId}, '{}'::jsonb, 'digest')`,
+  ]);
+  ok(
+    "test_case A no acepta snapshot de org B",
+    crossTenantSnapshot[0]?.status === "rejected" &&
+      crossTenantSnapshot[0]?.reason?.code === "23503",
+    crossTenantSnapshot[0]?.status === "rejected"
+      ? crossTenantSnapshot[0]?.reason?.code
+      : "fulfilled"
+  );
 
   const jobId = `job_restart_${suffix}`;
   await sql`

@@ -1383,6 +1383,100 @@ export const agentTestCase = pgTable(
   (t) => [index("test_case_run_idx").on(t.runId)]
 );
 
+export const agentRun = pgTable(
+  "agent_run",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    conversationId: text("conversation_id").notNull(),
+    inboundMessageId: text("inbound_message_id"),
+    outboundMessageId: text("outbound_message_id"),
+    provider: text("provider"),
+    model: text("model"),
+    status: text("status", { enum: ["running", "completed", "failed"] })
+      .notNull()
+      .default("running"),
+    traceId: text("trace_id").notNull(),
+    actionCount: integer("action_count").notNull().default(0),
+    evidenceCount: integer("evidence_count").notNull().default(0),
+    startedAt: timestamp("started_at").notNull().defaultNow(),
+    completedAt: timestamp("completed_at"),
+    error: text("error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("agent_run_org_id_uq").on(t.organizationId, t.id),
+    uniqueIndex("agent_run_trace_uq").on(t.traceId),
+    index("agent_run_org_conversation_started_idx").on(
+      t.organizationId,
+      t.conversationId,
+      t.startedAt
+    ),
+    index("agent_run_org_status_started_idx").on(
+      t.organizationId,
+      t.status,
+      t.startedAt
+    ),
+  ]
+);
+
+export const agentActionEvent = pgTable(
+  "agent_action_event",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    runId: text("run_id").notNull(),
+    action: text("action").notNull(),
+    success: boolean("success").notNull(),
+    status: text("status").notNull(),
+    entityType: text("entity_type"),
+    entityId: text("entity_id"),
+    outboundMessageId: text("outbound_message_id"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("agent_action_event_org_run_created_idx").on(
+      t.organizationId,
+      t.runId,
+      t.createdAt
+    ),
+    index("agent_action_event_org_action_created_idx").on(
+      t.organizationId,
+      t.action,
+      t.createdAt
+    ),
+  ]
+);
+
+export const agentEvidence = pgTable(
+  "agent_evidence",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    runId: text("run_id").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceId: text("source_id"),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+    contentHash: text("content_hash").notNull(),
+    score: integer("score"),
+    ordinal: integer("ordinal").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("agent_evidence_org_run_ordinal_uq").on(
+      t.organizationId,
+      t.runId,
+      t.ordinal
+    ),
+    index("agent_evidence_org_source_idx").on(
+      t.organizationId,
+      t.sourceType,
+      t.sourceId
+    ),
+  ]
+);
+
 /**
  * Cola durable para trabajo asíncrono crítico.
  *

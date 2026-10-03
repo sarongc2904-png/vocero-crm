@@ -77,6 +77,13 @@ import {
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 import { hasCommercialAccess } from "@/server/commercial/entitlement";
 import { enforceAgentCapabilities } from "@/server/ai/capability-guard";
+import {
+  createAgentRun,
+  finishAgentRun,
+  recordAgentAction,
+  recordAgentEvidence,
+  withAgentRun,
+} from "@/server/ai/observability";
 
 /**
  * Compatibilidad para callers existentes: el scheduling ahora se persiste en
@@ -92,6 +99,57 @@ export async function scheduleAgentTurn(
 }
 
 export async function runAgentTurn(
+  conversationId: string,
+  expectedOrganizationId?: string
+): Promise<void> {
+  if (!isAiConfigured()) return;
+  const db = getDb();
+  const conversations = await db
+    .select({ organizationId: schema.conversation.organizationId })
+    .from(schema.conversation)
+    .where(
+      expectedOrganizationId
+        ? scoped(
+            schema.conversation.organizationId,
+            expectedOrganizationId,
+            eq(schema.conversation.id, conversationId)
+          )
+        : eq(schema.conversation.id, conversationId)
+    )
+    .limit(1);
+  const organizationId = conversations[0]?.organizationId;
+  if (!organizationId) return;
+  const inbound = await db
+    .select({ id: schema.message.id })
+    .from(schema.message)
+    .where(
+      scoped(
+        schema.message.organizationId,
+        organizationId,
+        eq(schema.message.conversationId, conversationId),
+        eq(schema.message.direction, "in")
+      )
+    )
+    .orderBy(desc(schema.message.createdAt), desc(schema.message.id))
+    .limit(1);
+  const run = await createAgentRun({
+    organizationId,
+    conversationId,
+    inboundMessageId: inbound[0]?.id ?? null,
+    provider: "openrouter",
+  });
+  try {
+    await withAgentRun(run, () =>
+      runAgentTurnCore(conversationId, expectedOrganizationId)
+    );
+    await finishAgentRun(run, { status: "completed" });
+  } catch (error) {
+    await finishAgentRun(run, { status: "failed", error });
+    throw error;
+  }
+}
+
+async function runAgentTurnCore(
   conversationId: string,
   expectedOrganizationId?: string
 ): Promise<void> {
@@ -234,6 +292,12 @@ export async function runAgentTurn(
           serviceId: pending.serviceId ?? undefined,
           professionalId: pending.professionalId ?? undefined,
         });
+        await recordAgentAction({
+          action: "book_slot",
+          success: turn.ok,
+          status: turn.ok ? "completed" : "rejected",
+          payload: { startUtc: pending.startUtc },
+        });
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
           publish(organizationId, {
@@ -250,6 +314,12 @@ export async function runAgentTurn(
             organizationId,
             conversationId,
             startUtc: pending.startUtc,
+          });
+          await recordAgentAction({
+            action: "reschedule_slot",
+            entityType: "booking",
+            entityId: pending.bookingId,
+            payload: { startUtc: pending.startUtc },
           });
           await deliverReply(
             conversation,
@@ -293,6 +363,7 @@ export async function runAgentTurn(
       conversationId,
       action: "cancel",
     });
+    await recordAgentAction({ action: "set_pending_cancel" });
     await deliverReply(
       conversation,
       "Antes de cancelar necesito tu confirmación: ¿confirmas que quieres cancelar tu cita? Responde «sí» y la cancelo."
@@ -331,6 +402,71 @@ export async function runAgentTurn(
       })
     : [];
   const mapaDeHuecos = mapaDeHuecosParaModelo(ofertas);
+
+  await recordAgentEvidence([
+    {
+      sourceType: "conversation_context",
+      sourceId: conversationId,
+      snapshot: {
+        messages: history.map((message) => ({
+          id: message.id,
+          direction: message.direction,
+          type: message.type,
+          text: message.text,
+        })),
+      },
+    },
+    {
+      sourceType: "agent_profile",
+      sourceId: profile.id,
+      snapshot: {
+        name: profile.name,
+        tone: profile.tone,
+        instructions: profile.instructions,
+        escalationRules: profile.escalationRules,
+      },
+    },
+    ...kb.map((entry) => ({
+      sourceType: "kb_entry" as const,
+      sourceId: entry.id,
+      snapshot: {
+        kind: entry.kind,
+        question: entry.question,
+        answer: entry.answer,
+        content: entry.content,
+      },
+    })),
+    ...documentChunks.map((chunk) => ({
+      sourceType: "document_chunk" as const,
+      sourceId: chunk.id,
+      score: chunk.score,
+      snapshot: {
+        documentId: chunk.documentId,
+        content: chunk.content,
+        position: chunk.position,
+        page: chunk.page,
+      },
+    })),
+    ...(agendaContext
+      ? [
+          {
+            sourceType: "agenda" as const,
+            sourceId: conversationId,
+            snapshot: {
+              timezone: agendaContext.settings.timezone,
+              minNoticeHours: agendaContext.settings.minNoticeHours,
+              offeredSlots: ofertas.map((slot) => ({
+                id: slot.id,
+                startUtc: slot.startUtc,
+                label: slot.label,
+                serviceId: slot.serviceId,
+                professionalId: slot.professionalId,
+              })),
+            },
+          },
+        ]
+      : []),
+  ]);
 
   let todayInfo: { iso: string; label: string } | undefined;
   let scheduleIntent: ScheduleIntent = { kind: "none" };
@@ -455,6 +591,10 @@ export async function runAgentTurn(
             startUtc: chosen.startUtc,
             serviceId: chosen.serviceId,
             professionalId: chosen.professionalId,
+          });
+          await recordAgentAction({
+            action: "set_pending_book",
+            payload: { startUtc: chosen.startUtc },
           });
           await deliverReply(
             conversation,
@@ -717,6 +857,10 @@ export async function runAgentTurn(
                 serviceId: chosen.serviceId,
                 professionalId: chosen.professionalId,
               });
+              await recordAgentAction({
+                action: "set_pending_book",
+                payload: { startUtc: action.startUtc },
+              });
               await deliverReply(
                 conversation,
                 `Perfecto. Tengo ${chosen.label} disponible. ¿Quieres que agende tu cita?`
@@ -745,6 +889,10 @@ export async function runAgentTurn(
                 conversationId,
                 action: "reschedule",
                 startUtc: action.startUtc,
+              });
+              await recordAgentAction({
+                action: "set_pending_reschedule",
+                payload: { startUtc: action.startUtc },
               });
               await deliverReply(
                 conversation,
@@ -801,6 +949,13 @@ export async function runAgentTurn(
           }
         }
 
+        await recordAgentAction({
+          action: action.action,
+          success: turn.ok,
+          status: turn.ok ? "completed" : "rejected",
+          payload:
+            "startUtc" in action ? { startUtc: action.startUtc } : {},
+        });
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
           publish(organizationId, {
@@ -839,6 +994,11 @@ export async function runAgentTurn(
         return;
       }
       if (moveResult === "moved") {
+        await recordAgentAction({
+          action: "move_stage",
+          entityType: "pipeline_stage",
+          entityId: stage.id,
+        });
         publish(organizationId, {
           type: "conversation.updated",
           data: { conversation: { id: conversationId } },
@@ -875,6 +1035,11 @@ export async function runAgentTurn(
         );
         return;
       }
+      await recordAgentAction({
+        action: "update_lead",
+        entityType: "contact",
+        entityId: conversation.contactId,
+      });
       if (action.reply) {
         await deliverReply(conversation, safeModelReply(action.reply));
       }
@@ -932,6 +1097,11 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
       organizationId: conversation.organizationId,
       conversationId: conversation.id,
     });
+    await recordAgentAction({
+      action: "cancel_booking",
+      entityType: "conversation",
+      entityId: conversation.id,
+    });
     await deliverReply(
       conversation,
       `Listo, cancelé tu cita: ${cancelled.label}.`
@@ -964,18 +1134,33 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
 async function deliverReply(
   conversation: Conversation,
   text: string
-): Promise<void> {
+): Promise<string | null> {
+  let messageId: string | null = null;
   if (conversation.isTest) {
-    await persistTestOutbound(conversation, text);
-    return;
+    messageId = await persistTestOutbound(conversation, text);
+    await recordAgentAction({
+      action: "reply",
+      outboundMessageId: messageId,
+      entityType: "message",
+      entityId: messageId,
+    });
+    return messageId;
   }
   try {
-    await sendText({
+    const sent = await sendText({
       conversationId: conversation.id,
       organizationId: conversation.organizationId,
       text,
       aiGenerated: true,
     });
+    messageId = sent.messageId;
+    await recordAgentAction({
+      action: "reply",
+      outboundMessageId: messageId,
+      entityType: "message",
+      entityId: messageId,
+    });
+    return messageId;
   } catch (err) {
     if (err instanceof SendError && err.code === "window_closed") {
       await applyHandoff(
@@ -983,7 +1168,7 @@ async function deliverReply(
         conversation.organizationId,
         "ventana"
       );
-      return;
+      return null;
     }
     throw err;
   }
@@ -992,10 +1177,11 @@ async function deliverReply(
 async function persistTestOutbound(
   conversation: Conversation,
   text: string
-): Promise<void> {
+): Promise<string> {
   const db = getDb();
+  const messageId = newId("message");
   await db.insert(schema.message).values({
-    id: newId("message"),
+    id: messageId,
     organizationId: conversation.organizationId,
     conversationId: conversation.id,
     direction: "out",
@@ -1015,6 +1201,7 @@ async function persistTestOutbound(
         eq(schema.conversation.id, conversation.id)
       )
     );
+  return messageId;
 }
 
 export async function applyHandoff(
@@ -1042,6 +1229,12 @@ export async function applyHandoff(
     )
     .returning();
   if (!updated[0]) return false;
+  await recordAgentAction({
+    action: "handoff",
+    entityType: "conversation",
+    entityId: conversationId,
+    payload: { reason },
+  });
   publish(organizationId, {
     type: "conversation.updated",
     data: {

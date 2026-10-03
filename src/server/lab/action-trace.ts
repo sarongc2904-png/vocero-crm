@@ -31,6 +31,8 @@ export const AGENT_ACTIONS = [
   "move_stage",
   "offer_slots",
   "book_slot",
+  "reschedule_slot",
+  "cancel_booking",
 ] as const;
 
 export type AgentActionName = (typeof AGENT_ACTIONS)[number];
@@ -45,6 +47,8 @@ export type AgentActionTraceEntry = {
     contactNotesChanged: boolean;
     stageChanged: { from: string | null; to: string | null } | null;
     bookingCreated: boolean;
+    bookingRescheduled?: boolean;
+    bookingCancelled?: boolean;
   };
   /** v2 — id de la fila `message` entrante del turno. */
   customerMessageId?: string | null;

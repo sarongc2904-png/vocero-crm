@@ -493,6 +493,64 @@ export function validateAndAnchorVerdict(input: {
   };
 }
 
+function findingIdentity(finding: VerdictType["hallazgos"][number]): string {
+  return canonicalDigest({
+    tipo: finding.tipo,
+    severity: finding.severity,
+    reason: finding.reason,
+    evidenceRefs: finding.evidenceRefs,
+  });
+}
+
+/**
+ * Adjudicación pura y reproducible offline. El modelo sólo propone hallazgos;
+ * esta función decide cuáles sobreviven a los hechos observados.
+ */
+export function adjudicate(input: {
+  llmVerdict: VerdictType;
+  transcript: { role: "cliente" | "agente"; text: string }[];
+  actionTrace: AgentActionTrace;
+  behaviorText?: string;
+  evidenceText?: string;
+}):
+  | {
+      ok: true;
+      version: number;
+      verdict: VerdictType;
+      acceptedFindings: VerdictType["hallazgos"];
+      rejectedFindings: Array<{
+        finding: VerdictType["hallazgos"][number];
+        reason: "rejected_by_deterministic_grounding";
+      }>;
+      inputDigest: string;
+    }
+  | { ok: false; detail: string } {
+  const frozenInput = freezeJson(input);
+  const result = validateAndAnchorVerdict({
+    verdict: frozenInput.llmVerdict,
+    transcript: frozenInput.transcript,
+    actionTrace: frozenInput.actionTrace,
+    behaviorText: frozenInput.behaviorText,
+    evidenceText: frozenInput.evidenceText,
+  });
+  if (!result.ok) return result;
+
+  const acceptedIds = new Set(result.verdict.hallazgos.map(findingIdentity));
+  return {
+    ok: true,
+    version: ADJUDICATION_VERSION,
+    verdict: result.verdict,
+    acceptedFindings: result.verdict.hallazgos,
+    rejectedFindings: input.llmVerdict.hallazgos
+      .filter((finding) => !acceptedIds.has(findingIdentity(finding)))
+      .map((finding) => ({
+        finding: freezeJson(finding),
+        reason: "rejected_by_deterministic_grounding" as const,
+      })),
+    inputDigest: canonicalDigest(frozenInput),
+  };
+}
+
 function judgeInputDigestOf(input: {
   model: string;
   temperature: number;
@@ -562,8 +620,8 @@ export function replayJudgeVerdict(input: {
     };
   }
 
-  const anchored = validateAndAnchorVerdict({
-    verdict: freezeJson(input.record.rawVerdict),
+  const anchored = adjudicate({
+    llmVerdict: freezeJson(input.record.rawVerdict),
     transcript: input.transcript,
     actionTrace: input.actionTrace,
     // El comportamiento configurado se toma del propio registro cuando el
@@ -660,8 +718,8 @@ export async function judgeCase(input: {
   }
 
   const rawVerdict = freezeJson(result.data);
-  const anchored = validateAndAnchorVerdict({
-    verdict: freezeJson(rawVerdict),
+  const anchored = adjudicate({
+    llmVerdict: freezeJson(rawVerdict),
     transcript: input.transcript,
     actionTrace: input.actionTrace,
     behaviorText: input.behaviorText,

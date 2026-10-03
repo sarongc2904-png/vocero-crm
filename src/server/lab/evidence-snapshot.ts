@@ -158,8 +158,8 @@ export type PersistedEvidenceSnapshot = {
 };
 
 /**
- * Persiste el snapshot y, si el juez ya corrió, su registro reproducible.
- * La clave compuesta (organización, caso) evita sobrescribir otro tenant.
+ * Persiste una sola vez el snapshot y su registro reproducible. No existe
+ * UPDATE/UPSERT: una evidencia histórica es inmutable por construcción.
  */
 export async function persistEvidenceSnapshot(input: {
   organizationId: string;
@@ -184,8 +184,7 @@ export async function persistEvidenceSnapshot(input: {
       judge_record,
       judge_input_digest,
       verdict_digest,
-      status,
-      updated_at
+      status
     ) VALUES (
       ${newId("testEvidence")},
       ${input.organizationId},
@@ -197,20 +196,8 @@ export async function persistEvidenceSnapshot(input: {
       ${record ? JSON.stringify(record) : null}::jsonb,
       ${record?.judgeInputDigest ?? null},
       ${record?.verdictDigest ?? null},
-      ${record?.status ?? null},
-      now()
+      ${record?.status ?? null}
     )
-    ON CONFLICT (organization_id, test_case_id)
-    DO UPDATE SET
-      version = EXCLUDED.version,
-      adjudication_version = EXCLUDED.adjudication_version,
-      evidence = EXCLUDED.evidence,
-      evidence_digest = EXCLUDED.evidence_digest,
-      judge_record = EXCLUDED.judge_record,
-      judge_input_digest = EXCLUDED.judge_input_digest,
-      verdict_digest = EXCLUDED.verdict_digest,
-      status = EXCLUDED.status,
-      updated_at = now()
   `;
 }
 

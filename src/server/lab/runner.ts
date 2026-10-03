@@ -188,15 +188,6 @@ async function runAllCases(
       trace: tracedActions,
     });
 
-    // Se persiste el snapshot aunque el juez falle después: la evidencia es el
-    // artefacto de auditoría y no debe depender del proveedor de IA.
-    await persistEvidenceSnapshot({
-      organizationId,
-      testCaseId: testCase.id,
-      snapshot: evidence,
-      adjudicationVersion: ADJUDICATION_VERSION,
-    });
-
     const outcome = await judgeCase({
       personaKey: persona.key,
       transcript,
@@ -267,6 +258,7 @@ type TraceSnapshot = {
   contactNotes: string | null;
   stageId: string | null;
   bookingIds: string[];
+  bookingStates: Array<{ id: string; status: string; scheduledAt: string }>;
   offeredSlotIds: string[];
   agentMessages: string[];
   /** v2 — ids de las filas salientes, para anclar evidencia a filas y no a posiciones. */
@@ -318,7 +310,11 @@ async function captureTraceSnapshot(input: {
         )
         .limit(1),
       db
-        .select({ id: schema.booking.id })
+        .select({
+          id: schema.booking.id,
+          status: schema.booking.status,
+          scheduledAt: schema.booking.scheduledAt,
+        })
         .from(schema.booking)
         .where(
           and(
@@ -354,6 +350,11 @@ async function captureTraceSnapshot(input: {
     contactNotes: contactRows[0]?.notes ?? null,
     stageId: leadRows[0]?.stageId ?? null,
     bookingIds: bookingRows.map((row) => row.id),
+    bookingStates: bookingRows.map((row) => ({
+      id: row.id,
+      status: row.status,
+      scheduledAt: row.scheduledAt.toISOString(),
+    })),
     offeredSlotIds: offeredSlotRows.map((row) => row.id),
     agentMessages: outboundRows
       .map((row) => row.text)
@@ -384,6 +385,14 @@ function buildTraceEntry(input: {
   const bookingCreated = input.after.bookingIds.some(
     (id) => !input.before.bookingIds.includes(id)
   );
+  const bookingRescheduled = input.after.bookingStates.some((after) => {
+    const before = input.before.bookingStates.find((row) => row.id === after.id);
+    return before !== undefined && before.scheduledAt !== after.scheduledAt;
+  });
+  const bookingCancelled = input.after.bookingStates.some((after) => {
+    const before = input.before.bookingStates.find((row) => row.id === after.id);
+    return before !== undefined && before.status !== "cancelada" && after.status === "cancelada";
+  });
   const offerSlotsChanged = input.after.offeredSlotIds.some(
     (id) => !input.before.offeredSlotIds.includes(id)
   );
@@ -405,6 +414,8 @@ function buildTraceEntry(input: {
   if (stageChanged) observedActions.push("move_stage");
   if (offerSlotsChanged) observedActions.push("offer_slots");
   if (bookingCreated) observedActions.push("book_slot");
+  if (bookingRescheduled) observedActions.push("reschedule_slot");
+  if (bookingCancelled) observedActions.push("cancel_booking");
 
   return {
     turn: input.turn,
@@ -416,6 +427,8 @@ function buildTraceEntry(input: {
       contactNotesChanged,
       stageChanged,
       bookingCreated,
+      bookingRescheduled,
+      bookingCancelled,
     },
     customerMessageId: input.customerMessageId ?? null,
     agentMessageIds: newAgentMessageIds,

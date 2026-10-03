@@ -42,6 +42,11 @@ const GROUPS = {
     "tests/unit/agent-contract-wave2.test.ts",
     "tests/unit/agent-response-contract.test.ts",
   ],
+  "lab observability": [
+    "tests/unit/agent-observability-runtime.test.ts",
+    "tests/unit/lab-observability-v2.test.ts",
+    "tests/unit/judge-deterministic.test.ts",
+  ],
   "agenda contracts": [
     "tests/unit/agenda-contract.test.ts",
     "tests/unit/agenda-sandbox.test.ts",
