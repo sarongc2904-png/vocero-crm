@@ -125,6 +125,27 @@ export async function extendToken(shortLivedToken: string): Promise<string> {
 }
 
 /**
+ * PIN de verificación en dos pasos con el que se registra el número.
+ *
+ * Determinista: HMAC-SHA256 del secreto del servidor sobre el phone_number_id
+ * (con separación de dominio), reducido a 6 dígitos. Así el mismo número
+ * siempre recibe el mismo PIN y puede volver a calcularse para un re-registro
+ * o una migración, sin guardarlo en base de datos. Un PIN aleatorio que nadie
+ * conserva dejaba al número con una verificación en dos pasos imposible de
+ * recuperar.
+ */
+export function deriveRegistrationPin(phoneNumberId: string, secret: string): string {
+  const digest = createHmac("sha256", secret)
+    .update(`whatsapp-registration-pin:v1:${phoneNumberId}`)
+    .digest();
+  return String(100000 + (digest.readUInt32BE(0) % 900000));
+}
+
+export function registrationPinFor(phoneNumberId: string): string {
+  return deriveRegistrationPin(phoneNumberId, getEnv().ENCRYPTION_KEY);
+}
+
+/**
  * Registra el número en WhatsApp Cloud API si aún no lo está. Necesario tras
  * Embedded Signup para que el número empiece a poder enviar/recibir — Meta lo
  * documenta como paso obligatorio del flujo.
@@ -137,7 +158,7 @@ export async function registerPhoneNumberIfNeeded(
   phoneNumberId: string,
   token: string
 ): Promise<void> {
-  const pin = String(Math.floor(100000 + Math.random() * 900000));
+  const pin = registrationPinFor(phoneNumberId);
   try {
     await graphRequest(`${phoneNumberId}/register`, {
       method: "POST",
