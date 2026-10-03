@@ -3,11 +3,15 @@ import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { isEmbeddedSignupConfigured } from "@/lib/env";
 import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
+  assertPhoneNumberAvailableForOrg,
+  CredentialsOwnershipError,
+  deleteCredentialsByOrg,
   getCredentialsByOrg,
+  markReconnectRequired,
   saveCredentials,
-  tokenLast4,
 } from "@/server/whatsapp/credentials";
 import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
+import { createEmbeddedSignupState } from "@/server/whatsapp/embedded-signup";
 
 export const dynamic = "force-dynamic";
 
@@ -19,17 +23,38 @@ export const GET = withOrgPermissions(["settings.read"], async (session) => {
         appId: process.env.META_APP_ID!,
         configId: process.env.META_EMBEDDED_SIGNUP_CONFIG_ID!,
         graphVersion: process.env.META_GRAPH_API_VERSION ?? "v25.0",
+        state: createEmbeddedSignupState({
+          sessionId: session.sessionId,
+          organizationId: session.organizationId,
+        }),
       }
     : { available: false as const };
   if (!creds) return Response.json({ connection: null, embeddedSignup });
+
+  let status: "connected" | "reconnect_required" | "error" = creds.status;
+  let errorMessage: string | null = null;
+  if (status === "connected") {
+    const check = await testConnection(creds.phoneNumberId, creds.token);
+    if (!check.ok && check.code === "invalid_token") {
+      await markReconnectRequired(session.organizationId);
+      status = "reconnect_required";
+    } else if (!check.ok) {
+      status = "error";
+      errorMessage =
+        check.code === "meta_unavailable"
+          ? "No pudimos verificar la conexión con Meta. Intenta de nuevo más tarde."
+          : "Meta no pudo validar la conexión actual. Revisa o reconecta tu número.";
+    }
+  }
+
   return Response.json({
     connection: {
       wabaId: creds.wabaId,
       phoneNumberId: creds.phoneNumberId,
       displayPhoneNumber: creds.displayPhoneNumber,
       verifiedName: creds.verifiedName,
-      status: creds.status,
-      tokenLast4: tokenLast4(creds.token),
+      status,
+      errorMessage,
     },
     embeddedSignup,
   });
@@ -45,6 +70,18 @@ const putSchema = z.object({
 export const PUT = withOrgPermissions(["settings.update"], async (session, req: Request) => {
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
+
+  try {
+    await assertPhoneNumberAvailableForOrg(
+      session.organizationId,
+      body.data.phoneNumberId
+    );
+  } catch (err) {
+    if (err instanceof CredentialsOwnershipError) {
+      return apiError(409, "phone_already_connected", err.message);
+    }
+    throw err;
+  }
 
   const check = await testConnection(body.data.phoneNumberId, body.data.token);
   if (!check.ok) {
@@ -64,9 +101,7 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
   await subscribeAppToWaba(body.data.wabaId, body.data.token);
 
   // SEC-V6b: rotar las credenciales del canal es el camino del secuestro
-  // silencioso (el token viejo se invalida en la misma escritura). Se audita sin
-  // el token: solo identificadores y los últimos 4 caracteres.
-  const tokenLast4Value = tokenLast4(body.data.token);
+  // silencioso. Se audita sin incluir ninguna parte del token.
   await auditPrivilegedAction(session, {
     action: "settings.whatsapp.update",
     targetType: "channel_credentials",
@@ -75,7 +110,6 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
       channel: "whatsapp",
       wabaId: body.data.wabaId,
       phoneNumberId: body.data.phoneNumberId,
-      tokenLast4: tokenLast4Value,
     },
   });
 
@@ -84,3 +118,17 @@ export const PUT = withOrgPermissions(["settings.update"], async (session, req: 
     displayPhoneNumber: check.displayPhoneNumber,
   });
 });
+
+export const DELETE = withOrgPermissions(
+  ["settings.update"],
+  async (session) => {
+    await deleteCredentialsByOrg(session.organizationId);
+    await auditPrivilegedAction(session, {
+      action: "settings.whatsapp.disconnect",
+      targetType: "channel_credentials",
+      targetId: session.organizationId,
+      metadata: { channel: "whatsapp" },
+    });
+    return Response.json({ ok: true });
+  }
+);

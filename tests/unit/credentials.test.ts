@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * FR-040/FR-080s: el token se guarda cifrado (jamás texto plano en la fila)
@@ -6,9 +6,18 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
  */
 
 const insertedRows: Record<string, unknown>[] = [];
+const selectedRows: Array<{ organizationId: string }> = [];
+const deletedScopes: unknown[] = [];
 
 vi.mock("@/lib/db", () => ({
   getDb: () => ({
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: () => Promise.resolve([...selectedRows]),
+        }),
+      }),
+    }),
     insert: () => ({
       values: (v: Record<string, unknown>) => {
         insertedRows.push(v);
@@ -17,9 +26,18 @@ vi.mock("@/lib/db", () => ({
         };
       },
     }),
+    delete: () => ({
+      where: (scope: unknown) => {
+        deletedScopes.push(scope);
+        return Promise.resolve();
+      },
+    }),
   }),
   schema: {
-    metaCredentials: { organizationId: "organization_id" },
+    metaCredentials: {
+      organizationId: "organization_id",
+      phoneNumberId: "phone_number_id",
+    },
   },
 }));
 
@@ -29,6 +47,12 @@ beforeAll(() => {
   process.env.BETTER_AUTH_SECRET = "secret-de-test-suficiente";
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 9).toString("base64");
   process.env.META_WEBHOOK_VERIFY_TOKEN = "verify-test";
+});
+
+beforeEach(() => {
+  insertedRows.length = 0;
+  selectedRows.length = 0;
+  deletedScopes.length = 0;
 });
 
 describe("credenciales de WhatsApp", () => {
@@ -59,8 +83,33 @@ describe("credenciales de WhatsApp", () => {
     ).toBe(token);
   });
 
-  it("tokenLast4 expone solo los últimos 4 caracteres", async () => {
-    const { tokenLast4 } = await import("@/server/whatsapp/credentials");
-    expect(tokenLast4("EAAG-token-super-secreto-abcd")).toBe("abcd");
+  it("permite reconectar el número del mismo tenant", async () => {
+    const { assertPhoneNumberAvailableForOrg } = await import(
+      "@/server/whatsapp/credentials"
+    );
+    selectedRows.push({ organizationId: "org_a" });
+
+    await expect(
+      assertPhoneNumberAvailableForOrg("org_a", "pn_1")
+    ).resolves.toBeUndefined();
+  });
+
+  it("impide que otro tenant reclame un número ya conectado", async () => {
+    const { assertPhoneNumberAvailableForOrg, CredentialsOwnershipError } =
+      await import("@/server/whatsapp/credentials");
+    selectedRows.push({ organizationId: "org_a" });
+
+    await expect(
+      assertPhoneNumberAvailableForOrg("org_b", "pn_1")
+    ).rejects.toBeInstanceOf(CredentialsOwnershipError);
+  });
+
+  it("desconecta usando siempre el scope de la organización activa", async () => {
+    const { deleteCredentialsByOrg } = await import(
+      "@/server/whatsapp/credentials"
+    );
+
+    await deleteCredentialsByOrg("org_a");
+    expect(deletedScopes).toHaveLength(1);
   });
 });
