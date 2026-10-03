@@ -1,7 +1,7 @@
 import type { schema } from "@/lib/db";
 import type { ChatMessage } from "@/lib/ai";
 import type { RetrievedDocumentChunk } from "@/server/kb/documents/retrieval";
-import { prefersInformalRegister } from "@/server/ai/handoff";
+import { prefersInformalRegister, sameNormalizedMessage } from "@/server/ai/handoff";
 
 type AgentProfile = typeof schema.agentProfile.$inferSelect;
 type KbEntry = typeof schema.kbEntry.$inferSelect;
@@ -49,6 +49,124 @@ function mentionedService(conversationText: string, knowledgeText: string): bool
   });
 }
 
+/** Líneas "- Servicio: $precio" del conocimiento, tal como están escritas. */
+function knowledgePriceLines(knowledgeText: string): string[] {
+  const seen = new Set<string>();
+  return knowledgeText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^-\s*[^:\n]+:\s*(?:desde\s*)?\$\s*\d/i.test(line))
+    .filter((line) => {
+      const key = normalizePolicyText(line);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function asksForPrice(normalizedText: string): boolean {
+  return (
+    /\b(?:precio|precios|costo|costos|tarifa|tarifas|cotizacion)\b/.test(normalizedText) ||
+    /\bcuanto\b.{0,20}\b(?:cuesta|cuestan|sale|salen|cobra|cobran|vale|valen)\b/.test(
+      normalizedText
+    )
+  );
+}
+
+/** "qué incluye", "que incluye", "q incluye" (con o sin "n"). */
+const ASKS_WHAT_IS_INCLUDED = /\b(?:que|q)\s+incluye(?:n)?\b/;
+
+/** ¿La pregunta del agente pide el nombre del cliente? */
+function asksForName(agentText: string | null | undefined): boolean {
+  if (!agentText) return false;
+  const normalized = normalizePolicyText(agentText);
+  return normalized.includes("?") && /\bnombre\b/.test(normalized);
+}
+
+const NON_NAME_WORDS = new Set([
+  "quiero", "quisiera", "necesito", "precio", "precios", "cuanto", "cuesta", "costo",
+  "sale", "gracias", "ok", "okay", "va", "vale", "si", "no", "hola", "buenas", "perfecto",
+  "claro", "dale", "luego", "despues", "manana", "hoy", "ya", "se", "le", "digo", "mi",
+  "nombre", "tengo", "cita", "telefono", "servicio", "limpieza", "por", "favor",
+]);
+
+/**
+ * Respuesta corta que es un nombre: 2 a 4 palabras, solo letras y espacios,
+ * sin signos de pregunta ni palabras de petición o cortesía.
+ */
+function looksLikeBareName(text: string): boolean {
+  const trimmed = text.trim();
+  if (!/^[\p{L}\s'-]+$/u.test(trimmed)) return false;
+  const words = normalizePolicyText(trimmed).split(/\s+/).filter(Boolean);
+  if (words.length < 2 || words.length > 4) return false;
+  return words.every((word) => word.length >= 2 && !NON_NAME_WORDS.has(word));
+}
+
+/** "me llamo X", "mi nombre es X", "soy X" (pero no "soy de/del <ciudad>"). */
+const EXPLICIT_NAME =
+  /\b(?:me llamo|mi nombre es|soy)\s+(?!(?:de|del|la|el|un|una|cliente|nuevo|nueva|paciente)\b)[a-z]{2,}/;
+
+type ConversationTurn = { role: "agent" | "customer"; text: string };
+
+function customerGaveName(
+  customerHistoryText: string,
+  conversation: ConversationTurn[] | undefined
+): boolean {
+  if (EXPLICIT_NAME.test(normalizePolicyText(customerHistoryText))) return true;
+  return (conversation ?? []).some(
+    (turn, index) =>
+      turn.role === "customer" &&
+      looksLikeBareName(turn.text) &&
+      asksForName(
+        [...conversation!.slice(0, index)].reverse().find((t) => t.role === "agent")?.text
+      )
+  );
+}
+
+type MissingDatum = "name" | "phone" | "service";
+
+function singleDatumQuestion(datum: MissingDatum, informal: boolean): string {
+  if (datum === "name") {
+    return informal
+      ? "Para avanzar, ¿me compartes tu nombre completo?"
+      : "Para avanzar, ¿me comparte su nombre completo?";
+  }
+  if (datum === "phone") {
+    return informal
+      ? "Gracias. ¿Me compartes tu número de teléfono?"
+      : "Gracias. ¿Me comparte su número de teléfono?";
+  }
+  return informal
+    ? "Gracias. ¿Qué servicio o motivo de consulta te interesa?"
+    : "Gracias. ¿Qué servicio o motivo de consulta le interesa?";
+}
+
+function joinSpanish(items: string[]): string {
+  return items.length <= 1
+    ? (items[0] ?? "")
+    : `${items.slice(0, -1).join(", ")} y ${items[items.length - 1]}`;
+}
+
+/** Una sola petición con todos los datos que faltan, en dos formulaciones. */
+function combinedDatumQuestion(
+  missing: MissingDatum[],
+  informal: boolean,
+  variant: 0 | 1
+): string {
+  const labels: Record<MissingDatum, string> = informal
+    ? { name: "tu nombre completo", phone: "tu número de teléfono", service: "el servicio o motivo de consulta" }
+    : { name: "su nombre completo", phone: "su número de teléfono", service: "el servicio o motivo de consulta" };
+  const list = joinSpanish(missing.map((datum) => labels[datum]));
+  if (variant === 0) {
+    return informal
+      ? `Para dejar lista tu cita necesito ${list}. ¿Me los compartes en un solo mensaje?`
+      : `Para dejar lista su cita necesito ${list}. ¿Me los comparte en un solo mensaje?`;
+  }
+  return informal
+    ? `Con gusto avanzamos. Solo me falta ${list}; puedes enviarlos juntos.`
+    : `Con gusto avanzamos. Solo me falta ${list}; puede enviarlos juntos.`;
+}
+
 /**
  * Respuesta determinista solo para dos guardarraíles que no pueden depender de
  * la creatividad del modelo: detalles ausentes en KB y datos mínimos de cita.
@@ -58,59 +176,84 @@ export function groundedConversationReply(input: {
   customerHistoryText: string;
   knowledgeText: string;
   tone?: string | null;
+  /** Último mensaje del agente antes del turno actual (anti-repetición). */
+  lastAgentText?: string | null;
+  /** Historial en orden cronológico, incluido el turno actual. */
+  conversation?: ConversationTurn[];
 }): string | null {
   const inbound = normalizePolicyText(input.inboundText);
   const informal = prefersInformalRegister(input.tone);
+  const asksIncluded = ASKS_WHAT_IS_INCLUDED.test(inbound);
 
-  if (
-    /\bque incluye(?:n)? (?:cada(?: una| uno)?|c\/u|las opciones|los servicios)\b/.test(
-      inbound
-    ) &&
-    !knowledgeHasServiceDetail(input.knowledgeText)
-  ) {
+  if (asksIncluded && !knowledgeHasServiceDetail(input.knowledgeText)) {
     const hasValuation = /\bvaloracion\b/.test(
       normalizePolicyText(input.knowledgeText)
     );
-    if (informal) {
-      return hasValuation
-        ? "El conocimiento disponible confirma los servicios y sus precios de referencia, pero no detalla qué incluye cada servicio. Ese detalle se confirma en la valoración clínica; si quieres, un asesor también puede confirmártelo."
-        : "El conocimiento disponible confirma las opciones, pero no detalla qué incluye cada servicio. Si quieres, un asesor puede confirmártelo.";
+    const priceLines = knowledgePriceLines(input.knowledgeText);
+
+    // Precio + "qué incluye" en la misma pregunta: los precios confirmados y,
+    // en el mismo mensaje, la abstención sobre el detalle que la KB no tiene.
+    if (asksForPrice(inbound) && priceLines.length > 0) {
+      const abstention = hasValuation
+        ? "El conocimiento disponible no detalla qué incluye cada servicio; ese detalle se confirma en la valoración clínica"
+        : "El conocimiento disponible no detalla qué incluye cada servicio";
+      const offer = informal
+        ? "si quieres, un asesor también puede confirmártelo."
+        : "si lo desea, un asesor también puede confirmárselo.";
+      return `Estos son los precios de referencia:\n${priceLines.join("\n")}\n${abstention}; ${offer}`;
     }
-    return hasValuation
-      ? "El conocimiento disponible confirma los servicios y sus precios de referencia, pero no detalla qué incluye cada servicio. Ese detalle se confirma en la valoración clínica; si lo desea, un asesor también puede confirmárselo."
-      : "El conocimiento disponible confirma las opciones, pero no detalla qué incluye cada servicio. Si lo desea, un asesor puede confirmárselo.";
+
+    if (
+      /\b(?:que|q)\s+incluye(?:n)? (?:cada(?: una| uno)?|c\/u|las opciones|los servicios)\b/.test(
+        inbound
+      )
+    ) {
+      if (informal) {
+        return hasValuation
+          ? "El conocimiento disponible confirma los servicios y sus precios de referencia, pero no detalla qué incluye cada servicio. Ese detalle se confirma en la valoración clínica; si quieres, un asesor también puede confirmártelo."
+          : "El conocimiento disponible confirma las opciones, pero no detalla qué incluye cada servicio. Si quieres, un asesor puede confirmártelo.";
+      }
+      return hasValuation
+        ? "El conocimiento disponible confirma los servicios y sus precios de referencia, pero no detalla qué incluye cada servicio. Ese detalle se confirma en la valoración clínica; si lo desea, un asesor también puede confirmárselo."
+        : "El conocimiento disponible confirma las opciones, pero no detalla qué incluye cada servicio. Si lo desea, un asesor puede confirmárselo.";
+    }
   }
 
   const strongPurchaseIntent =
     /\b(?:quiero|quisiera|necesito)\s+(?:avanzar|contratar|comprar|empezar|iniciar)(?:\s+(?:hoy|ya|ahora))?\b/.test(
       inbound
     );
+  // El cliente respondió con su nombre a la pregunta del agente: se continúa
+  // la recolección de datos sin pasar por el modelo.
+  const answeredName =
+    asksForName(input.lastAgentText) && looksLikeBareName(input.inboundText);
+
   if (
-    strongPurchaseIntent &&
+    (strongPurchaseIntent || answeredName) &&
     appointmentRequirementsPresent(input.knowledgeText)
   ) {
-    const history = normalizePolicyText(input.customerHistoryText);
-    const hasName = /\b(?:me llamo|mi nombre es|soy)\s+[a-z]{2,}/.test(history);
-    const hasPhone = /(?:\d[\s()-]*){10,}/.test(input.customerHistoryText);
-    const hasService = mentionedService(
-      input.customerHistoryText,
-      input.knowledgeText
-    );
-    if (!hasName) {
-      return informal
-        ? "Para avanzar, ¿me compartes tu nombre completo?"
-        : "Para avanzar, ¿me comparte su nombre completo?";
+    const missing: MissingDatum[] = [];
+    if (!customerGaveName(input.customerHistoryText, input.conversation)) {
+      missing.push("name");
     }
-    if (!hasPhone) {
-      return informal
-        ? "Gracias. ¿Me compartes tu número de teléfono?"
-        : "Gracias. ¿Me comparte su número de teléfono?";
+    if (!/(?:\d[\s()-]*){10,}/.test(input.customerHistoryText)) missing.push("phone");
+    if (!mentionedService(input.customerHistoryText, input.knowledgeText)) {
+      missing.push("service");
     }
-    if (!hasService) {
-      return informal
-        ? "Gracias. ¿Qué servicio o motivo de consulta te interesa?"
-        : "Gracias. ¿Qué servicio o motivo de consulta le interesa?";
-    }
+    if (missing.length === 0) return null;
+
+    const single = singleDatumQuestion(missing[0]!, informal);
+    const last = input.lastAgentText ?? "";
+    const lastAskedSameDatum =
+      sameNormalizedMessage(single, last) ||
+      (missing[0] === "name" && asksForName(last));
+    if (!lastAskedSameDatum) return single;
+
+    // Ya se pidió ese dato en el mensaje anterior: nunca se repite el texto.
+    const first = combinedDatumQuestion(missing, informal, 0);
+    return sameNormalizedMessage(first, last)
+      ? combinedDatumQuestion(missing, informal, 1)
+      : first;
   }
 
   return null;

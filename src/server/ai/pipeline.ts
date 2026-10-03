@@ -513,6 +513,13 @@ async function runAgentTurnCore(
         customerHistoryText,
         knowledgeText,
         tone: profile.tone,
+        lastAgentText: lastAgentTextBeforeInbound,
+        conversation: history
+          .filter((message) => Boolean(message.text?.trim()))
+          .map((message) => ({
+            role: message.direction === "in" ? ("customer" as const) : ("agent" as const),
+            text: message.text!,
+          })),
       })
     : null;
   const agenda = agendaEnabled();
