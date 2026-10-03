@@ -525,6 +525,27 @@ describe("pipeline — pregunta concreta con handoff no autorizado", () => {
     );
   });
 
+  it.each([
+    ["Gracias, me llamo Juan Pérez", "Para avanzar, ¿me comparte su nombre completo?"],
+    ["Gracias, mi teléfono es 8671234567", "¿Me comparte su número de teléfono?"],
+    ["Gracias, el martes a las 10", "¿Qué día y horario prefiere?"],
+  ])(
+    "no descarta el dato aportado en '%s' después de una solicitud",
+    async (answerWithData, previousQuestion) => {
+      chatJson.mockResolvedValueOnce({
+        ok: true,
+        data: { action: "reply", text: "Perfecto, registré el dato." },
+      });
+      queueTurn(["Quiero avanzar con una cita", answerWithData], previousQuestion);
+
+      const { runAgentTurn } = await import("@/server/ai/pipeline");
+      await runAgentTurn("cv_lab");
+
+      expect(chatJson).toHaveBeenCalledTimes(1);
+      expect(lastOutboundText()).toBe("Perfecto, registré el dato.");
+    }
+  );
+
   it.each(["va, gracias", "ok"])(
     "no repite la respuesta anterior ante la aceptación breve '%s'",
     async (acknowledgement) => {
@@ -730,8 +751,8 @@ describe("pipeline — pregunta concreta con handoff no autorizado", () => {
 
     expect(handedOff()).toBe(false);
     expect(updates.some((values) => values.handoffAt instanceof Date)).toBe(false);
-    expect(chatJson).not.toHaveBeenCalled();
-    expect(lastOutboundText()).toBe("Con gusto. Quedo a sus órdenes.");
+    expect(chatJson).toHaveBeenCalledTimes(1);
+    expect(lastOutboundText()).toBe("Entendido. ¿Le ayudo con algo más?");
   });
 
   it("oferta de asesor + 'sí': si el turno llega al modelo, su handoff está autorizado", () => {

@@ -185,7 +185,7 @@ export function sameNormalizedMessage(left: string, right: string): boolean {
   );
 }
 
-const CLOSING_INTENT =
+const GRATITUDE_OR_REVIEW =
   /\b(?:gracias|lo voy a revisar|lo reviso|voy a revisarlo|quedo pendiente)\b/;
 const SHORT_ACKNOWLEDGEMENTS = new Set([
   "ok",
@@ -197,8 +197,16 @@ const SHORT_ACKNOWLEDGEMENTS = new Set([
   "de acuerdo",
   "esta bien",
 ]);
-const ACTIVE_REQUEST =
-  /\b(?:quiero|quisiera|necesito|agendar|reservar|contratar|comprar|precio|costo|cuanto|cual|como|cuando|donde|incluye|servicio|horario|asesor|persona)\b/;
+
+function removeClosingCourtesy(text: string): string {
+  return text
+    .replace(/\b(?:lo voy a revisar|voy a revisarlo|lo reviso|quedo pendiente)\b/g, " ")
+    .replace(/\b(?:muchas gracias|gracias)\b/g, " ")
+    .replace(/\b(?:de acuerdo|esta bien)\b/g, " ")
+    .replace(/\b(?:ok|okay|okey|perfecto|va|vale)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /**
  * Agradecimiento/cierre breve que no contiene una petición nueva. Un "ok"
@@ -211,11 +219,8 @@ export function isClosingAcknowledgement(
 ): boolean {
   if (text.includes("?")) return false;
   const normalized = normalizeComparableText(text);
-  const words = normalized.split(" ").filter(Boolean);
-  if (words.length === 0 || words.length > 8 || ACTIVE_REQUEST.test(normalized)) {
-    return false;
-  }
-  if (CLOSING_INTENT.test(normalized)) return true;
+  if (!normalized || removeClosingCourtesy(normalized)) return false;
+  if (GRATITUDE_OR_REVIEW.test(normalized)) return true;
   return (
     SHORT_ACKNOWLEDGEMENTS.has(normalized) &&
     !lastAgentText?.includes("?")
