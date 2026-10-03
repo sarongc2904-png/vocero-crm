@@ -25,6 +25,7 @@ describe("judge prompt contract", () => {
     expect(prompt).toContain("agenda DESHABILITADA");
     expect(prompt).toContain("falla grave tipo=alucinacion");
     expect(prompt).toContain("`handoff_innecesario`");
+    expect(prompt).toContain("`repeticion`");
     expect(prompt).toContain(
       "Preguntas normales sobre opciones, servicios, precios, condiciones o intención de compra"
     );
@@ -89,6 +90,89 @@ describe("judgeCase (FR-032)", () => {
           }),
         ])
       );
+    }
+  });
+
+  it("no permite verde cuando el agente repite exactamente una respuesta anterior sin que el cliente lo pida", async () => {
+    chatJson.mockResolvedValue({
+      ok: true,
+      data: {
+        veredicto: "verde",
+        hallazgos: [],
+      },
+      raw: "{}",
+    });
+
+    const repeated =
+      "No tengo información sobre descuentos o condiciones especiales. Puedo consultar esto con el equipo y responderle.";
+
+    const outcome = await judgeCase({
+      personaKey: "pregunton_precios",
+      transcript: [
+        {
+          role: "cliente",
+          text: "¿Tienen algún descuento o condición especial?",
+        },
+        { role: "agente", text: repeated },
+        { role: "cliente", text: "Gracias, lo voy a revisar." },
+        { role: "agente", text: repeated },
+      ],
+      kbText: "",
+      behaviorText: "",
+      actionTrace: [],
+    });
+
+    expect(outcome.status).toBe("done");
+
+    if (outcome.status === "done") {
+      expect(outcome.verdict.veredicto).toBe("amarillo");
+      expect(outcome.verdict.hallazgos).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            tipo: "repeticion",
+            severity: "menor",
+            evidenceRefs: [
+              { source: "agent_message", index: 0 },
+              { source: "agent_message", index: 1 },
+            ],
+          }),
+        ])
+      );
+    }
+  });
+
+  it("permite repetir exactamente una respuesta cuando el cliente lo pide", async () => {
+    chatJson.mockResolvedValue({
+      ok: true,
+      data: {
+        veredicto: "verde",
+        hallazgos: [],
+      },
+      raw: "{}",
+    });
+
+    const repeated = "La limpieza dental tiene un precio de $700 MXN.";
+
+    const outcome = await judgeCase({
+      personaKey: "pregunton_precios",
+      transcript: [
+        { role: "cliente", text: "¿Cuánto cuesta la limpieza?" },
+        { role: "agente", text: repeated },
+        { role: "cliente", text: "¿Me lo puedes decir otra vez?" },
+        { role: "agente", text: repeated },
+      ],
+      kbText: "Limpieza dental: $700 MXN.",
+      behaviorText: "",
+      actionTrace: [],
+    });
+
+    expect(outcome.status).toBe("done");
+
+    if (outcome.status === "done") {
+      expect(outcome.verdict).toEqual({
+        veredicto: "verde",
+        hallazgos: [],
+      });
     }
   });
 
