@@ -46,6 +46,10 @@ function hallucination(overrides: Partial<VerdictType["hallazgos"][number]> = {}
 describe("juez determinista — muestreo fijo", () => {
   beforeEach(() => chatJson.mockReset());
 
+  it("identifica la revisión determinista Judge Quality v6", () => {
+    expect(ADJUDICATION_VERSION).toBe(6);
+  });
+
   it("pide temperatura 0 al proveedor para que el veredicto no dependa del muestreo", async () => {
     chatJson.mockResolvedValue({
       ok: true,
