@@ -32,7 +32,7 @@ vi.mock("@/server/ai/observability", () => ({
     conversationId: input.conversationId,
   }),
   finishAgentRun: async () => {},
-  hasActiveAgentRun: () => false,
+  hasActiveAgentRun: () => true,
   recordAgentAction: async () => {},
   recordAgentEvidence: async () => {},
   withAgentRun: async <T>(

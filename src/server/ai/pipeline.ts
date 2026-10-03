@@ -141,6 +141,12 @@ export async function runAgentTurn(
 ): Promise<void> {
   if (!isAiConfigured()) return;
 
+  // Si el turno ya corre dentro de un AgentRun, reutiliza ese contexto.
+  // Evita crear runs anidados y permite ejecutar el core de forma aislada.
+  if (hasActiveAgentRun()) {
+    return runAgentTurnCore(conversationId, expectedOrganizationId);
+  }
+
   const db = getDb();
   const conversations = await db
     .select({ organizationId: schema.conversation.organizationId })
