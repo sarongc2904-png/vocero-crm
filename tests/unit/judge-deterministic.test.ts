@@ -9,6 +9,7 @@ vi.mock("@/lib/ai", () => ({
 import {
   ADJUDICATION_VERSION,
   JUDGE_TEMPERATURE,
+  adjudicate,
   judgeCase,
   orderHallazgos,
   replayJudgeVerdict,
@@ -143,6 +144,73 @@ describe("grounding determinista contra la evidencia congelada", () => {
     if (result.ok) {
       expect(result.verdict.veredicto).toBe("rojo");
     }
+  });
+});
+
+describe("adjudicación offline contra acciones observadas", () => {
+  it.each([
+    ["offer_slots", "Te ofrezco el horario del lunes a las 10:00."],
+    ["book_slot", "Tu cita quedó agendada."],
+    ["reschedule_slot", "Tu cita quedó reprogramada."],
+    ["cancel_booking", "Tu cita quedó cancelada."],
+  ] as const)("descarta alucinación cuando %s ocurrió realmente", (action, message) => {
+    const result = adjudicate({
+      llmVerdict: hallucination(),
+      transcript: [
+        { role: "cliente", text: "Confirma la operación." },
+        { role: "agente", text: message },
+      ],
+      actionTrace: [
+        {
+          turn: 1,
+          customerMessage: "Confirma la operación.",
+          agentMessages: [message],
+          observedActions: ["reply", action],
+          result: {
+            handoffReason: null,
+            contactNotesChanged: false,
+            stageChanged: null,
+            bookingCreated: action === "book_slot",
+            bookingRescheduled: action === "reschedule_slot",
+            bookingCancelled: action === "cancel_booking",
+          },
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.verdict).toEqual({ veredicto: "verde", hallazgos: [] });
+      expect(result.rejectedFindings).toHaveLength(1);
+    }
+  });
+
+  it("mantiene el claim sin action event que lo respalde", () => {
+    const message = "Tu cita quedó cancelada.";
+    const result = adjudicate({
+      llmVerdict: hallucination(),
+      transcript: [
+        { role: "cliente", text: "Cancela mi cita." },
+        { role: "agente", text: message },
+      ],
+      actionTrace: [
+        {
+          turn: 1,
+          customerMessage: "Cancela mi cita.",
+          agentMessages: [message],
+          observedActions: ["reply"],
+          result: {
+            handoffReason: null,
+            contactNotesChanged: false,
+            stageChanged: null,
+            bookingCreated: false,
+          },
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.verdict.veredicto).toBe("rojo");
   });
 });
 

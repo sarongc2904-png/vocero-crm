@@ -32,6 +32,7 @@ import {
   offerNextAvailable,
   offerRange,
   offerSlots,
+  type AgendaTurn,
 } from "@/server/agenda/agent";
 import {
   BookingError,
@@ -80,10 +81,46 @@ import { enforceAgentCapabilities } from "@/server/ai/capability-guard";
 import {
   createAgentRun,
   finishAgentRun,
+  hasActiveAgentRun,
   recordAgentAction,
   recordAgentEvidence,
   withAgentRun,
 } from "@/server/ai/observability";
+
+async function recordOfferedSlots(
+  organizationId: string,
+  conversationId: string,
+  turn: AgendaTurn
+): Promise<void> {
+  if (!hasActiveAgentRun()) return;
+  const slots = await getOffers(organizationId, conversationId);
+  await recordAgentEvidence([
+    {
+      sourceType: "agenda",
+      sourceId: conversationId,
+      snapshot: {
+        response: turn.text,
+        offeredSlots: slots.map((slot) => ({
+          startUtc: slot.startUtc,
+          label: slot.label,
+          serviceId: slot.serviceId,
+          professionalId: slot.professionalId,
+        })),
+      },
+    },
+  ]);
+  await recordAgentAction({
+    action: "offer_slots",
+    success: turn.ok,
+    status: turn.ok ? "completed" : "rejected",
+    entityType: "conversation",
+    entityId: conversationId,
+    payload: {
+      slotCount: slots.length,
+      startUtc: slots.map((slot) => slot.startUtc),
+    },
+  });
+}
 
 /**
  * Compatibilidad para callers existentes: el scheduling ahora se persiste en
@@ -103,6 +140,7 @@ export async function runAgentTurn(
   expectedOrganizationId?: string
 ): Promise<void> {
   if (!isAiConfigured()) return;
+
   const db = getDb();
   const conversations = await db
     .select({ organizationId: schema.conversation.organizationId })
@@ -334,6 +372,7 @@ async function runAgentTurnCore(
               conversationId,
               intro: "Ese horario ya no sirve para mover tu cita. Elige otro:",
             });
+            await recordOfferedSlots(organizationId, conversationId, turn);
             await deliverReply(conversation, turn.text);
           } else if (err instanceof BookingError && err.code === "not_found") {
             await deliverReply(
@@ -456,7 +495,6 @@ async function runAgentTurnCore(
               timezone: agendaContext.settings.timezone,
               minNoticeHours: agendaContext.settings.minNoticeHours,
               offeredSlots: ofertas.map((slot) => ({
-                id: slot.id,
                 startUtc: slot.startUtc,
                 label: slot.label,
                 serviceId: slot.serviceId,
@@ -612,6 +650,7 @@ async function runAgentTurnCore(
           intro:
             "Ese horario acaba de dejar de estar disponible. Estas son las opciones actuales:",
         });
+        await recordOfferedSlots(organizationId, conversationId, turn);
         await deliverReply(conversation, turn.text);
         return;
       }
@@ -640,6 +679,7 @@ async function runAgentTurnCore(
           intro:
             "No encontré esa hora entre las opciones que te mostré. Estas son las opciones actuales:",
         });
+        await recordOfferedSlots(organizationId, conversationId, turn);
         await deliverReply(conversation, turn.text);
         return;
       }
@@ -744,6 +784,7 @@ async function runAgentTurnCore(
           : scheduleScope.type === "general_availability"
             ? await offerGeneralAvailability({ organizationId, conversationId })
             : await offerNextAvailable({ organizationId, conversationId });
+      await recordOfferedSlots(organizationId, conversationId, turn);
       await deliverReply(conversation, turn.text);
       if (turn.ok) {
         publish(organizationId, {
@@ -784,6 +825,7 @@ async function runAgentTurnCore(
         expand: expandRequest,
         cursor,
       });
+      await recordOfferedSlots(organizationId, conversationId, turn);
       await deliverReply(conversation, turn.text);
       if (turn.ok) {
         publish(organizationId, {
@@ -818,8 +860,10 @@ async function runAgentTurnCore(
     if (!agenda) {
       action = degradeAction(action);
     } else {
+      const attemptedAction = action.action;
       try {
         let turn;
+        let observedAction = attemptedAction;
         if (action.action === "offer_slots") {
           // IA-3: una oferta base reinicia el cursor de expansión.
           await resetOfferCursor(organizationId, conversationId);
@@ -915,6 +959,13 @@ async function runAgentTurnCore(
             };
           } catch (err) {
             if (err instanceof BookingError && err.code === "slot_not_offered") {
+              await recordAgentAction({
+                action: "reschedule_slot",
+                success: false,
+                status: "rejected",
+                payload: { reason: err.code, startUtc: action.startUtc },
+              });
+              observedAction = "offer_slots";
               turn = await offerSlots({
                 organizationId,
                 conversationId,
@@ -938,6 +989,13 @@ async function runAgentTurnCore(
                 text: "No encontré una cita activa para reprogramar. Si quieres, puedo mostrarte horarios disponibles para una nueva cita.",
               };
             } else if (err instanceof BookingError && err.code === "slot_taken") {
+              await recordAgentAction({
+                action: "reschedule_slot",
+                success: false,
+                status: "rejected",
+                payload: { reason: err.code, startUtc: action.startUtc },
+              });
+              observedAction = "offer_slots";
               turn = await offerSlots({
                 organizationId,
                 conversationId,
@@ -949,13 +1007,17 @@ async function runAgentTurnCore(
           }
         }
 
-        await recordAgentAction({
-          action: action.action,
-          success: turn.ok,
-          status: turn.ok ? "completed" : "rejected",
-          payload:
-            "startUtc" in action ? { startUtc: action.startUtc } : {},
-        });
+        if (observedAction === "offer_slots") {
+          await recordOfferedSlots(organizationId, conversationId, turn);
+        } else {
+          await recordAgentAction({
+            action: observedAction,
+            success: turn.ok,
+            status: turn.ok ? "completed" : "rejected",
+            payload:
+              "startUtc" in action ? { startUtc: action.startUtc } : {},
+          });
+        }
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
           publish(organizationId, {
@@ -965,6 +1027,12 @@ async function runAgentTurnCore(
         }
         return;
       } catch (err) {
+        await recordAgentAction({
+          action: attemptedAction,
+          success: false,
+          status: "failed",
+          payload: { error: String(err) },
+        });
         console.error(`[agente] el motor de agenda falló: ${err}`);
         action = degradeAction(action);
       }
@@ -982,6 +1050,14 @@ async function runAgentTurnCore(
         stage.id
       );
       if (moveResult === "lead_missing" || moveResult === "rejected") {
+        await recordAgentAction({
+          action: "move_stage",
+          success: false,
+          status: "rejected",
+          entityType: "pipeline_stage",
+          entityId: stage.id,
+          payload: { reason: moveResult },
+        });
         console.warn(
           `[agente] move_stage no se pudo aplicar (${moveResult}); se conserva la conversación con IA`
         );
@@ -1024,6 +1100,13 @@ async function runAgentTurnCore(
         action.note
       );
       if (!updated) {
+        await recordAgentAction({
+          action: "update_lead",
+          success: false,
+          status: "rejected",
+          entityType: "contact",
+          entityId: conversation.contactId,
+        });
         console.warn(
           "[agente] update_lead no se pudo aplicar; se conserva la conversación con IA"
         );
@@ -1108,12 +1191,28 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
     );
   } catch (err) {
     if (err instanceof BookingError && err.code === "not_found") {
+      await recordAgentAction({
+        action: "cancel_booking",
+        success: false,
+        status: "rejected",
+        entityType: "conversation",
+        entityId: conversation.id,
+        payload: { reason: err.code },
+      });
       await deliverReply(
         conversation,
         "No encontré una cita activa para cancelar."
       );
       return;
     }
+    await recordAgentAction({
+      action: "cancel_booking",
+      success: false,
+      status: "failed",
+      entityType: "conversation",
+      entityId: conversation.id,
+      payload: { error: String(err) },
+    });
     console.error(
       `[agente] la cancelación automática falló: ${String(err).slice(0, 500)}`
     );
@@ -1228,7 +1327,17 @@ export async function applyHandoff(
       )
     )
     .returning();
-  if (!updated[0]) return false;
+  if (!updated[0]) {
+    await recordAgentAction({
+      action: "handoff",
+      success: false,
+      status: "rejected",
+      entityType: "conversation",
+      entityId: conversationId,
+      payload: { reason },
+    });
+    return false;
+  }
   await recordAgentAction({
     action: "handoff",
     entityType: "conversation",

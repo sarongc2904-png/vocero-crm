@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { getSql } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { canonicalDigest, freezeJson } from "@/server/lab/digest";
@@ -28,13 +29,21 @@ export type AgentEvidenceSource =
 type RunContext = { runId: string; organizationId: string; conversationId: string };
 const runStorage = new AsyncLocalStorage<RunContext>();
 
+export function hasActiveAgentRun(): boolean {
+  return runStorage.getStore() !== undefined;
+}
+
 const SECRET_KEY = /(authorization|password|passphrase|secret|token|api[_-]?key|cipher|client[_-]?secret|private[_-]?key)/i;
 const BEARER = /bearer\s+[a-z0-9._~+/=-]+/gi;
+const SECRET_ASSIGNMENT = /(authorization|password|passphrase|secret|token|api[_-]?key|client[_-]?secret|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi;
 
 export function sanitizeObservabilityValue(value: unknown, depth = 0): unknown {
   if (depth > 8) return "[MAX_DEPTH]";
   if (typeof value === "string") {
-    return value.replace(BEARER, "Bearer [REDACTED]").slice(0, 8_000);
+    return value
+      .replace(BEARER, "Bearer [REDACTED]")
+      .replace(SECRET_ASSIGNMENT, "$1=[REDACTED]")
+      .slice(0, 8_000);
   }
   if (Array.isArray(value)) {
     return value.slice(0, 200).map((entry) => sanitizeObservabilityValue(entry, depth + 1));
@@ -65,7 +74,7 @@ export async function createAgentRun(input: {
 }): Promise<RunContext> {
   const sql = getSql();
   const runId = newId("agentRun");
-  const traceId = crypto.randomUUID();
+  const traceId = randomUUID();
   await sql`
     INSERT INTO agent_run (
       id, organization_id, conversation_id, inbound_message_id,
@@ -150,6 +159,13 @@ export async function recordAgentEvidence(
     return { ...item, ordinal, snapshot, contentHash: canonicalDigest(snapshot) };
   });
   await sql.begin(async (transaction) => {
+    const counters = (await transaction`
+      SELECT evidence_count
+      FROM agent_run
+      WHERE organization_id = ${context.organizationId} AND id = ${context.runId}
+      FOR UPDATE
+    `) as unknown as Array<{ evidence_count: number }>;
+    const baseOrdinal = Number(counters[0]?.evidence_count ?? 0);
     for (const item of sanitized) {
       await transaction`
         INSERT INTO agent_evidence (
@@ -159,7 +175,7 @@ export async function recordAgentEvidence(
           ${newId("agentEvidence")}, ${context.organizationId}, ${context.runId},
           ${item.sourceType}, ${item.sourceId ?? null},
           ${JSON.stringify(item.snapshot)}::jsonb, ${item.contentHash},
-          ${item.score ?? null}, ${item.ordinal}
+          ${item.score ?? null}, ${baseOrdinal + item.ordinal}
         )
       `;
     }

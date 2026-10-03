@@ -124,13 +124,22 @@ function actionTraceHasHandoff(actionTrace: AgentActionTrace): boolean {
   );
 }
 
-function actionTraceSupportsOfferedSlots(
+const FACTUAL_AGENT_ACTIONS = [
+  "offer_slots",
+  "book_slot",
+  "reschedule_slot",
+  "cancel_booking",
+] as const;
+
+function actionTraceSupportsFactualAction(
   message: string,
   actionTrace: AgentActionTrace
 ): boolean {
   return actionTrace.some(
     (trace) =>
-      trace.observedActions.includes("offer_slots") &&
+      FACTUAL_AGENT_ACTIONS.some((action) =>
+        trace.observedActions.includes(action)
+      ) &&
       trace.agentMessages.includes(message)
   );
 }
@@ -370,13 +379,13 @@ function normalizeVerdictConsistency(input: {
         input.transcript
       );
 
-      const backedByRealAvailability =
+      const backedByObservedAction =
         citedAgentMessages.length > 0 &&
         citedAgentMessages.every((message) =>
-          actionTraceSupportsOfferedSlots(message, input.actionTrace)
+          actionTraceSupportsFactualAction(message, input.actionTrace)
         );
 
-      if (backedByRealAvailability) {
+      if (backedByObservedAction) {
         return false;
       }
 
