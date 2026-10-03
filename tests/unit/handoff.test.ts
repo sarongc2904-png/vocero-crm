@@ -120,9 +120,24 @@ describe("fallback tras handoff rechazado", () => {
     );
   });
 
-  it("mantiene el fallback genérico cuando no hay queja o frustración", () => {
+  it("sin petición concreta invita brevemente a continuar", () => {
     expect(rejectedHandoffFallback("Tengo una consulta importante")).toBe(
-      "Claro, puedo ayudarte con eso. Dime qué información necesitas."
+      "Con gusto. ¿En qué le puedo ayudar?"
+    );
+  });
+
+  it("ante una petición concreta nombra el tema, admite que no está confirmado y ofrece un asesor", () => {
+    expect(rejectedHandoffFallback("¿Tienen algún descuento?")).toBe(
+      "Sobre descuentos o promociones, por ahora no tengo información confirmada para compartirle por este medio. Si desea que un asesor se lo confirme, solo escríbame que quiere hablar con un asesor."
+    );
+  });
+
+  it("respeta el tuteo solo cuando el tono del perfil lo pide", () => {
+    expect(rejectedHandoffFallback("¿Cuánto cuesta?", "Cercano, tutea al cliente")).toBe(
+      "Sobre el precio, por ahora no tengo información confirmada para compartirte por este medio. Si quieres que un asesor te lo confirme, solo escríbeme que quieres hablar con un asesor."
+    );
+    expect(rejectedHandoffFallback("¿Cuánto cuesta?", "Profesional y cercano")).toContain(
+      "compartirle"
     );
   });
 
@@ -135,6 +150,6 @@ describe("fallback tras handoff rechazado", () => {
       "utf8"
     );
 
-    expect(source).toContain("rejectedHandoffFallback(inboundText)");
+    expect(source).toContain("rejectedHandoffFallback(inboundText, profile.tone)");
   });
 });

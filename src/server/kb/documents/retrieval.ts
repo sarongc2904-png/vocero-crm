@@ -52,6 +52,11 @@ export type RetrievedDocumentChunk = Pick<
 export type DocumentRetrievalInput = {
   organizationId: string;
   query: string;
+  /**
+   * Mensajes previos del cliente. Pesan menos que el turno actual y sólo
+   * sirven para que un follow-up ("¿Qué incluye cada una?") conserve el tema.
+   */
+  contextQuery?: string;
   maxChunks: number;
   maxCharacters: number;
 };
@@ -63,14 +68,48 @@ export type DocumentRetrievalStore = {
   ): Promise<DocumentRetrievalCandidate[]>;
 };
 
+/**
+ * Familias comerciales: el cliente pregunta "\u00bfcu\u00e1nto cuesta?" y el documento
+ * dice "PRECIOS DE REFERENCIA \u2026 $700 MXN". Se canonicalizan igual en consulta
+ * y contenido. Deliberadamente excluye palabras ambiguas ("vale", "sale").
+ */
+const CONCEPT_BY_STEM = new Map<string, string>([
+  ...["precio", "costo", "cuesta", "cuestan", "costar", "tarifa", "cotizacion", "cotizar", "mxn", "usd"].map(
+    (stem) => [stem, "precio"] as const
+  ),
+  ...["servicio", "opcion", "tratamiento", "paquete", "producto"].map(
+    (stem) => [stem, "servicio"] as const
+  ),
+  ...["incluye", "incluyen", "incluir", "incluido", "incluida", "contiene", "contienen"].map(
+    (stem) => [stem, "incluir"] as const
+  ),
+  ...["descuento", "promocion", "promo", "rebaja"].map(
+    (stem) => [stem, "descuento"] as const
+  ),
+]);
+
+/** Plural simple: "opciones" \u2192 "opcion", "precios" \u2192 "precio". */
+function stem(token: string): string {
+  if (token.length > 4 && /[^aeiou]es$/.test(token)) return token.slice(0, -2);
+  if (token.length > 4 && token.endsWith("s")) return token.slice(0, -1);
+  return token;
+}
+
 function normalizedTokens(value: string): string[] {
   return (
     value
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
+      // "sale"/"vale"/"cobra" s\u00f3lo significan precio detr\u00e1s de "cu\u00e1nto".
+      .replace(/\bcuantos?\s+(sale|salen|vale|valen|cobra|cobran)\b/g, "cuanto cuesta")
       .match(/[a-z0-9]+/g) ?? []
-  ).filter((token) => token.length >= 3 && !SPANISH_STOPWORDS.has(token));
+  )
+    .filter((token) => token.length >= 3 && !SPANISH_STOPWORDS.has(token))
+    .map((token) => {
+      const stemmed = stem(token);
+      return CONCEPT_BY_STEM.get(stemmed) ?? stemmed;
+    });
 }
 
 function duplicateKey(value: string): string {
@@ -97,7 +136,14 @@ export function rankDocumentChunks(
   input: DocumentRetrievalInput
 ): RetrievedDocumentChunk[] {
   const terms = new Set(normalizedTokens(input.query));
-  if (terms.size === 0 || input.maxChunks <= 0 || input.maxCharacters <= 0) {
+  const contextTerms = new Set(
+    normalizedTokens(input.contextQuery ?? "").filter((term) => !terms.has(term))
+  );
+  if (
+    (terms.size === 0 && contextTerms.size === 0) ||
+    input.maxChunks <= 0 ||
+    input.maxCharacters <= 0
+  ) {
     return [];
   }
 
@@ -111,12 +157,21 @@ export function rankDocumentChunks(
     .map((candidate) => ({
       ...candidate,
       content: candidate.content.trim(),
-      score: scoreContent(candidate.content, terms),
+      currentScore: scoreContent(candidate.content, terms),
+      contextScore: scoreContent(candidate.content, contextTerms),
+    }))
+    // El turno actual manda: todo fragmento que coincide con él va antes que
+    // uno que sólo coincide con el contexto previo, que únicamente desempata o
+    // rescata follow-ups que por sí solos no nombran el tema.
+    .map((candidate) => ({
+      ...candidate,
+      score: candidate.currentScore > 0 ? candidate.currentScore : candidate.contextScore,
     }))
     .filter((candidate) => candidate.content.length > 0 && candidate.score > 0)
     .sort(
       (left, right) =>
-        right.score - left.score ||
+        right.currentScore - left.currentScore ||
+        right.contextScore - left.contextScore ||
         left.position - right.position ||
         left.documentId.localeCompare(right.documentId) ||
         left.id.localeCompare(right.id)

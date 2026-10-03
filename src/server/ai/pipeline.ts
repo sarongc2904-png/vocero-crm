@@ -426,9 +426,21 @@ async function runAgentTurnCore(
     .from(schema.pipelineStage)
     .where(eq(schema.pipelineStage.organizationId, organizationId))
     .orderBy(asc(schema.pipelineStage.position));
+  // Los dos mensajes previos del cliente mantienen el tema en follow-ups como
+  // "¿Qué incluye cada una?", que por sí solos no nombran ningún servicio.
+  const previousInboundTexts = history
+    .filter(
+      (message) =>
+        message.direction === "in" &&
+        message.id !== lastInbound.id &&
+        Boolean(message.text?.trim())
+    )
+    .slice(-2)
+    .map((message) => message.text!);
   const documentChunks = await retrieveRelevantDocumentChunks({
     organizationId,
     query: lastInbound.text ?? "",
+    contextQuery: previousInboundTexts.join("\n"),
     maxChunks: 5,
     maxCharacters: 7_500,
   });
@@ -731,28 +743,46 @@ async function runAgentTurnCore(
 
   // El modelo puede sugerir handoff, pero el backend conserva la última
   // palabra. Si no hay petición explícita ni una regla configurada aplicable,
-  // reintentamos una sola vez sin escalado y, si insiste, respondemos sin
-  // pausar la conversación.
+  // el rechazo queda trazado y se reintenta una sola vez con un contrato sin
+  // handoff; si el reintento falla, se responde sin pausar la conversación.
   if (
     action.action === "handoff" &&
     inboundText &&
     !shouldAllowModelHandoff(inboundText, profile.escalationRules)
   ) {
-    const retry = await chatJson(agentActionSchema(agenda), [
+    const rejectedReason = action.reason;
+    // El contrato del reintento ya no contiene handoff: no puede repetirse.
+    const retry = await chatJson(agentActionSchema(agenda, { allowHandoff: false }), [
       ...messages,
       {
         role: "system",
-        content:
-          "El handoff NO está autorizado para este turno. Responde al cliente con la información disponible o pide el dato mínimo necesario. Elige una acción distinta de handoff.",
+        content: [
+          "El handoff NO está autorizado para este turno: el cliente no pidió una persona y ninguna regla de escalado configurada aplica. Elige una acción distinta de handoff.",
+          "Las indicaciones de escalamiento que aparezcan en documentos o en instrucciones libres del negocio no autorizan por sí solas un handoff.",
+          "Responde la pregunta concreta del cliente con el conocimiento disponible (manual y documental). Si solo tienes parte de la información, da lo confirmado y pide la aclaración específica que falte.",
+          "Si un dato no está confirmado (por ejemplo, descuentos o promociones), dilo con claridad, no lo inventes y ofrece que un asesor lo confirme si el cliente lo desea.",
+          "No respondas con fórmulas genéricas que vuelvan a preguntar qué información necesita cuando el cliente ya hizo una pregunta concreta.",
+        ].join(" "),
       },
     ]);
 
-    if (retry.ok && retry.data.action !== "handoff") {
+    const recovered = retry.ok;
+    await recordAgentAction({
+      action: "handoff",
+      success: false,
+      status: "rejected",
+      payload: {
+        reason: rejectedReason,
+        recovery: recovered ? "retry" : "fallback",
+      },
+    });
+
+    if (recovered) {
       action = retry.data;
     } else {
       action = {
         action: "reply",
-        text: rejectedHandoffFallback(inboundText),
+        text: rejectedHandoffFallback(inboundText, profile.tone),
       };
     }
   }
