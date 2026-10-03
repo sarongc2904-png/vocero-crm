@@ -135,13 +135,15 @@ const NON_NAME_WORDS = new Set([
 
 /**
  * Respuesta corta que es un nombre: 2 a 4 palabras, solo letras y espacios,
- * sin signos de pregunta ni palabras de petición o cortesía.
+ * sin signos de pregunta ni palabras de petición o cortesía. Una respuesta que
+ * coincide con un servicio de la KB ("Corona dental") no es un nombre.
  */
-function looksLikeBareName(text: string): boolean {
+function looksLikeBareName(text: string, serviceNames: string[]): boolean {
   const trimmed = text.trim();
   if (!/^[\p{L}\s'-]+$/u.test(trimmed)) return false;
   const words = normalizePolicyText(trimmed).split(/\s+/).filter(Boolean);
   if (words.length < 2 || words.length > 4) return false;
+  if (mentionedService(trimmed, serviceNames)) return false;
   return words.every((word) => word.length >= 2 && !NON_NAME_WORDS.has(word));
 }
 
@@ -153,13 +155,14 @@ type ConversationTurn = { role: "agent" | "customer"; text: string };
 
 function customerGaveName(
   customerHistoryText: string,
-  conversation: ConversationTurn[] | undefined
+  conversation: ConversationTurn[] | undefined,
+  serviceNames: string[]
 ): boolean {
   if (EXPLICIT_NAME.test(normalizePolicyText(customerHistoryText))) return true;
   return (conversation ?? []).some(
     (turn, index) =>
       turn.role === "customer" &&
-      looksLikeBareName(turn.text) &&
+      looksLikeBareName(turn.text, serviceNames) &&
       asksForName(
         [...conversation!.slice(0, index)].reverse().find((t) => t.role === "agent")?.text
       )
@@ -275,23 +278,24 @@ export function groundedConversationReply(input: {
     /\b(?:quiero|quisiera|necesito)\s+(?:avanzar|contratar|comprar|empezar|iniciar)(?:\s+(?:hoy|ya|ahora))?\b/.test(
       inbound
     );
+  const serviceNames = knowledgeServiceNames(input.knowledgeText);
   // El cliente respondió con su nombre a la pregunta del agente: se continúa
   // la recolección de datos sin pasar por el modelo.
   const answeredName =
-    asksForName(input.lastAgentText) && looksLikeBareName(input.inboundText);
+    asksForName(input.lastAgentText) &&
+    looksLikeBareName(input.inboundText, serviceNames);
 
   if (
     (strongPurchaseIntent || answeredName) &&
     appointmentRequirementsPresent(input.knowledgeText)
   ) {
     const missing: MissingDatum[] = [];
-    if (!customerGaveName(input.customerHistoryText, input.conversation)) {
+    if (!customerGaveName(input.customerHistoryText, input.conversation, serviceNames)) {
       missing.push("name");
     }
     if (!/(?:\d[\s()-]*){10,}/.test(input.customerHistoryText)) missing.push("phone");
     // Si la KB de este negocio no permite extraer nombres de servicio, el
     // servicio no es verificable: no se pide aquí y esa pregunta queda al modelo.
-    const serviceNames = knowledgeServiceNames(input.knowledgeText);
     if (
       serviceNames.length > 0 &&
       !mentionedService(input.customerHistoryText, serviceNames)

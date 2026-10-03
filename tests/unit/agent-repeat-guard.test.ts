@@ -187,6 +187,58 @@ describe("una afirmación que pide el nombre también cuenta", () => {
   });
 });
 
+describe("falsos nombres: solo cuenta lo que responde a una petición del nombre", () => {
+  const PHONE_ASK = "Gracias. ¿Me comparte su número de teléfono?";
+  const OPEN_QUESTION = "Dígame, ¿en qué le ayudo?";
+
+  // ¿La respuesta directa a la pregunta del agente se toma como nombre?
+  function directAnswer(agentText: string, customerText: string) {
+    return reply([
+      { role: "customer", text: "Quiero avanzar hoy" },
+      { role: "agent", text: agentText },
+      { role: "customer", text: customerText },
+    ]);
+  }
+
+  // ¿Queda registrada como nombre en el historial para una insistencia posterior?
+  function laterInsistence(agentText: string, customerText: string) {
+    return reply([
+      { role: "customer", text: "Hola" },
+      { role: "agent", text: agentText },
+      { role: "customer", text: customerText },
+      { role: "agent", text: "Con gusto." },
+      { role: "customer", text: "Quiero avanzar hoy" },
+    ]);
+  }
+
+  it.each(["Buenas tardes", "Limpieza dental"])(
+    "tras '%s' del agente sin pedir nombre… ('Dígame, ¿en qué le ayudo?' + '%s') NO es nombre",
+    (customerText) => {
+      expect(directAnswer(OPEN_QUESTION, customerText)).toBeNull();
+      expect(laterInsistence(OPEN_QUESTION, customerText)).toMatch(/nombre/);
+    }
+  );
+
+  it.each([
+    "Limpieza dental",
+    "Ortodoncia",
+    "Corona dental",
+    "Resina dental",
+    "Extracción simple",
+    "Brackets metálicos",
+  ])("tras pedir el nombre, el servicio de la KB '%s' NO es nombre", (service) => {
+    expect(directAnswer(ASK_NAME, service)).not.toBe(PHONE_ASK);
+    expect(laterInsistence(ASK_NAME, service)).toMatch(/nombre/);
+  });
+
+  it("control: tras 'necesito su nombre completo', 'Juan Pérez' SÍ es nombre", () => {
+    expect(directAnswer("Para continuar necesito su nombre completo.", "Juan Pérez")).toBe(PHONE_ASK);
+    expect(laterInsistence("Para continuar necesito su nombre completo.", "Juan Pérez")).not.toMatch(
+      /nombre/
+    );
+  });
+});
+
 describe("'procedimiento' en preguntas frecuentes no apaga la abstención", () => {
   it.each([
     ["me dice cuanto sale y q incluye?", null],
