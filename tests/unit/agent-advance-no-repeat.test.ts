@@ -278,6 +278,90 @@ describe("pregunta combinada de precio y 'qué incluye' con modismos", () => {
   });
 });
 
+describe("líneas de precio del documento — nunca una lista parcial", () => {
+  // Las 10 líneas reales de "SERVICIOS Y PRECIOS DE REFERENCIA" del documento demo.
+  const DEMO_PRICE_LINES = [
+    "- Consulta de valoración: $300 MXN",
+    "- Limpieza dental: $700 MXN",
+    "- Resina dental: desde $800 MXN por pieza",
+    "- Blanqueamiento dental: desde $2,500 MXN",
+    "- Extracción simple: desde $900 MXN",
+    "- Extracción de muela del juicio: desde $2,500 MXN",
+    "- Ortodoncia: valoración inicial $500 MXN",
+    "- Brackets metálicos: desde $8,000 MXN",
+    "- Endodoncia: desde $3,000 MXN",
+    "- Corona dental: desde $4,500 MXN",
+  ];
+  const DEMO_KNOWLEDGE = [
+    "2. SERVICIOS Y PRECIOS DE REFERENCIA",
+    ...DEMO_PRICE_LINES,
+    "Los precios son de referencia y pueden cambiar después de la valoración clínica.",
+    "4. CITAS",
+    "Para agendar una cita solicitar:",
+    "- Nombre completo",
+    "- Número de teléfono",
+    "- Servicio o motivo de consulta",
+  ].join("\n");
+  const QUESTION = "me dice cuanto sale y q incluye?";
+
+  it("con el documento demo la respuesta contiene las 10 líneas, incluida Ortodoncia", () => {
+    const answer = reply({
+      inbound: QUESTION,
+      knowledge: DEMO_KNOWLEDGE,
+      conversation: [{ role: "customer", text: QUESTION }],
+    });
+    expect(answer).not.toBeNull();
+    for (const line of DEMO_PRICE_LINES) expect(answer).toContain(line);
+    expect(answer).toContain("- Ortodoncia: valoración inicial $500 MXN");
+  });
+
+  it.each([
+    "- Promoción especial $200 de descuento en limpieza",
+    "- $1,200 MXN el paquete familiar",
+  ])("una línea de lista con '$' que no se puede parsear (%s) deja la pregunta al modelo", (line) => {
+    const answer = reply({
+      inbound: QUESTION,
+      knowledge: `${DEMO_KNOWLEDGE}\n${line}`,
+      conversation: [{ role: "customer", text: QUESTION }],
+    });
+    expect(answer).toBeNull();
+  });
+
+  it("las líneas de precio fuera de una lista no bloquean la respuesta determinista", () => {
+    const answer = reply({
+      inbound: QUESTION,
+      knowledge: `${DEMO_KNOWLEDGE}\nRespuesta: La limpieza dental tiene un precio de referencia de $700 MXN.`,
+      conversation: [{ role: "customer", text: QUESTION }],
+    });
+    expect(answer).not.toBeNull();
+    expect(answer).toContain("- Ortodoncia: valoración inicial $500 MXN");
+  });
+});
+
+describe("evasivas tras la pregunta de nombre no cuentan como nombre", () => {
+  function askedNameThen(text: string) {
+    return reply({
+      inbound: text,
+      conversation: [
+        { role: "customer", text: "Quiero avanzar hoy" },
+        { role: "agent", text: ASK_NAME },
+        { role: "customer", text },
+      ],
+    });
+  }
+
+  it.each(["Más tarde", "Lo pienso", "Estoy pensando", "Ahorita no", "Luego le digo", "Todavía nada"])(
+    "'%s' no cuenta como nombre",
+    (text) => {
+      expect(askedNameThen(text)).toBeNull();
+    }
+  );
+
+  it.each(["Juan Pérez", "María López"])("'%s' sí cuenta como nombre", (text) => {
+    expect(askedNameThen(text)).toBe("Gracias. ¿Me comparte su número de teléfono?");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pipeline real (runAgentTurn): el contexto llega a la regla determinista.
 // ─────────────────────────────────────────────────────────────────────────────

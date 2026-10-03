@@ -49,19 +49,39 @@ function mentionedService(conversationText: string, knowledgeText: string): bool
   });
 }
 
-/** Líneas "- Servicio: $precio" del conocimiento, tal como están escritas. */
-function knowledgePriceLines(knowledgeText: string): string[] {
+/**
+ * Líneas de lista con precio, tal como están escritas: "- Servicio: … $monto"
+ * (el monto puede ir después de texto intermedio, p. ej. "valoración inicial").
+ *
+ * Invariante: `complete` es false si alguna línea de lista contiene un monto
+ * con "$" que no encaja en ese formato. En ese caso no se debe presentar una
+ * lista como "los precios de referencia": quedaría parcial.
+ */
+function knowledgePriceLines(knowledgeText: string): {
+  lines: string[];
+  complete: boolean;
+} {
   const seen = new Set<string>();
-  return knowledgeText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => /^-\s*[^:\n]+:\s*(?:desde\s*)?\$\s*\d/i.test(line))
-    .filter((line) => {
-      const key = normalizePolicyText(line);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  const lines: string[] = [];
+  let complete = true;
+  for (const raw of knowledgeText.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!/^-\s*/.test(line) || !/\$\s*\d/.test(line)) continue;
+    const colon = line.indexOf(":");
+    const parsed =
+      colon > 1 &&
+      line.slice(1, colon).trim().length > 0 &&
+      /\$\s*\d/.test(line.slice(colon + 1));
+    if (!parsed) {
+      complete = false;
+      continue;
+    }
+    const key = normalizePolicyText(line);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    lines.push(line);
+  }
+  return { lines, complete };
 }
 
 function asksForPrice(normalizedText: string): boolean {
@@ -88,6 +108,11 @@ const NON_NAME_WORDS = new Set([
   "sale", "gracias", "ok", "okay", "va", "vale", "si", "no", "hola", "buenas", "perfecto",
   "claro", "dale", "luego", "despues", "manana", "hoy", "ya", "se", "le", "digo", "mi",
   "nombre", "tengo", "cita", "telefono", "servicio", "limpieza", "por", "favor",
+  // Evasivas y aplazamientos ("más tarde", "lo pienso", "estoy pensando"): ante
+  // la duda, no es un nombre.
+  "mas", "tarde", "ahorita", "pienso", "piensa", "pensando", "pensarlo", "estoy",
+  "lo", "la", "el", "ahora", "mejor", "depende", "nada", "nadie", "aun", "todavia",
+  "rato", "momento", "veo", "vemos", "aviso", "confirmo", "reviso", "seguro", "sabe",
 ]);
 
 /**
@@ -193,14 +218,17 @@ export function groundedConversationReply(input: {
 
     // Precio + "qué incluye" en la misma pregunta: los precios confirmados y,
     // en el mismo mensaje, la abstención sobre el detalle que la KB no tiene.
-    if (asksForPrice(inbound) && priceLines.length > 0) {
+    // Si alguna línea con monto no se pudo leer, la lista sería parcial: la
+    // pregunta queda en manos del modelo con el conocimiento completo.
+    if (asksForPrice(inbound) && !priceLines.complete) return null;
+    if (asksForPrice(inbound) && priceLines.lines.length > 0) {
       const abstention = hasValuation
         ? "El conocimiento disponible no detalla qué incluye cada servicio; ese detalle se confirma en la valoración clínica"
         : "El conocimiento disponible no detalla qué incluye cada servicio";
       const offer = informal
         ? "si quieres, un asesor también puede confirmártelo."
         : "si lo desea, un asesor también puede confirmárselo.";
-      return `Estos son los precios de referencia:\n${priceLines.join("\n")}\n${abstention}; ${offer}`;
+      return `Estos son los precios de referencia:\n${priceLines.lines.join("\n")}\n${abstention}; ${offer}`;
     }
 
     if (
