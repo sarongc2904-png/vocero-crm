@@ -165,9 +165,100 @@ const REQUEST_TOPICS: Array<{ pattern: RegExp; label: string }> = [
 ];
 
 /** El perfil pide tutear sólo si su tono lo dice; por defecto se usa usted. */
-function prefersInformalRegister(tone: string | null | undefined): boolean {
+export function prefersInformalRegister(tone: string | null | undefined): boolean {
   if (!tone) return false;
   return /tute|\bde tu\b|informal/.test(normalizeHandoffText(tone));
+}
+
+function normalizeComparableText(text: string): string {
+  return normalizeHandoffText(text)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function sameNormalizedMessage(left: string, right: string): boolean {
+  const normalizedLeft = normalizeComparableText(left);
+  return (
+    normalizedLeft.length > 0 &&
+    normalizedLeft === normalizeComparableText(right)
+  );
+}
+
+const GRATITUDE_OR_REVIEW =
+  /\b(?:gracias|lo voy a revisar|lo reviso|voy a revisarlo|quedo pendiente)\b/;
+const SHORT_ACKNOWLEDGEMENTS = new Set([
+  "ok",
+  "okay",
+  "okey",
+  "va",
+  "vale",
+  "perfecto",
+  "de acuerdo",
+  "esta bien",
+]);
+
+function removeClosingCourtesy(text: string): string {
+  return text
+    .replace(/\b(?:lo voy a revisar|voy a revisarlo|lo reviso|quedo pendiente)\b/g, " ")
+    .replace(/\b(?:muchas gracias|gracias)\b/g, " ")
+    .replace(/\b(?:de acuerdo|esta bien)\b/g, " ")
+    .replace(/\b(?:ok|okay|okey|perfecto|va|vale)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Agradecimiento/cierre breve que no contiene una petición nueva. Un "ok"
+ * aislado solo cierra si el mensaje previo del agente no era una pregunta; así
+ * no consume confirmaciones ni respuestas a una solicitud de datos.
+ */
+export function isClosingAcknowledgement(
+  text: string,
+  lastAgentText?: string | null
+): boolean {
+  if (text.includes("?")) return false;
+  const normalized = normalizeComparableText(text);
+  if (!normalized || removeClosingCourtesy(normalized)) return false;
+  if (GRATITUDE_OR_REVIEW.test(normalized)) return true;
+  return (
+    SHORT_ACKNOWLEDGEMENTS.has(normalized) &&
+    !lastAgentText?.includes("?")
+  );
+}
+
+export function closingAcknowledgementReply(
+  tone?: string | null
+): string {
+  return prefersInformalRegister(tone)
+    ? "Con gusto. Aquí estoy si necesitas algo más."
+    : "Con gusto. Quedo a sus órdenes.";
+}
+
+export function handoffNotice(tone?: string | null): string {
+  return prefersInformalRegister(tone)
+    ? "Claro. Voy a pasar tu conversación a un asesor. La IA queda en pausa mientras te atienden."
+    : "Claro. Voy a pasar su conversación a un asesor. La IA queda en pausa mientras le atienden.";
+}
+
+/** Ajusta únicamente copias fijas conocidas; nunca reescribe texto libre del modelo. */
+export function toneAwareFixedReply(
+  text: string,
+  tone?: string | null
+): string {
+  if (prefersInformalRegister(tone)) return text;
+  return text
+    .replace("¿Te funciona alguno?", "¿Le funciona alguno?")
+    .replace("¿Cuál te funciona mejor?", "¿Cuál le funciona mejor?")
+    .replace("¿Quieres que agende tu cita?", "¿Quiere que agende su cita?")
+    .replace("¿Cuál de estas quieres elegir?", "¿Cuál de estas quiere elegir?")
+    .replace("entre las opciones que te mostré", "entre las opciones que le mostré")
+    .replace("Déjame confirmarlo con el equipo y te aviso", "Permítame confirmarlo con el equipo y le aviso")
+    .replace("Agrega la cita a tu calendario", "Agregue la cita a su calendario")
+    .replace("En un momento te comparto", "En un momento le comparto")
+    .replace("Lo reviso con el equipo y te confirmo", "Lo reviso con el equipo y le confirmo")
+    .replace("Elige otro:", "Elija otro:")
+    .replace("elige uno de estos horarios", "elija uno de estos horarios");
 }
 
 /**

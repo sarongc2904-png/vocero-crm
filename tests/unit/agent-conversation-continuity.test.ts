@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentSystemPrompt } from "@/server/ai/prompts";
+import {
+  buildAgentSystemPrompt,
+  groundedConversationReply,
+} from "@/server/ai/prompts";
 import type { schema } from "@/lib/db";
 
 function profile(): typeof schema.agentProfile.$inferSelect {
@@ -44,5 +47,45 @@ describe("continuidad conversacional del agente", () => {
     expect(prompt).toContain(
       "No repitas textualmente ni reformules sustancialmente una respuesta que ya enviaste"
     );
+  });
+
+  it("la intención fuerte pide solo el primer dato de cita que falta", () => {
+    const knowledgeText = [
+      "Para agendar una cita solicitar:",
+      "- Nombre completo",
+      "- Número de teléfono",
+      "- Servicio o motivo de consulta",
+      "- Limpieza dental: $700 MXN",
+    ].join("\n");
+
+    expect(
+      groundedConversationReply({
+        inboundText: "Quiero avanzar hoy",
+        customerHistoryText: "Quiero avanzar hoy",
+        knowledgeText,
+      })
+    ).toBe("Para avanzar, ¿me comparte su nombre completo?");
+    expect(
+      groundedConversationReply({
+        inboundText: "Quiero avanzar hoy",
+        customerHistoryText: "Soy Juan Pérez. Quiero avanzar hoy",
+        knowledgeText,
+      })
+    ).toBe("Gracias. ¿Me comparte su número de teléfono?");
+    expect(
+      groundedConversationReply({
+        inboundText: "Quiero avanzar hoy",
+        customerHistoryText: "Soy Juan Pérez. Mi teléfono es 867 123 4567. Quiero avanzar hoy",
+        knowledgeText,
+      })
+    ).toBe("Gracias. ¿Qué servicio o motivo de consulta le interesa?");
+    expect(
+      groundedConversationReply({
+        inboundText: "Quiero avanzar hoy",
+        customerHistoryText:
+          "Soy Juan Pérez. Mi teléfono es 867 123 4567. Quiero limpieza y avanzar hoy",
+        knowledgeText,
+      })
+    ).toBeNull();
   });
 });

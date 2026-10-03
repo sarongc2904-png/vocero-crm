@@ -394,7 +394,7 @@ describe("pipeline — ampliación y selección compacta", () => {
     await runAgentTurn("cv_lab");
 
     const texto = ultimoTextoSaliente();
-    expect(texto).toContain("¿Quieres que agende tu cita?");
+    expect(texto).toContain("¿Quiere que agende su cita?");
     expect(texto).not.toContain("Te agendé"); // NO se creó la cita
   });
 
@@ -414,7 +414,7 @@ describe("pipeline — ampliación y selección compacta", () => {
     await runAgentTurn("cv_lab");
 
     const texto = ultimoTextoSaliente();
-    expect(texto).toContain("¿Quieres que agende tu cita?");
+    expect(texto).toContain("¿Quiere que agende su cita?");
     expect(texto).not.toContain("Te agendé");
   });
 
@@ -463,7 +463,7 @@ describe("pipeline — ampliación y selección compacta", () => {
 
     expect(chatJson).not.toHaveBeenCalled();
     expect(ultimoTextoSaliente()).toBe(
-      "Perfecto. Tengo miércoles 30 a las 14:20 disponible. ¿Quieres que agende tu cita?"
+      "Perfecto. Tengo miércoles 30 a las 14:20 disponible. ¿Quiere que agende su cita?"
     );
     const pending = inserts.find((entry) => entry.values.action === "book");
     expect(pending?.values).toMatchObject({

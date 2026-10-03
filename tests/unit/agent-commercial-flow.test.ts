@@ -77,7 +77,7 @@ describe("flujo comercial WhatsApp/IA - release hardening", () => {
     );
     const claimed = pipeline.indexOf("const claimed = await applyHandoff", handoffBlockStart);
     const notice = pipeline.indexOf(
-      "Voy a pasar tu conversación a un asesor",
+      "handoffNotice(profile.tone)",
       handoffBlockStart
     );
 
@@ -114,7 +114,8 @@ describe("flujo comercial WhatsApp/IA - release hardening", () => {
     const guard = source("src/server/ai/capability-guard.ts");
 
     expect(pipeline).toContain("enforceAgentCapabilities");
-    expect(pipeline).toContain("safeModelReply(action.text)");
+    expect(pipeline).toContain("safeQualityReply(action.text)");
+    expect(pipeline).toContain("return safeModelReply(text)");
     expect(guard).toContain("AGENDA_DISABLED_SAFE_REPLY");
   });
 });

@@ -325,8 +325,9 @@ describe("AG-HOLA — un turno neutral no recibe contexto de agenda", () => {
 
     expect(chatJson).not.toHaveBeenCalled();
     expect(ultimoTextoSaliente()).toContain(
-      "No encontré esa hora entre las opciones que te mostré"
+      "No encontré esa hora entre las opciones que le mostré"
     );
+    expect(ultimoTextoSaliente()).toContain("¿Cuál le funciona mejor?");
     expect(ultimoTextoSaliente()).toContain("15:00");
     expect(ultimoTextoSaliente()).not.toContain("Te agendé");
   });
@@ -355,7 +356,7 @@ describe("AG-HOLA — un turno neutral no recibe contexto de agenda", () => {
     await runAgentTurn("cv_lab");
 
     expect(chatJson).not.toHaveBeenCalled();
-    expect(ultimoTextoSaliente()).toContain("¿Quieres que agende tu cita?");
+    expect(ultimoTextoSaliente()).toContain("¿Quiere que agende su cita?");
     expect(ultimoTextoSaliente()).not.toContain("Te agendé");
   });
 
