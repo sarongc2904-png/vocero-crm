@@ -13,8 +13,10 @@ function normalizePolicyText(value: string): string {
     .toLowerCase();
 }
 
+// "procedimiento" no cuenta: es demasiado genérico ("se requiere un
+// procedimiento adicional") y apagaba la abstención sin que la KB detallara nada.
 function knowledgeHasServiceDetail(knowledgeText: string): boolean {
-  return /\b(?:incluye|incluyen|incluido|consiste|comprende|abarca|procedimiento)\b/.test(
+  return /\b(?:incluye|incluyen|incluido|consiste|comprende|abarca)\b/.test(
     normalizePolicyText(knowledgeText)
   );
 }
@@ -102,11 +104,21 @@ function asksForPrice(normalizedText: string): boolean {
 /** "qué incluye", "que incluye", "q incluye" (con o sin "n"). */
 const ASKS_WHAT_IS_INCLUDED = /\b(?:que|q)\s+incluye(?:n)?\b/;
 
-/** ¿La pregunta del agente pide el nombre del cliente? */
+/**
+ * ¿El mensaje del agente pide el nombre del cliente? Vale como pregunta
+ * ("¿me comparte su nombre?") o como afirmación ("necesito su nombre
+ * completo"); mencionar el nombre sin pedirlo ("ya registré su nombre") no.
+ */
 function asksForName(agentText: string | null | undefined): boolean {
   if (!agentText) return false;
   const normalized = normalizePolicyText(agentText);
-  return normalized.includes("?") && /\bnombre\b/.test(normalized);
+  if (!/\bnombre\b/.test(normalized)) return false;
+  return (
+    normalized.includes("?") ||
+    /\b(?:necesito|necesitamos|requiero|requerimos|me comparte|me compartes|compartirme|compartame|comparteme|me indica|me indicas|indiqueme|indicame|me proporciona|me proporcionas|proporcioneme|me da|me das|me dice|me dices|digame|dime|escribame|escribeme|solicito)\b/.test(
+      normalized
+    )
+  );
 }
 
 const NON_NAME_WORDS = new Set([
@@ -122,14 +134,28 @@ const NON_NAME_WORDS = new Set([
 ]);
 
 /**
- * Respuesta corta que es un nombre: 2 a 4 palabras, solo letras y espacios,
- * sin signos de pregunta ni palabras de petición o cortesía.
+ * ¿La respuesta es (solo) el nombre de un servicio? Todas sus palabras deben
+ * pertenecer a un mismo servicio de la KB: "Corona dental" sí, pero "Pedro
+ * Corona" no, porque "pedro" es ajena al servicio (apellidos comunes).
  */
-function looksLikeBareName(text: string): boolean {
+function isOnlyServiceName(words: string[], serviceNames: string[]): boolean {
+  return serviceNames.some((service) => {
+    const serviceWords = new Set(service.split(/\s+/).filter(Boolean));
+    return words.every((word) => serviceWords.has(word));
+  });
+}
+
+/**
+ * Respuesta corta que es un nombre: 2 a 4 palabras, solo letras y espacios,
+ * sin signos de pregunta ni palabras de petición o cortesía, y que no sea
+ * únicamente el nombre de un servicio de la KB.
+ */
+function looksLikeBareName(text: string, serviceNames: string[]): boolean {
   const trimmed = text.trim();
   if (!/^[\p{L}\s'-]+$/u.test(trimmed)) return false;
   const words = normalizePolicyText(trimmed).split(/\s+/).filter(Boolean);
   if (words.length < 2 || words.length > 4) return false;
+  if (isOnlyServiceName(words, serviceNames)) return false;
   return words.every((word) => word.length >= 2 && !NON_NAME_WORDS.has(word));
 }
 
@@ -141,13 +167,14 @@ type ConversationTurn = { role: "agent" | "customer"; text: string };
 
 function customerGaveName(
   customerHistoryText: string,
-  conversation: ConversationTurn[] | undefined
+  conversation: ConversationTurn[] | undefined,
+  serviceNames: string[]
 ): boolean {
   if (EXPLICIT_NAME.test(normalizePolicyText(customerHistoryText))) return true;
   return (conversation ?? []).some(
     (turn, index) =>
       turn.role === "customer" &&
-      looksLikeBareName(turn.text) &&
+      looksLikeBareName(turn.text, serviceNames) &&
       asksForName(
         [...conversation!.slice(0, index)].reverse().find((t) => t.role === "agent")?.text
       )
@@ -178,11 +205,14 @@ function joinSpanish(items: string[]): string {
     : `${items.slice(0, -1).join(", ")} y ${items[items.length - 1]}`;
 }
 
-/** Una sola petición con todos los datos que faltan, en dos formulaciones. */
+/**
+ * Una sola petición con todos los datos que faltan, en tres formulaciones; la
+ * tercera reconoce que el cliente insiste.
+ */
 function combinedDatumQuestion(
   missing: MissingDatum[],
   informal: boolean,
-  variant: 0 | 1
+  variant: 0 | 1 | 2
 ): string {
   const labels: Record<MissingDatum, string> = informal
     ? { name: "tu nombre completo", phone: "tu número de teléfono", service: "el servicio o motivo de consulta" }
@@ -193,9 +223,12 @@ function combinedDatumQuestion(
       ? `Para dejar lista tu cita necesito ${list}. ¿Me los compartes en un solo mensaje?`
       : `Para dejar lista su cita necesito ${list}. ¿Me los comparte en un solo mensaje?`;
   }
-  return informal
-    ? `Con gusto avanzamos. Solo me falta ${list}; puedes enviarlos juntos.`
-    : `Con gusto avanzamos. Solo me falta ${list}; puede enviarlos juntos.`;
+  if (variant === 1) {
+    return informal
+      ? `Con gusto avanzamos. Solo me falta ${list}; puedes enviarlos juntos.`
+      : `Con gusto avanzamos. Solo me falta ${list}; puede enviarlos juntos.`;
+  }
+  return `Entiendo. Solo necesito ${list} para continuar.`;
 }
 
 /**
@@ -257,23 +290,24 @@ export function groundedConversationReply(input: {
     /\b(?:quiero|quisiera|necesito)\s+(?:avanzar|contratar|comprar|empezar|iniciar)(?:\s+(?:hoy|ya|ahora))?\b/.test(
       inbound
     );
+  const serviceNames = knowledgeServiceNames(input.knowledgeText);
   // El cliente respondió con su nombre a la pregunta del agente: se continúa
   // la recolección de datos sin pasar por el modelo.
   const answeredName =
-    asksForName(input.lastAgentText) && looksLikeBareName(input.inboundText);
+    asksForName(input.lastAgentText) &&
+    looksLikeBareName(input.inboundText, serviceNames);
 
   if (
     (strongPurchaseIntent || answeredName) &&
     appointmentRequirementsPresent(input.knowledgeText)
   ) {
     const missing: MissingDatum[] = [];
-    if (!customerGaveName(input.customerHistoryText, input.conversation)) {
+    if (!customerGaveName(input.customerHistoryText, input.conversation, serviceNames)) {
       missing.push("name");
     }
     if (!/(?:\d[\s()-]*){10,}/.test(input.customerHistoryText)) missing.push("phone");
     // Si la KB de este negocio no permite extraer nombres de servicio, el
     // servicio no es verificable: no se pide aquí y esa pregunta queda al modelo.
-    const serviceNames = knowledgeServiceNames(input.knowledgeText);
     if (
       serviceNames.length > 0 &&
       !mentionedService(input.customerHistoryText, serviceNames)
@@ -282,18 +316,29 @@ export function groundedConversationReply(input: {
     }
     if (missing.length === 0) return null;
 
-    const single = singleDatumQuestion(missing[0]!, informal);
-    const last = input.lastAgentText ?? "";
-    const lastAskedSameDatum =
-      sameNormalizedMessage(single, last) ||
-      (missing[0] === "name" && asksForName(last));
-    if (!lastAskedSameDatum) return single;
+    // Anti-repetición contra TODOS los mensajes previos del agente, no solo el
+    // último: entre dos insistencias el modelo puede haber respondido algo
+    // distinto (p. ej. una afirmación que pide los datos).
+    const previousAgentTexts = [
+      ...(input.conversation ?? [])
+        .filter((turn) => turn.role === "agent")
+        .map((turn) => turn.text),
+      ...(input.lastAgentText ? [input.lastAgentText] : []),
+    ];
+    const alreadySent = (text: string) =>
+      previousAgentTexts.some((previous) => sameNormalizedMessage(text, previous));
 
-    // Ya se pidió ese dato en el mensaje anterior: nunca se repite el texto.
-    const first = combinedDatumQuestion(missing, informal, 0);
-    return sameNormalizedMessage(first, last)
-      ? combinedDatumQuestion(missing, informal, 1)
-      : first;
+    const single = singleDatumQuestion(missing[0]!, informal);
+    const lastAskedSameDatum = missing[0] === "name" && asksForName(input.lastAgentText);
+    if (!lastAskedSameDatum && !alreadySent(single)) return single;
+
+    // Ese dato ya se pidió: una petición combinada que no se haya enviado ya.
+    // Agotadas las formulaciones, la respuesta queda al modelo; nunca se
+    // devuelve un texto idéntico a uno anterior.
+    const variants = ([0, 1, 2] as const).map((variant) =>
+      combinedDatumQuestion(missing, informal, variant)
+    );
+    return variants.find((variant) => !alreadySent(variant)) ?? null;
   }
 
   return null;
