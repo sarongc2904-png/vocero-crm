@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { getSessionState } from "@/lib/auth/session";
 import { SignOutButton } from "@/components/sign-out-button";
+import { SelfServeOrganizationForm } from "@/components/self-serve-organization-form";
+import { isPublicSignupAllowed } from "@/server/auth/registration";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +47,8 @@ export default async function OrganizationRequiredPage() {
   // El motivo se recalcula aquí en el servidor, nunca se lee de la URL: un
   // parámetro de query no debe poder cambiar lo que la pantalla afirma.
   const copy = COPY[state.reason];
+  const canCreateOrganization =
+    state.reason === "no_membership" && (await isPublicSignupAllowed());
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background p-6">
@@ -64,9 +68,12 @@ export default async function OrganizationRequiredPage() {
           <SignOutButton />
         </div>
 
+        {canCreateOrganization && <SelfServeOrganizationForm />}
+
         <p className="mt-6 text-xs leading-5 text-text-3">
-          Por seguridad no creamos una organización automáticamente al iniciar
-          sesión: el acceso se otorga desde el equipo de tu cuenta.
+          {canCreateOrganization
+            ? "Completa el nombre del negocio para terminar el alta pendiente."
+            : "Por seguridad no creamos una organización automáticamente al iniciar sesión: el acceso se otorga desde el equipo de tu cuenta."}
         </p>
       </section>
     </main>

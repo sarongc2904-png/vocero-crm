@@ -3,6 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { isValidTimeZone } from "@/lib/time/slots";
+import { isMexicoTimeZone } from "@/lib/time/mexico-timezones";
 
 export type ServiceInput = {
   name: string;
@@ -179,7 +180,7 @@ export async function createProfessional(
   organizationId: string,
   input: ProfessionalInput
 ) {
-  validateProfessional(input);
+    validateProfessional(input, false);
   const db = getDb();
   return db.transaction(async (tx) => {
     await assertOwnServices(tx, organizationId, input.serviceIds ?? []);
@@ -235,7 +236,7 @@ export async function updateProfessional(
       color: input.color === undefined ? current.color : input.color,
       serviceIds: input.serviceIds,
     };
-    validateProfessional(next);
+    validateProfessional(next, next.timezone === current.timezone);
     if (input.serviceIds) await assertOwnServices(tx, organizationId, input.serviceIds);
     const rows = await tx
       .update(schema.professional)
@@ -294,12 +295,15 @@ export async function deleteProfessional(
   return rows[0];
 }
 
-function validateProfessional(input: ProfessionalInput) {
+function validateProfessional(input: ProfessionalInput, allowLegacyTimezone: boolean) {
   if (!input.name.trim()) {
     throw new BeautyCatalogError("invalid", "La profesional necesita nombre");
   }
   if (!isValidTimeZone(input.timezone)) {
     throw new BeautyCatalogError("invalid", "Zona horaria desconocida");
+  }
+  if (!allowLegacyTimezone && !isMexicoTimeZone(input.timezone)) {
+    throw new BeautyCatalogError("invalid", "Selecciona una zona horaria de México");
   }
 }
 

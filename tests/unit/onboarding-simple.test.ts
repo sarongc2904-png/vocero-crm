@@ -20,13 +20,14 @@ describe("onboarding simple para negocio general", () => {
     expect(onboarding).not.toContain('{ id: "hours", label: "Horarios"');
   });
 
-  it("deja horario y Calendar como opcionales", () => {
+  it("exige zona horaria y deja Calendar como opcional", () => {
     const onboarding = source("src/server/commercial/onboarding.ts");
 
     expect(onboarding).toContain('id: "timezone"');
     expect(onboarding).toContain('label: "Configura la agenda general"');
+    expect(onboarding).not.toMatch(/id: "timezone"[\s\S]{0,120}optional: true/);
     expect(onboarding).toContain('id: "calendar"');
-    expect(onboarding).toContain("optional: true");
+    expect(onboarding).toMatch(/id: "calendar"[\s\S]{0,120}optional: true/);
   });
 
   it("usa lenguaje de siguiente paso en la interfaz", () => {
@@ -35,7 +36,7 @@ describe("onboarding simple para negocio general", () => {
 
     expect(page).toContain("Vamos paso a paso");
     expect(page).toContain("Continuar");
-    expect(page).toContain("pueden configurarse después");
+    expect(page).toContain("Google Calendar puede configurarse después");
     expect(onboarding).toContain("const nextStep");
     expect(onboarding).toContain("input.activate");
     expect(onboarding).toContain("shouldMarkActivation");

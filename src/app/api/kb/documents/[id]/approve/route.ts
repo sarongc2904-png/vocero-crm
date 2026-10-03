@@ -4,6 +4,7 @@ import {
   approveKnowledgeDocument,
   KnowledgeDocumentLifecycleError,
 } from "@/server/kb/documents/lifecycle";
+import { getScheduleCoherence } from "@/server/commercial/schedule-coherence";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,7 +30,10 @@ export const POST = withOrgRoles(
           fileSize: document.fileSize,
         },
       });
-      return Response.json({ document });
+      return Response.json({
+        document,
+        scheduleCoherence: await getScheduleCoherence(session.organizationId),
+      });
     } catch (error) {
       if (error instanceof KnowledgeDocumentLifecycleError) {
         return apiError(error.status, error.code, error.message);

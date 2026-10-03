@@ -1,4 +1,4 @@
-import { asc, eq, sql } from "drizzle-orm";
+import { asc, count, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import {
@@ -20,6 +20,31 @@ export const SEED_STAGES: {
 type OrganizationTx = Parameters<
   Parameters<ReturnType<typeof getDb>["transaction"]>[0]
 >[0];
+
+export const BUSINESS_NAME_MAX_LENGTH = 120;
+
+export class OrganizationBootstrapError extends Error {
+  constructor(
+    readonly code: "invalid_name" | "membership_not_found" | "signup_closed"
+  ) {
+    super(
+      code === "invalid_name"
+        ? `El nombre del negocio debe tener entre 2 y ${BUSINESS_NAME_MAX_LENGTH} caracteres`
+        : code === "signup_closed"
+          ? "El registro público no está habilitado en este momento"
+          : "No se pudo resolver la organización creada"
+    );
+    this.name = "OrganizationBootstrapError";
+  }
+}
+
+function normalizedBusinessName(name: string): string {
+  const normalized = name.trim().replace(/\s+/g, " ");
+  if (normalized.length < 2 || normalized.length > BUSINESS_NAME_MAX_LENGTH) {
+    throw new OrganizationBootstrapError("invalid_name");
+  }
+  return normalized;
+}
 
 /** Crea el tenant y todo su estado inicial dentro de una transacción existente. */
 export async function initializeOrganization(
@@ -102,11 +127,12 @@ export async function createOrganizationForOwner(
   ownerUserId: string,
   name: string
 ): Promise<{ id: string; name: string; slug: string }> {
+  const normalizedName = normalizedBusinessName(name);
   return getDb().transaction(async (tx) => {
     // Serializa solamente la asignación del slug para que dos altas con el
     // mismo nombre no dependan de reintentos ni de errores de constraint.
     await tx.execute(sql`select pg_advisory_xact_lock(874202)`);
-    const base = slugBase(name);
+    const base = slugBase(normalizedName);
     let slug = base;
     for (let suffix = 2; ; suffix += 1) {
       const [existing] = await tx
@@ -122,10 +148,83 @@ export async function createOrganizationForOwner(
     await initializeOrganization(tx, {
       organizationId: id,
       ownerUserId,
-      name,
+      name: normalizedName,
       slug,
     });
-    return { id, name, slug };
+    return { id, name: normalizedName, slug };
+  });
+}
+
+/**
+ * Bootstrap self-serve idempotente. El candado se deriva del usuario: dos
+ * clics/reintentos concurrentes nunca crean dos memberships ni dos tenants.
+ */
+export async function createSelfServeOrganizationForOwner(
+  ownerUserId: string,
+  name: string,
+  options: { publicSignupOpen: boolean }
+): Promise<{ id: string; name: string; slug: string; created: boolean }> {
+  const normalizedName = normalizedBusinessName(name);
+  return getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${ownerUserId}, 874204))`
+    );
+
+    const memberships = await tx
+      .select({ organizationId: schema.member.organizationId })
+      .from(schema.member)
+      .where(eq(schema.member.userId, ownerUserId))
+      .orderBy(asc(schema.member.createdAt), asc(schema.member.id))
+      .limit(1);
+    const existingMembership = memberships[0];
+    if (existingMembership) {
+      const organizations = await tx
+        .select({
+          id: schema.organization.id,
+          name: schema.organization.name,
+          slug: schema.organization.slug,
+        })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, existingMembership.organizationId))
+        .limit(1);
+      const existing = organizations[0];
+      if (!existing) throw new OrganizationBootstrapError("membership_not_found");
+      return { ...existing, slug: existing.slug ?? "", created: false };
+    }
+
+    if (!options.publicSignupOpen) {
+      await tx.execute(sql`select pg_advisory_xact_lock(874201)`);
+      const organizations = await tx
+        .select({ n: count() })
+        .from(schema.organization);
+      if ((organizations[0]?.n ?? 0) > 0) {
+        throw new OrganizationBootstrapError("signup_closed");
+      }
+    }
+
+    // El lock de slug se conserva separado: usuarios distintos pueden pedir el
+    // mismo nombre y reciben sufijos únicos sin depender de un error de índice.
+    await tx.execute(sql`select pg_advisory_xact_lock(874202)`);
+    const base = slugBase(normalizedName);
+    let slug = base;
+    for (let suffix = 2; ; suffix += 1) {
+      const existing = await tx
+        .select({ id: schema.organization.id })
+        .from(schema.organization)
+        .where(eq(schema.organization.slug, slug))
+        .limit(1);
+      if (!existing[0]) break;
+      slug = `${base.slice(0, Math.max(1, 48 - String(suffix).length - 1))}-${suffix}`;
+    }
+
+    const id = newId("organization");
+    await initializeOrganization(tx, {
+      organizationId: id,
+      ownerUserId,
+      name: normalizedName,
+      slug,
+    });
+    return { id, name: normalizedName, slug, created: true };
   });
 }
 

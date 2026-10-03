@@ -1,5 +1,6 @@
 import { getDb, getSql, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { getScheduleCoherence } from "@/server/commercial/schedule-coherence";
 
 export type OnboardingStep = {
   id: string;
@@ -73,6 +74,7 @@ async function persistProgress(input: {
 }
 
 export async function getOnboardingState(organizationId: string) {
+  const scheduleCoherence = await getScheduleCoherence(organizationId);
   const rows = await getSql()`
     select
       exists(
@@ -117,7 +119,6 @@ export async function getOnboardingState(organizationId: string) {
       id: "timezone",
       label: "Configura la agenda general",
       complete: Boolean(fact.timezone),
-      optional: true,
       href: "/settings/calendar",
     },
     {
@@ -177,6 +178,7 @@ export async function getOnboardingState(organizationId: string) {
     requiredTotal: required.length,
     completed: steps.filter((step) => step.complete).length,
     total: steps.length,
+    scheduleCoherence,
   };
 }
 

@@ -3,6 +3,7 @@ import { requireSession } from "@/lib/auth/session";
 import { getCommercialAccess } from "@/server/commercial/entitlement";
 import { getOnboardingState } from "@/server/commercial/onboarding";
 import { OnboardingActivateButton } from "@/components/onboarding-activate-button";
+import { ScheduleCoherenceAlert } from "@/components/schedule-coherence-alert";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,7 @@ export default async function OnboardingPage() {
             {onboarding.requiredCompleted} de {onboarding.requiredTotal} pasos esenciales completos · Plan {subscription.plan.name} por {new Intl.NumberFormat("es-MX", { style: "currency", currency: subscription.plan.currency, maximumFractionDigits: 0 }).format(subscription.plan.monthlyPriceCents / 100)} al mes.
           </p>
         </div>
+        <ScheduleCoherenceAlert coherence={onboarding.scheduleCoherence} />
         <div className="space-y-1">
           <div className="h-2 overflow-hidden rounded-full bg-secondary">
             <div className="h-full bg-brand" style={{ width: `${Math.round((onboarding.requiredCompleted / onboarding.requiredTotal) * 100)}%` }} />
@@ -111,7 +113,7 @@ export default async function OnboardingPage() {
         </ol>
         {!onboarding.readyToActivate && (
           <p className="text-sm text-text-3">
-            Solo necesitas completar los pasos esenciales. Horario y Google Calendar pueden configurarse después.
+            La zona horaria de la agenda es obligatoria. Google Calendar puede configurarse después.
           </p>
         )}
 

@@ -136,6 +136,7 @@ export function AgentWizard({
   });
   const [testMessage, setTestMessage] = useState("");
   const [testResponse, setTestResponse] = useState<string | null>(null);
+  const [timezoneConfigured, setTimezoneConfigured] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -155,6 +156,7 @@ export function AgentWizard({
         setServices(serviceData.services ?? []);
         setProfessionals(professionalData.professionals ?? []);
         const weeklyHours = calendarData?.settings?.weeklyHours ?? {};
+        setTimezoneConfigured(calendarData?.configured === true);
         setAgendaHasHours(
           Object.values(weeklyHours).some(
             (intervals) => Array.isArray(intervals) && intervals.length > 0
@@ -427,10 +429,11 @@ export function AgentWizard({
 
         {step === 8 && (
           <WizardCard title="Activar" description="Revisa el estado. Completar pasos no activa el agente automáticamente.">
-            <div className="grid gap-2 sm:grid-cols-2"><Status label="Perfil" ok={state.personality} /><Status label="Conocimiento manual" ok={state.business || state.policies || entries.length > 0} /><Status label={`Documentos activos: ${state.activeDocuments}`} ok={state.documents} optional /><Status label="Reglas de handoff" ok={state.handoff} /><Status label="Agenda" ok={state.agenda} optional /><Status label="Prueba del agente" ok={state.tested} optional /></div>
+            <div className="grid gap-2 sm:grid-cols-2"><Status label="Perfil" ok={state.personality} /><Status label="Conocimiento manual" ok={state.business || state.policies || entries.length > 0} /><Status label={`Documentos activos: ${state.activeDocuments}`} ok={state.documents} optional /><Status label="Reglas de handoff" ok={state.handoff} /><Status label="Zona horaria" ok={timezoneConfigured} /><Status label="Agenda" ok={state.agenda} optional /><Status label="Prueba del agente" ok={state.tested} optional /></div>
             {!state.criticalReady && <p role="alert" className="text-sm text-danger-text">Falta un nombre válido para el agente.</p>}
             {!aiConfigured && <p role="alert" className="text-sm text-danger-text">La IA no está conectada; no se puede activar.</p>}
-            <Button disabled={busy || profile.enabled || !state.criticalReady || !aiConfigured} onClick={() => void withSave(() => onSaveProfile({ enabled: true }), "Agente activado")}><Check className="h-4 w-4" /> {profile.enabled ? "Agente activado" : "Activar agente"}</Button>
+            {!timezoneConfigured && <p role="alert" className="text-sm text-danger-text">Selecciona la zona horaria del negocio antes de activar.</p>}
+            <Button disabled={busy || profile.enabled || !state.criticalReady || !aiConfigured || !timezoneConfigured} onClick={() => void withSave(() => onSaveProfile({ enabled: true }), "Agente activado")}><Check className="h-4 w-4" /> {profile.enabled ? "Agente activado" : "Activar agente"}</Button>
           </WizardCard>
         )}
 

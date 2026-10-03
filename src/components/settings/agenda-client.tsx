@@ -19,6 +19,14 @@ import {
   type ConnectorId,
 } from "@/lib/agenda-connectors";
 import { ConnectorCredentials } from "@/components/settings/connector-credentials";
+import {
+  isMexicoTimeZone,
+  MEXICO_TIMEZONES,
+} from "@/lib/time/mexico-timezones";
+import {
+  ScheduleCoherenceAlert,
+  type ScheduleCoherenceView,
+} from "@/components/schedule-coherence-alert";
 
 /**
  * 015 — Ajustes → Agenda: cuándo atiende el negocio y cómo se entrega la
@@ -59,6 +67,8 @@ export function AgendaClient() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [scheduleCoherence, setScheduleCoherence] =
+    useState<ScheduleCoherenceView | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -67,8 +77,14 @@ export function AgendaClient() {
         fetch("/api/calendar/availability").catch(() => null),
       ]);
       if (cfg?.ok) {
-        const data = (await cfg.json()) as { settings: Settings };
-        setSettings(data.settings);
+        const data = (await cfg.json()) as {
+          settings: Settings;
+          configured: boolean;
+        };
+        setSettings({
+          ...data.settings,
+          timezone: data.configured ? data.settings.timezone : "",
+        });
       }
       if (avail?.ok) {
         const data = (await avail.json()) as { slots: { label: string }[] };
@@ -129,6 +145,10 @@ export function AgendaClient() {
 
   async function save() {
     if (!settings) return;
+    if (!settings.timezone) {
+      setError("Selecciona la zona horaria del negocio");
+      return;
+    }
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -157,8 +177,12 @@ export function AgendaClient() {
       setError(data?.error?.message ?? "No se pudo guardar");
       return;
     }
-    const data = (await res.json()) as { settings: Settings };
+    const data = (await res.json()) as {
+      settings: Settings;
+      scheduleCoherence: ScheduleCoherenceView;
+    };
     setSettings(data.settings);
+    setScheduleCoherence(data.scheduleCoherence);
     setSaved(true);
     void refreshPreview();
   }
@@ -167,6 +191,9 @@ export function AgendaClient() {
 
   return (
     <div className="max-w-2xl space-y-4">
+      {scheduleCoherence && (
+        <ScheduleCoherenceAlert coherence={scheduleCoherence} />
+      )}
       <div className="rounded-lg border bg-subtle p-4 text-sm">
         <p className="font-medium">Agenda general</p>
         <p className="mt-1 text-text-3">
@@ -302,12 +329,25 @@ export function AgendaClient() {
           </div>
           <div className="col-span-2 space-y-1.5">
             <Label htmlFor="tz">Zona horaria</Label>
-            <Input
+            <select
               id="tz"
               value={settings.timezone}
               onChange={(e) => patch({ timezone: e.target.value })}
-              placeholder="America/Mexico_City"
-            />
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              required
+            >
+              <option value="" disabled>Selecciona una zona horaria</option>
+              {settings.timezone && !isMexicoTimeZone(settings.timezone) && (
+                <option value={settings.timezone}>
+                  Zona guardada ({settings.timezone})
+                </option>
+              )}
+              {MEXICO_TIMEZONES.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label} ({option.value})
+                </option>
+              ))}
+            </select>
           </div>
         </CardContent>
       </Card>

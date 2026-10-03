@@ -14,7 +14,7 @@ const professionalSchema = z.object({
   phone: z.string().max(40).nullish(),
   email: z.string().email().max(254).nullish(),
   userId: z.string().min(1).nullish(),
-  timezone: z.string().trim().min(1).default("America/Mexico_City"),
+  timezone: z.string().trim().min(1),
   color: z.string().max(40).nullish(),
   serviceIds: z.array(z.string().min(1)).max(100).default([]),
 });
@@ -33,10 +33,7 @@ export const POST = withOrgPermissions(
     try {
       const professional = await createProfessional(
         session.organizationId,
-        {
-          ...body.data,
-          timezone: body.data.timezone ?? "America/Mexico_City",
-        }
+        body.data
       );
       return Response.json({ professional }, { status: 201 });
     } catch (error) {

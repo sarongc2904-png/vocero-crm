@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 export default function RegisterPage() {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [businessName, setBusinessName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -22,17 +23,31 @@ export default function RegisterPage() {
     setError(null);
     setLoading(true);
     const { error: err } = await signUp.email({ name, email, password });
-    setLoading(false);
     if (err) {
+      setLoading(false);
       if (err.status === 403) {
-        setError(
-          "El registro está cerrado: esta instancia ya tiene su organización. Pide acceso al propietario."
-        );
+        setError(err.message ?? "El registro público no está habilitado.");
       } else if (err.status === 429) {
         setError("Demasiados intentos. Espera unos minutos.");
       } else {
         setError(err.message ?? "No se pudo crear la cuenta.");
       }
+      return;
+    }
+    const bootstrap = await fetch("/api/organizations/self-serve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ businessName }),
+    }).catch(() => null);
+    if (!bootstrap?.ok) {
+      const body = (await bootstrap?.json().catch(() => null)) as {
+        error?: { message?: string };
+      } | null;
+      setError(
+        body?.error?.message ??
+          "La cuenta se creó, pero falta configurar el negocio. Inicia sesión para reintentarlo."
+      );
+      setLoading(false);
       return;
     }
     router.push("/");
@@ -44,12 +59,22 @@ export default function RegisterPage() {
       <CardHeader>
         <CardTitle>Crear cuenta</CardTitle>
         <CardDescription>
-          Esta pantalla se usa solo para la configuración inicial. Los clientes
-          nuevos reciben su acceso desde el panel de administración.
+          Crea la cuenta propietaria y el espacio independiente de tu negocio.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="business-name">Nombre del negocio</Label>
+            <Input
+              id="business-name"
+              required
+              minLength={2}
+              maxLength={120}
+              value={businessName}
+              onChange={(e) => setBusinessName(e.target.value)}
+            />
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="name">Tu nombre</Label>
             <Input

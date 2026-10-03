@@ -6,10 +6,7 @@ import { organization } from "better-auth/plugins";
 import { getDb, schema } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { AUTH_RATE_LIMIT, checkRateLimit } from "@/lib/rate-limit";
-import {
-  onUserCreated,
-  resolveActiveOrganizationId,
-} from "@/server/auth/on-signup";
+import { resolveActiveOrganizationId } from "@/server/auth/on-signup";
 import { isPublicSignupAllowed } from "@/server/auth/registration";
 import { sendResetPasswordForUser } from "@/server/auth/send-reset-password";
 
@@ -128,21 +125,13 @@ function createAuth() {
         if (ctx.path === "/sign-up/email") {
           if (!isInternalSignup() && !(await isPublicSignupAllowed())) {
             throw new APIError("FORBIDDEN", {
-              message:
-                "El registro está cerrado: esta instancia ya tiene su organización",
+              message: "El registro público no está habilitado en este momento",
             });
           }
         }
       }),
     },
     databaseHooks: {
-      user: {
-        create: {
-          after: async (user) => {
-            await onUserCreated(user.id, user.name);
-          },
-        },
-      },
       session: {
         create: {
           before: async (session) => {

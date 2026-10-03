@@ -55,14 +55,18 @@ vi.mock("@/lib/db", () => ({
       execute: () => Promise.resolve(),
       select: () => ({
         from: (table: { table: Table }) => ({
-          where: (condition: { column: string; value: unknown }) => ({
-            limit: (limit: number) =>
+          where: (condition: { column: string; value: unknown }) => {
+            const limit = (amount: number) =>
               Promise.resolve(
                 fake.stored[table.table]
                   .filter((row) => row[condition.column] === condition.value)
-                  .slice(0, limit)
-              ),
-          }),
+                  .slice(0, amount)
+              );
+            return {
+              limit,
+              orderBy: () => ({ limit }),
+            };
+          },
         }),
       }),
       insert: (table: { table: Table }) => ({
@@ -76,7 +80,10 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { createOrganizationForOwner } from "@/server/auth/organizations";
+import {
+  createOrganizationForOwner,
+  createSelfServeOrganizationForOwner,
+} from "@/server/auth/organizations";
 
 beforeEach(() => {
   for (const rows of Object.values(fake.stored)) rows.length = 0;
@@ -115,5 +122,52 @@ describe("bootstrap multi-organización", () => {
     const created = await createOrganizationForOwner("user_1", "  東京  ");
     expect(created.slug).toBe("organizacion");
     expect(created.slug).toMatch(/^[a-z0-9-]+$/);
+  });
+
+  it("dos altas self-serve consecutivas con el mismo nombre reciben slugs únicos", async () => {
+    const first = await createSelfServeOrganizationForOwner("user_1", "Mi Negocio", {
+      publicSignupOpen: true,
+    });
+    const second = await createSelfServeOrganizationForOwner("user_2", "Mi Negocio", {
+      publicSignupOpen: true,
+    });
+
+    expect(first.slug).toBe("mi-negocio");
+    expect(second.slug).toBe("mi-negocio-2");
+    expect(fake.stored.organization).toHaveLength(2);
+  });
+
+  it("doble clic o reintento devuelve la misma organización del usuario", async () => {
+    const first = await createSelfServeOrganizationForOwner("user_1", "Negocio Uno", {
+      publicSignupOpen: true,
+    });
+    const retry = await createSelfServeOrganizationForOwner("user_1", "Otro nombre", {
+      publicSignupOpen: true,
+    });
+
+    expect(retry.id).toBe(first.id);
+    expect(retry.created).toBe(false);
+    expect(fake.stored.organization).toHaveLength(1);
+    expect(fake.stored.member).toHaveLength(1);
+  });
+
+  it("el bootstrap no crea calendar_settings", async () => {
+    await createSelfServeOrganizationForOwner("user_1", "Negocio Uno", {
+      publicSignupOpen: true,
+    });
+    expect(JSON.stringify(fake.stored)).not.toContain("calendarSettings");
+  });
+
+  it("rechaza nombres de negocio vacíos o mayores a 120 caracteres", async () => {
+    await expect(
+      createSelfServeOrganizationForOwner("user_1", " ", {
+        publicSignupOpen: true,
+      })
+    ).rejects.toThrow(/entre 2 y 120/);
+    await expect(
+      createSelfServeOrganizationForOwner("user_1", "x".repeat(121), {
+        publicSignupOpen: true,
+      })
+    ).rejects.toThrow(/entre 2 y 120/);
   });
 });

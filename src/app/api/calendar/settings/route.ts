@@ -4,9 +4,10 @@ import { CONNECTOR_ORDER } from "@/lib/agenda-connectors";
 import { agendaDisabledResponse, agendaEnabled } from "@/server/agenda/flag";
 import {
   CalendarSettingsError,
-  getSettings,
+  getSettingsState,
   upsertSettings,
 } from "@/server/agenda/settings";
+import { getScheduleCoherence } from "@/server/commercial/schedule-coherence";
 
 export const dynamic = "force-dynamic";
 
@@ -21,8 +22,8 @@ export const dynamic = "force-dynamic";
  */
 export const GET = withOrgRoles(["owner", "admin"], async (session) => {
   if (!agendaEnabled()) return agendaDisabledResponse();
-  const settings = await getSettings(session.organizationId);
-  return Response.json({ settings });
+  const state = await getSettingsState(session.organizationId);
+  return Response.json(state);
 });
 
 const intervalSchema = z.object({
@@ -68,7 +69,11 @@ export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request
       meetingLink:
         body.data.meetingLink === undefined ? undefined : body.data.meetingLink,
     });
-    return Response.json({ settings });
+    return Response.json({
+      settings,
+      configured: true,
+      scheduleCoherence: await getScheduleCoherence(session.organizationId),
+    });
   } catch (err) {
     if (err instanceof CalendarSettingsError) {
       return apiError(422, "invalid_body", err.message);

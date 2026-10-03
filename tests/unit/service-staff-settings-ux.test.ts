@@ -17,11 +17,12 @@ describe("configuración guiada de servicios y personal", () => {
     expect(settings).toContain("Aún no has agregado personal");
   });
 
-  it("detecta la zona horaria sin pedirla en el formulario principal", () => {
+  it("muestra la zona heredada de la agenda sin detectar el navegador", () => {
     const settings = source("src/components/settings/beauty-settings-client.tsx");
 
-    expect(settings).toContain("Intl.DateTimeFormat().resolvedOptions().timeZone");
-    expect(settings).toContain("La zona horaria se detecta automáticamente");
-    expect(settings).not.toContain('<Field label="Zona horaria">');
+    expect(settings).not.toContain("Intl.DateTimeFormat().resolvedOptions().timeZone");
+    expect(settings).toContain('fetch("/api/calendar/settings")');
+    expect(settings).toContain("Parte de la zona horaria de la agenda");
+    expect(settings).toContain('<Field label="Zona horaria">');
   });
 });

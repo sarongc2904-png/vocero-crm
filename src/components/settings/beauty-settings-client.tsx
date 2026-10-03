@@ -10,6 +10,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  isMexicoTimeZone,
+  MEXICO_TIMEZONES,
+} from "@/lib/time/mexico-timezones";
 import { Label } from "@/components/ui/label";
 
 type Service = {
@@ -64,7 +68,7 @@ export function BeautySettingsClient() {
   const [duration, setDuration] = useState(60);
   const [price, setPrice] = useState("");
   const [professionalName, setProfessionalName] = useState("");
-  const [timezone, setTimezone] = useState("America/Mexico_City");
+  const [timezone, setTimezone] = useState("");
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [selectedProfessional, setSelectedProfessional] = useState("");
   const [days, setDays] = useState<Day[]>(DEFAULT_DAYS);
@@ -95,15 +99,14 @@ export function BeautySettingsClient() {
   );
 
   useEffect(() => {
-    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (detected) setTimezone(detected);
     void refresh();
   }, []);
 
   async function refresh() {
-    const [serviceResponse, professionalResponse] = await Promise.all([
+    const [serviceResponse, professionalResponse, calendarResponse] = await Promise.all([
       fetch("/api/services"),
       fetch("/api/professionals"),
+      fetch("/api/calendar/settings"),
     ]);
     if (serviceResponse.ok) {
       const data = (await serviceResponse.json()) as { services: Service[] };
@@ -114,6 +117,15 @@ export function BeautySettingsClient() {
         professionals: Professional[];
       };
       setProfessionals(data.professionals);
+    }
+    if (calendarResponse.ok) {
+      const data = (await calendarResponse.json()) as {
+        settings: { timezone: string };
+        configured: boolean;
+      };
+      if (data.configured) {
+        setTimezone((current) => current || data.settings.timezone);
+      }
     }
   }
 
@@ -487,9 +499,25 @@ export function BeautySettingsClient() {
                 onChange={(event) => setProfessionalName(event.target.value)}
               />
             </Field>
+            <Field label="Zona horaria">
+              <select
+                value={timezone}
+                onChange={(event) => setTimezone(event.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                required
+              >
+                <option value="" disabled>Configura primero la zona de la agenda</option>
+                {MEXICO_TIMEZONES.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label} ({option.value})
+                  </option>
+                ))}
+              </select>
+            </Field>
           </div>
           <p className="text-xs text-text-3">
-            La zona horaria se detecta automáticamente en este dispositivo.
+            Parte de la zona horaria de la agenda del negocio. Puedes elegir otra
+            zona mexicana para esta persona.
           </p>
           {activeServices.length === 0 && (
             <p className="rounded-md border bg-subtle p-3 text-sm text-text-3">
@@ -514,7 +542,7 @@ export function BeautySettingsClient() {
               </label>
             ))}
           </div>
-          <Button disabled={!professionalName.trim() || selectedServices.length === 0} onClick={createProfessional}>
+          <Button disabled={!professionalName.trim() || selectedServices.length === 0 || !timezone} onClick={createProfessional}>
             Agregar profesional
           </Button>
           {professionals.length === 0 && (
@@ -538,6 +566,29 @@ export function BeautySettingsClient() {
                             })
                           }
                         />
+                      </Field>
+                      <Field label="Zona horaria">
+                        <select
+                          value={professionalEdit.timezone}
+                          onChange={(event) =>
+                            setProfessionalEdit({
+                              ...professionalEdit,
+                              timezone: event.target.value,
+                            })
+                          }
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          {!isMexicoTimeZone(professionalEdit.timezone) && (
+                            <option value={professionalEdit.timezone}>
+                              Zona guardada ({professionalEdit.timezone})
+                            </option>
+                          )}
+                          {MEXICO_TIMEZONES.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label} ({option.value})
+                            </option>
+                          ))}
+                        </select>
                       </Field>
                     </div>
                     <div className="flex flex-wrap gap-3">

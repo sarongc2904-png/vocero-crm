@@ -4,6 +4,7 @@ import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { isAiConfigured } from "@/lib/env";
 import { auditPrivilegedAction } from "@/server/auth/audit";
+import { isCalendarSettingsConfigured } from "@/server/agenda/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,16 @@ const putSchema = z.object({
 export const PUT = withOrgRoles(["owner", "admin"], async (session, req: Request) => {
   const body = await parseBody(req, putSchema);
   if (!body.ok) return body.response;
+  if (
+    body.data.enabled === true &&
+    !(await isCalendarSettingsConfigured(session.organizationId))
+  ) {
+    return apiError(
+      409,
+      "timezone_required",
+      "Selecciona la zona horaria del negocio antes de activar el agente"
+    );
+  }
 
   const db = getDb();
   const updated = await db

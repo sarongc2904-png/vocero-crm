@@ -13,6 +13,7 @@ import {
   type Interval,
   type WeekdayKey,
 } from "@/lib/time/slots";
+import { isMexicoTimeZone } from "@/lib/time/mexico-timezones";
 
 /**
  * 015 — La configuración de la agenda del negocio (una por organización):
@@ -74,6 +75,12 @@ export const LIMITS = {
 export async function getSettings(
   organizationId: string
 ): Promise<CalendarSettings> {
+  return (await getSettingsState(organizationId)).settings;
+}
+
+export async function getSettingsState(
+  organizationId: string
+): Promise<{ settings: CalendarSettings; configured: boolean }> {
   const db = getDb();
   const rows = await db
     .select()
@@ -83,21 +90,30 @@ export async function getSettings(
 
   const row = rows[0];
   // Sin fila: la instancia recién encendida ya es usable.
-  if (!row) return DEFAULT_CALENDAR_SETTINGS;
+  if (!row) return { settings: DEFAULT_CALENDAR_SETTINGS, configured: false };
 
   return {
-    weeklyHours: normalizeWeeklyHours(row.weeklyHours as WeeklyHours),
-    slotMinutes: row.slotMinutes,
-    bufferMinutes: row.bufferMinutes,
-    minNoticeHours: row.minNoticeHours,
-    maxDaysAhead: row.maxDaysAhead,
-    timezone: row.timezone,
-    // Un conector que ya no existe en el código (p. ej. venías de un fork) no
-    // puede dejar la agenda inservible: se degrada al soberano.
-    connector: isConnectorId(row.connector) ? row.connector : DEFAULT_CONNECTOR,
-    meetingLink: row.meetingLink,
-    videoCall: row.videoCall,
+    configured: true,
+    settings: {
+      weeklyHours: normalizeWeeklyHours(row.weeklyHours as WeeklyHours),
+      slotMinutes: row.slotMinutes,
+      bufferMinutes: row.bufferMinutes,
+      minNoticeHours: row.minNoticeHours,
+      maxDaysAhead: row.maxDaysAhead,
+      timezone: row.timezone,
+      // Un conector que ya no existe en el código (p. ej. venías de un fork) no
+      // puede dejar la agenda inservible: se degrada al soberano.
+      connector: isConnectorId(row.connector) ? row.connector : DEFAULT_CONNECTOR,
+      meetingLink: row.meetingLink,
+      videoCall: row.videoCall,
+    },
   };
+}
+
+export async function isCalendarSettingsConfigured(
+  organizationId: string
+): Promise<boolean> {
+  return (await getSettingsState(organizationId)).configured;
 }
 
 export class CalendarSettingsError extends Error {
@@ -124,12 +140,19 @@ export async function upsertSettings(
   organizationId: string,
   input: CalendarSettingsInput
 ): Promise<CalendarSettings> {
-  const current = await getSettings(organizationId);
+  const state = await getSettingsState(organizationId);
+  const current = state.settings;
 
   const timezone = input.timezone ?? current.timezone;
   // Una zona desconocida rompería el motor entero: se rechaza al guardar.
   if (!isValidTimeZone(timezone)) {
     throw new CalendarSettingsError(`Zona horaria desconocida: ${timezone}`);
+  }
+  if (
+    !isMexicoTimeZone(timezone) &&
+    (!state.configured || timezone !== current.timezone)
+  ) {
+    throw new CalendarSettingsError("Selecciona una zona horaria de México");
   }
 
   const connector = input.connector ?? current.connector;

@@ -9,6 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  ScheduleCoherenceAlert,
+  type ScheduleCoherenceView,
+} from "@/components/schedule-coherence-alert";
 
 type Profile = {
   enabled: boolean;
@@ -61,14 +65,16 @@ export function AgentClient() {
   const [kbSize, setKbSize] = useState<{ chars: number; warnAt: number; warning: boolean } | null>(null);
   const [saved, setSaved] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [timezoneConfigured, setTimezoneConfigured] = useState(false);
 
   const refetch = useCallback(async () => {
-    const [p, kb, size, docs] = await Promise.all([
+    const [p, kb, size, docs, calendar] = await Promise.all([
       fetch("/api/agent/profile").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/kb").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/kb/size").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/kb/documents").then((r) => (r.ok ? r.json() : null)),
-    ]).catch(() => [null, null, null, null]);
+      fetch("/api/calendar/settings").then((r) => (r.ok ? r.json() : null)),
+    ]).catch(() => [null, null, null, null, null]);
     if (p) {
       setProfile(p.profile);
       setAiConfigured(p.aiConfigured);
@@ -76,6 +82,7 @@ export function AgentClient() {
     if (kb) setEntries(kb.entries);
     if (size) setKbSize(size);
     if (docs) setDocuments(docs.documents);
+    setTimezoneConfigured(calendar?.configured === true);
   }, []);
 
   useEffect(() => {
@@ -145,7 +152,7 @@ export function AgentClient() {
             role="switch"
             aria-checked={profile.enabled}
             aria-label="Agente encendido"
-            disabled={!aiConfigured}
+            disabled={!aiConfigured || !timezoneConfigured}
             onClick={() => void saveProfile({ enabled: !profile.enabled }).catch(() => null)}
             className={`relative h-6 w-11 rounded-full transition-colors disabled:opacity-40 ${
               profile.enabled ? "bg-brand" : "bg-border-strong"
@@ -175,6 +182,12 @@ export function AgentClient() {
             Puedes dejar listo cómo debe responder y qué debe saber. Cuando la conexión de IA
             esté disponible, podrás encender el agente desde esta misma pantalla.
           </p>
+        </div>
+      )}
+      {aiConfigured && !timezoneConfigured && (
+        <div className="mx-4 mt-4 rounded-lg border border-warning-soft bg-warning-tint p-4 text-sm sm:mx-6 sm:mt-6">
+          Selecciona la zona horaria del negocio en Ajustes → Agenda antes de
+          encender el agente.
         </div>
       )}
 
@@ -279,6 +292,8 @@ function KbSection({
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [documentBusy, setDocumentBusy] = useState<string | null>(null);
   const [documentError, setDocumentError] = useState<string | null>(null);
+  const [scheduleCoherence, setScheduleCoherence] =
+    useState<ScheduleCoherenceView | null>(null);
   const [reviewing, setReviewing] = useState<{
     document: KnowledgeDocument;
     chunks: KnowledgeDocumentChunk[];
@@ -380,6 +395,7 @@ function KbSection({
             }
           : current
       );
+      if (body.scheduleCoherence) setScheduleCoherence(body.scheduleCoherence);
       onChanged();
     } catch {
       setDocumentError("No se pudo aprobar el documento");
@@ -404,6 +420,7 @@ function KbSection({
         return;
       }
       if (reviewing?.document.id === document.id) setReviewing(null);
+      if (body.scheduleCoherence) setScheduleCoherence(body.scheduleCoherence);
       onChanged();
     } catch {
       setDocumentError("No se pudo eliminar el documento");
@@ -437,6 +454,9 @@ function KbSection({
         )}
       </CardHeader>
       <CardContent className="space-y-4">
+        {scheduleCoherence && (
+          <ScheduleCoherenceAlert coherence={scheduleCoherence} />
+        )}
         <div className="space-y-2 rounded-md border p-3">
           <p className="text-sm font-medium">Pregunta frecuente</p>
           <Input
