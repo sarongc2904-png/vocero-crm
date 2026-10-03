@@ -226,7 +226,7 @@ function deterministicQualityFindings(input: {
   );
 
   const findings: VerdictType["hallazgos"] = [];
-  const seenAgentMessages = new Map<string, { index: number; text: string }>();
+  const seenAgentMessages = new Map<string, number>();
 
   let lastCustomerMessage: string | null = null;
   let agentMessageIndex = 0;
@@ -264,11 +264,11 @@ function deterministicQualityFindings(input: {
     }
 
     const normalizedAgentMessage = normalizeForSafetyCheck(item.text);
-    const previous = seenAgentMessages.get(normalizedAgentMessage);
+    const previousIndex = seenAgentMessages.get(normalizedAgentMessage);
 
     if (
       normalizedAgentMessage.length >= 24 &&
-      previous !== undefined &&
+      previousIndex !== undefined &&
       !customerRequestedRepeat(lastCustomerMessage) &&
       !existingAgentRefs.has(currentAgentIndex)
     ) {
@@ -279,7 +279,7 @@ function deterministicQualityFindings(input: {
         evidenceRefs: [
           {
             source: "agent_message",
-            index: previous.index,
+            index: previousIndex,
           },
           {
             source: "agent_message",
@@ -291,16 +291,12 @@ function deterministicQualityFindings(input: {
       });
     }
 
-    if (!previous) {
-      seenAgentMessages.set(normalizedAgentMessage, {
-        index: currentAgentIndex,
-        text: item.text,
-      });
+    if (previousIndex === undefined) {
+      seenAgentMessages.set(normalizedAgentMessage, currentAgentIndex);
     }
   }
 
   return findings;
-}
 }
 
 /**
