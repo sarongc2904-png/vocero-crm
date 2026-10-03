@@ -69,6 +69,25 @@ vi.mock("@/lib/db/tenant", () => ({
   ): Predicate => ({ kind: "scoped", organizationId, conditions }),
 }));
 
+vi.mock("@/server/ai/observability", () => ({
+  createAgentRun: async (input: {
+    organizationId: string;
+    conversationId: string;
+  }) => ({
+    runId: "test-agent-run",
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+  }),
+  finishAgentRun: async () => {},
+  hasActiveAgentRun: () => true,
+  recordAgentAction: async () => {},
+  recordAgentEvidence: async () => {},
+  withAgentRun: async <T>(
+    _context: unknown,
+    fn: () => Promise<T>
+  ): Promise<T> => fn(),
+}));
+
 vi.mock("@/lib/db", () => ({
   schema: {
     conversation: conversationColumns,
@@ -100,7 +119,9 @@ vi.mock("@/lib/db", () => ({
           const rows = conversationVisibleTo(predicate);
           return {
             limit: async () => rows,
-            orderBy: async () => rows,
+            orderBy: () => ({
+              limit: async () => rows,
+            }),
           };
         },
       }),

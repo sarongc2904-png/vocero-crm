@@ -21,6 +21,10 @@ const prefixes = {
   testRun: "run",
   testCase: "case",
   testTrace: "trace",
+  testEvidence: "evs",
+  agentRun: "arun",
+  agentActionEvent: "aev",
+  agentEvidence: "aed",
   backgroundJob: "job",
   mediaAsset: "ma",
   // 015 — motor de agenda

@@ -32,6 +32,7 @@ import {
   offerNextAvailable,
   offerRange,
   offerSlots,
+  type AgendaTurn,
 } from "@/server/agenda/agent";
 import {
   BookingError,
@@ -77,6 +78,49 @@ import {
 import { hasSchedulingSignal } from "@/server/agenda/schedule-request";
 import { hasCommercialAccess } from "@/server/commercial/entitlement";
 import { enforceAgentCapabilities } from "@/server/ai/capability-guard";
+import {
+  createAgentRun,
+  finishAgentRun,
+  hasActiveAgentRun,
+  recordAgentAction,
+  recordAgentEvidence,
+  withAgentRun,
+} from "@/server/ai/observability";
+
+async function recordOfferedSlots(
+  organizationId: string,
+  conversationId: string,
+  turn: AgendaTurn
+): Promise<void> {
+  if (!hasActiveAgentRun()) return;
+  const slots = await getOffers(organizationId, conversationId);
+  await recordAgentEvidence([
+    {
+      sourceType: "agenda",
+      sourceId: conversationId,
+      snapshot: {
+        response: turn.text,
+        offeredSlots: slots.map((slot) => ({
+          startUtc: slot.startUtc,
+          label: slot.label,
+          serviceId: slot.serviceId,
+          professionalId: slot.professionalId,
+        })),
+      },
+    },
+  ]);
+  await recordAgentAction({
+    action: "offer_slots",
+    success: turn.ok,
+    status: turn.ok ? "completed" : "rejected",
+    entityType: "conversation",
+    entityId: conversationId,
+    payload: {
+      slotCount: slots.length,
+      startUtc: slots.map((slot) => slot.startUtc),
+    },
+  });
+}
 
 /**
  * Compatibilidad para callers existentes: el scheduling ahora se persiste en
@@ -92,6 +136,64 @@ export async function scheduleAgentTurn(
 }
 
 export async function runAgentTurn(
+  conversationId: string,
+  expectedOrganizationId?: string
+): Promise<void> {
+  if (!isAiConfigured()) return;
+
+  // Si el turno ya corre dentro de un AgentRun, reutiliza ese contexto.
+  // Evita crear runs anidados y permite ejecutar el core de forma aislada.
+  if (hasActiveAgentRun()) {
+    return runAgentTurnCore(conversationId, expectedOrganizationId);
+  }
+
+  const db = getDb();
+  const conversations = await db
+    .select({ organizationId: schema.conversation.organizationId })
+    .from(schema.conversation)
+    .where(
+      expectedOrganizationId
+        ? scoped(
+            schema.conversation.organizationId,
+            expectedOrganizationId,
+            eq(schema.conversation.id, conversationId)
+          )
+        : eq(schema.conversation.id, conversationId)
+    )
+    .limit(1);
+  const organizationId = conversations[0]?.organizationId;
+  if (!organizationId) return;
+  const inbound = await db
+    .select({ id: schema.message.id })
+    .from(schema.message)
+    .where(
+      scoped(
+        schema.message.organizationId,
+        organizationId,
+        eq(schema.message.conversationId, conversationId),
+        eq(schema.message.direction, "in")
+      )
+    )
+    .orderBy(desc(schema.message.createdAt), desc(schema.message.id))
+    .limit(1);
+  const run = await createAgentRun({
+    organizationId,
+    conversationId,
+    inboundMessageId: inbound[0]?.id ?? null,
+    provider: "openrouter",
+  });
+  try {
+    await withAgentRun(run, () =>
+      runAgentTurnCore(conversationId, expectedOrganizationId)
+    );
+    await finishAgentRun(run, { status: "completed" });
+  } catch (error) {
+    await finishAgentRun(run, { status: "failed", error });
+    throw error;
+  }
+}
+
+async function runAgentTurnCore(
   conversationId: string,
   expectedOrganizationId?: string
 ): Promise<void> {
@@ -234,6 +336,12 @@ export async function runAgentTurn(
           serviceId: pending.serviceId ?? undefined,
           professionalId: pending.professionalId ?? undefined,
         });
+        await recordAgentAction({
+          action: "book_slot",
+          success: turn.ok,
+          status: turn.ok ? "completed" : "rejected",
+          payload: { startUtc: pending.startUtc },
+        });
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
           publish(organizationId, {
@@ -251,6 +359,12 @@ export async function runAgentTurn(
             conversationId,
             startUtc: pending.startUtc,
           });
+          await recordAgentAction({
+            action: "reschedule_slot",
+            entityType: "booking",
+            entityId: pending.bookingId,
+            payload: { startUtc: pending.startUtc },
+          });
           await deliverReply(
             conversation,
             moved.meetingLink
@@ -264,6 +378,7 @@ export async function runAgentTurn(
               conversationId,
               intro: "Ese horario ya no sirve para mover tu cita. Elige otro:",
             });
+            await recordOfferedSlots(organizationId, conversationId, turn);
             await deliverReply(conversation, turn.text);
           } else if (err instanceof BookingError && err.code === "not_found") {
             await deliverReply(
@@ -293,6 +408,7 @@ export async function runAgentTurn(
       conversationId,
       action: "cancel",
     });
+    await recordAgentAction({ action: "set_pending_cancel" });
     await deliverReply(
       conversation,
       "Antes de cancelar necesito tu confirmación: ¿confirmas que quieres cancelar tu cita? Responde «sí» y la cancelo."
@@ -331,6 +447,70 @@ export async function runAgentTurn(
       })
     : [];
   const mapaDeHuecos = mapaDeHuecosParaModelo(ofertas);
+
+  await recordAgentEvidence([
+    {
+      sourceType: "conversation_context",
+      sourceId: conversationId,
+      snapshot: {
+        messages: history.map((message) => ({
+          id: message.id,
+          direction: message.direction,
+          type: message.type,
+          text: message.text,
+        })),
+      },
+    },
+    {
+      sourceType: "agent_profile",
+      sourceId: profile.id,
+      snapshot: {
+        name: profile.name,
+        tone: profile.tone,
+        instructions: profile.instructions,
+        escalationRules: profile.escalationRules,
+      },
+    },
+    ...kb.map((entry) => ({
+      sourceType: "kb_entry" as const,
+      sourceId: entry.id,
+      snapshot: {
+        kind: entry.kind,
+        question: entry.question,
+        answer: entry.answer,
+        content: entry.content,
+      },
+    })),
+    ...documentChunks.map((chunk) => ({
+      sourceType: "document_chunk" as const,
+      sourceId: chunk.id,
+      score: chunk.score,
+      snapshot: {
+        documentId: chunk.documentId,
+        content: chunk.content,
+        position: chunk.position,
+        page: chunk.page,
+      },
+    })),
+    ...(agendaContext
+      ? [
+          {
+            sourceType: "agenda" as const,
+            sourceId: conversationId,
+            snapshot: {
+              timezone: agendaContext.settings.timezone,
+              minNoticeHours: agendaContext.settings.minNoticeHours,
+              offeredSlots: ofertas.map((slot) => ({
+                startUtc: slot.startUtc,
+                label: slot.label,
+                serviceId: slot.serviceId,
+                professionalId: slot.professionalId,
+              })),
+            },
+          },
+        ]
+      : []),
+  ]);
 
   let todayInfo: { iso: string; label: string } | undefined;
   let scheduleIntent: ScheduleIntent = { kind: "none" };
@@ -456,6 +636,10 @@ export async function runAgentTurn(
             serviceId: chosen.serviceId,
             professionalId: chosen.professionalId,
           });
+          await recordAgentAction({
+            action: "set_pending_book",
+            payload: { startUtc: chosen.startUtc },
+          });
           await deliverReply(
             conversation,
             `Perfecto. Tengo ${selectedOfferConfirmationLabel(
@@ -472,6 +656,7 @@ export async function runAgentTurn(
           intro:
             "Ese horario acaba de dejar de estar disponible. Estas son las opciones actuales:",
         });
+        await recordOfferedSlots(organizationId, conversationId, turn);
         await deliverReply(conversation, turn.text);
         return;
       }
@@ -500,6 +685,7 @@ export async function runAgentTurn(
           intro:
             "No encontré esa hora entre las opciones que te mostré. Estas son las opciones actuales:",
         });
+        await recordOfferedSlots(organizationId, conversationId, turn);
         await deliverReply(conversation, turn.text);
         return;
       }
@@ -604,6 +790,7 @@ export async function runAgentTurn(
           : scheduleScope.type === "general_availability"
             ? await offerGeneralAvailability({ organizationId, conversationId })
             : await offerNextAvailable({ organizationId, conversationId });
+      await recordOfferedSlots(organizationId, conversationId, turn);
       await deliverReply(conversation, turn.text);
       if (turn.ok) {
         publish(organizationId, {
@@ -644,6 +831,7 @@ export async function runAgentTurn(
         expand: expandRequest,
         cursor,
       });
+      await recordOfferedSlots(organizationId, conversationId, turn);
       await deliverReply(conversation, turn.text);
       if (turn.ok) {
         publish(organizationId, {
@@ -678,8 +866,10 @@ export async function runAgentTurn(
     if (!agenda) {
       action = degradeAction(action);
     } else {
+      const attemptedAction = action.action;
       try {
         let turn;
+        let observedAction = attemptedAction;
         if (action.action === "offer_slots") {
           // IA-3: una oferta base reinicia el cursor de expansión.
           await resetOfferCursor(organizationId, conversationId);
@@ -717,6 +907,10 @@ export async function runAgentTurn(
                 serviceId: chosen.serviceId,
                 professionalId: chosen.professionalId,
               });
+              await recordAgentAction({
+                action: "set_pending_book",
+                payload: { startUtc: action.startUtc },
+              });
               await deliverReply(
                 conversation,
                 `Perfecto. Tengo ${chosen.label} disponible. ¿Quieres que agende tu cita?`
@@ -746,6 +940,10 @@ export async function runAgentTurn(
                 action: "reschedule",
                 startUtc: action.startUtc,
               });
+              await recordAgentAction({
+                action: "set_pending_reschedule",
+                payload: { startUtc: action.startUtc },
+              });
               await deliverReply(
                 conversation,
                 `Tengo ${chosen.label}. ¿Confirmas que mueva tu cita a ese horario?`
@@ -767,6 +965,13 @@ export async function runAgentTurn(
             };
           } catch (err) {
             if (err instanceof BookingError && err.code === "slot_not_offered") {
+              await recordAgentAction({
+                action: "reschedule_slot",
+                success: false,
+                status: "rejected",
+                payload: { reason: err.code, startUtc: action.startUtc },
+              });
+              observedAction = "offer_slots";
               turn = await offerSlots({
                 organizationId,
                 conversationId,
@@ -790,6 +995,13 @@ export async function runAgentTurn(
                 text: "No encontré una cita activa para reprogramar. Si quieres, puedo mostrarte horarios disponibles para una nueva cita.",
               };
             } else if (err instanceof BookingError && err.code === "slot_taken") {
+              await recordAgentAction({
+                action: "reschedule_slot",
+                success: false,
+                status: "rejected",
+                payload: { reason: err.code, startUtc: action.startUtc },
+              });
+              observedAction = "offer_slots";
               turn = await offerSlots({
                 organizationId,
                 conversationId,
@@ -801,6 +1013,17 @@ export async function runAgentTurn(
           }
         }
 
+        if (observedAction === "offer_slots") {
+          await recordOfferedSlots(organizationId, conversationId, turn);
+        } else {
+          await recordAgentAction({
+            action: observedAction,
+            success: turn.ok,
+            status: turn.ok ? "completed" : "rejected",
+            payload:
+              "startUtc" in action ? { startUtc: action.startUtc } : {},
+          });
+        }
         await deliverReply(conversation, turn.text);
         if (turn.ok) {
           publish(organizationId, {
@@ -810,6 +1033,12 @@ export async function runAgentTurn(
         }
         return;
       } catch (err) {
+        await recordAgentAction({
+          action: attemptedAction,
+          success: false,
+          status: "failed",
+          payload: { error: String(err) },
+        });
         console.error(`[agente] el motor de agenda falló: ${err}`);
         action = degradeAction(action);
       }
@@ -827,6 +1056,14 @@ export async function runAgentTurn(
         stage.id
       );
       if (moveResult === "lead_missing" || moveResult === "rejected") {
+        await recordAgentAction({
+          action: "move_stage",
+          success: false,
+          status: "rejected",
+          entityType: "pipeline_stage",
+          entityId: stage.id,
+          payload: { reason: moveResult },
+        });
         console.warn(
           `[agente] move_stage no se pudo aplicar (${moveResult}); se conserva la conversación con IA`
         );
@@ -839,6 +1076,11 @@ export async function runAgentTurn(
         return;
       }
       if (moveResult === "moved") {
+        await recordAgentAction({
+          action: "move_stage",
+          entityType: "pipeline_stage",
+          entityId: stage.id,
+        });
         publish(organizationId, {
           type: "conversation.updated",
           data: { conversation: { id: conversationId } },
@@ -864,6 +1106,13 @@ export async function runAgentTurn(
         action.note
       );
       if (!updated) {
+        await recordAgentAction({
+          action: "update_lead",
+          success: false,
+          status: "rejected",
+          entityType: "contact",
+          entityId: conversation.contactId,
+        });
         console.warn(
           "[agente] update_lead no se pudo aplicar; se conserva la conversación con IA"
         );
@@ -875,6 +1124,11 @@ export async function runAgentTurn(
         );
         return;
       }
+      await recordAgentAction({
+        action: "update_lead",
+        entityType: "contact",
+        entityId: conversation.contactId,
+      });
       if (action.reply) {
         await deliverReply(conversation, safeModelReply(action.reply));
       }
@@ -932,18 +1186,39 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
       organizationId: conversation.organizationId,
       conversationId: conversation.id,
     });
+    await recordAgentAction({
+      action: "cancel_booking",
+      entityType: "conversation",
+      entityId: conversation.id,
+    });
     await deliverReply(
       conversation,
       `Listo, cancelé tu cita: ${cancelled.label}.`
     );
   } catch (err) {
     if (err instanceof BookingError && err.code === "not_found") {
+      await recordAgentAction({
+        action: "cancel_booking",
+        success: false,
+        status: "rejected",
+        entityType: "conversation",
+        entityId: conversation.id,
+        payload: { reason: err.code },
+      });
       await deliverReply(
         conversation,
         "No encontré una cita activa para cancelar."
       );
       return;
     }
+    await recordAgentAction({
+      action: "cancel_booking",
+      success: false,
+      status: "failed",
+      entityType: "conversation",
+      entityId: conversation.id,
+      payload: { error: String(err) },
+    });
     console.error(
       `[agente] la cancelación automática falló: ${String(err).slice(0, 500)}`
     );
@@ -964,18 +1239,33 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
 async function deliverReply(
   conversation: Conversation,
   text: string
-): Promise<void> {
+): Promise<string | null> {
+  let messageId: string | null = null;
   if (conversation.isTest) {
-    await persistTestOutbound(conversation, text);
-    return;
+    messageId = await persistTestOutbound(conversation, text);
+    await recordAgentAction({
+      action: "reply",
+      outboundMessageId: messageId,
+      entityType: "message",
+      entityId: messageId,
+    });
+    return messageId;
   }
   try {
-    await sendText({
+    const sent = await sendText({
       conversationId: conversation.id,
       organizationId: conversation.organizationId,
       text,
       aiGenerated: true,
     });
+    messageId = sent.messageId;
+    await recordAgentAction({
+      action: "reply",
+      outboundMessageId: messageId,
+      entityType: "message",
+      entityId: messageId,
+    });
+    return messageId;
   } catch (err) {
     if (err instanceof SendError && err.code === "window_closed") {
       await applyHandoff(
@@ -983,7 +1273,7 @@ async function deliverReply(
         conversation.organizationId,
         "ventana"
       );
-      return;
+      return null;
     }
     throw err;
   }
@@ -992,10 +1282,11 @@ async function deliverReply(
 async function persistTestOutbound(
   conversation: Conversation,
   text: string
-): Promise<void> {
+): Promise<string> {
   const db = getDb();
+  const messageId = newId("message");
   await db.insert(schema.message).values({
-    id: newId("message"),
+    id: messageId,
     organizationId: conversation.organizationId,
     conversationId: conversation.id,
     direction: "out",
@@ -1015,6 +1306,7 @@ async function persistTestOutbound(
         eq(schema.conversation.id, conversation.id)
       )
     );
+  return messageId;
 }
 
 export async function applyHandoff(
@@ -1041,7 +1333,23 @@ export async function applyHandoff(
       )
     )
     .returning();
-  if (!updated[0]) return false;
+  if (!updated[0]) {
+    await recordAgentAction({
+      action: "handoff",
+      success: false,
+      status: "rejected",
+      entityType: "conversation",
+      entityId: conversationId,
+      payload: { reason },
+    });
+    return false;
+  }
+  await recordAgentAction({
+    action: "handoff",
+    entityType: "conversation",
+    entityId: conversationId,
+    payload: { reason },
+  });
   publish(organizationId, {
     type: "conversation.updated",
     data: {

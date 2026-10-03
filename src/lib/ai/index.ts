@@ -14,16 +14,32 @@ export type ChatMessage = {
 };
 
 export type ChatJsonResult<T> =
-  | { ok: true; data: T; raw: string }
+  | { ok: true; data: T; raw: string; model?: string }
   | { ok: false; error: "not_configured" | "provider_error" | "invalid_output"; detail: string };
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
 
+/**
+ * Parámetros de muestreo. Solo se envían al proveedor si el llamador los fija:
+ * el agente conversacional los deja a su criterio, y el JUEZ del Laboratorio
+ * fija `temperature: 0` porque su salida debe ser reproducible.
+ */
+export type ChatSampling = {
+  temperature?: number;
+  seed?: number;
+};
+
 export async function chatJson<T>(
   schema: z.ZodType<T>,
   messages: ChatMessage[],
-  opts?: { model?: string; judge?: boolean; timeoutMs?: number }
+  opts?: {
+    model?: string;
+    judge?: boolean;
+    timeoutMs?: number;
+    temperature?: number;
+    seed?: number;
+  }
 ): Promise<ChatJsonResult<T>> {
   if (!isAiConfigured()) {
     return {
@@ -46,6 +62,11 @@ export async function chatJson<T>(
     };
   }
 
+  const sampling: ChatSampling = {
+    ...(opts?.temperature === undefined ? {} : { temperature: opts.temperature }),
+    ...(opts?.seed === undefined ? {} : { seed: opts.seed }),
+  };
+
   let lastDetail = "";
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const attemptMessages: ChatMessage[] =
@@ -60,7 +81,7 @@ export async function chatJson<T>(
             },
           ];
     try {
-      const raw = await callProvider(model, attemptMessages, opts?.timeoutMs);
+      const raw = await callProvider(model, attemptMessages, opts?.timeoutMs, sampling);
       const extracted = extractJson(raw);
       if (extracted === null) {
         lastDetail = `sin JSON extraíble (raw=${truncate(raw)})`;
@@ -73,7 +94,7 @@ export async function chatJson<T>(
           .join("; ")} (raw=${truncate(raw)})`;
         continue;
       }
-      return { ok: true, data: parsed.data, raw };
+      return { ok: true, data: parsed.data, raw, model };
     } catch (err) {
       lastDetail = err instanceof Error ? err.message : String(err);
       if (attempt < MAX_ATTEMPTS) {
@@ -94,7 +115,8 @@ export async function chatJson<T>(
 async function callProvider(
   model: string,
   messages: ChatMessage[],
-  timeoutMs = 60_000
+  timeoutMs = 60_000,
+  sampling: ChatSampling = {}
 ): Promise<string> {
   const env = getEnv();
   const controller = new AbortController();
@@ -107,7 +129,7 @@ async function callProvider(
         Authorization: `Bearer ${env.OPENROUTER_API_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ model, messages }),
+      body: JSON.stringify({ model, messages, ...sampling }),
       signal: controller.signal,
     });
     if (!res.ok) {
