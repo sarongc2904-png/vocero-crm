@@ -231,6 +231,22 @@ describe("falsos nombres: solo cuenta lo que responde a una petición del nombre
     expect(laterInsistence(ASK_NAME, service)).toMatch(/nombre/);
   });
 
+  it.each(["Pedro Corona", "María Resina", "Ana Ortodoncia Ruiz"])(
+    "'%s' (comparte un apellido con un servicio) SÍ cuenta como nombre",
+    (name) => {
+      expect(directAnswer(ASK_NAME, name)).toBe(PHONE_ASK);
+      expect(laterInsistence(ASK_NAME, name)).not.toMatch(/nombre/);
+    }
+  );
+
+  it.each(["Corona dental", "Corona", "Extracción simple", "Brackets metálicos", "Dental corona"])(
+    "'%s' (solo palabras de un servicio) NO cuenta como nombre",
+    (service) => {
+      expect(directAnswer(ASK_NAME, service)).not.toBe(PHONE_ASK);
+      expect(laterInsistence(ASK_NAME, service)).toMatch(/nombre/);
+    }
+  );
+
   it("control: tras 'necesito su nombre completo', 'Juan Pérez' SÍ es nombre", () => {
     expect(directAnswer("Para continuar necesito su nombre completo.", "Juan Pérez")).toBe(PHONE_ASK);
     expect(laterInsistence("Para continuar necesito su nombre completo.", "Juan Pérez")).not.toMatch(

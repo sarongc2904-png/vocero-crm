@@ -134,16 +134,28 @@ const NON_NAME_WORDS = new Set([
 ]);
 
 /**
+ * ¿La respuesta es (solo) el nombre de un servicio? Todas sus palabras deben
+ * pertenecer a un mismo servicio de la KB: "Corona dental" sí, pero "Pedro
+ * Corona" no, porque "pedro" es ajena al servicio (apellidos comunes).
+ */
+function isOnlyServiceName(words: string[], serviceNames: string[]): boolean {
+  return serviceNames.some((service) => {
+    const serviceWords = new Set(service.split(/\s+/).filter(Boolean));
+    return words.every((word) => serviceWords.has(word));
+  });
+}
+
+/**
  * Respuesta corta que es un nombre: 2 a 4 palabras, solo letras y espacios,
- * sin signos de pregunta ni palabras de petición o cortesía. Una respuesta que
- * coincide con un servicio de la KB ("Corona dental") no es un nombre.
+ * sin signos de pregunta ni palabras de petición o cortesía, y que no sea
+ * únicamente el nombre de un servicio de la KB.
  */
 function looksLikeBareName(text: string, serviceNames: string[]): boolean {
   const trimmed = text.trim();
   if (!/^[\p{L}\s'-]+$/u.test(trimmed)) return false;
   const words = normalizePolicyText(trimmed).split(/\s+/).filter(Boolean);
   if (words.length < 2 || words.length > 4) return false;
-  if (mentionedService(trimmed, serviceNames)) return false;
+  if (isOnlyServiceName(words, serviceNames)) return false;
   return words.every((word) => word.length >= 2 && !NON_NAME_WORDS.has(word));
 }
 
