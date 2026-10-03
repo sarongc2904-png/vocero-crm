@@ -348,7 +348,9 @@ const updates: Record<string, unknown>[] = [];
 
 function thenableChain(rows: unknown[]) {
   const chain: Record<string, unknown> = {};
-  for (const m of ["from", "innerJoin", "where", "orderBy", "limit"]) chain[m] = () => chain;
+  for (const m of ["from", "innerJoin", "leftJoin", "where", "orderBy", "limit"]) {
+    chain[m] = () => chain;
+  }
   (chain as { then: unknown }).then = (resolve: (v: unknown) => void) =>
     Promise.resolve(rows).then(resolve);
   return chain;
@@ -437,6 +439,24 @@ function queueTurn(customerTexts: string[], lastAgentText = "Respuesta previa de
   selectQueue.push([CONVERSATION], [PROFILE], [...history].reverse(), [], [], CHUNKS);
 }
 
+function queueCompletePriceSource(
+  rows: DocumentRetrievalCandidate[],
+  options: { manualKb?: Record<string, unknown>[]; semanticChunks?: DocumentRetrievalCandidate[] } = {}
+) {
+  selectQueue[selectQueue.length - 3] = options.manualKb ?? [];
+  selectQueue[selectQueue.length - 1] = options.semanticChunks ?? [];
+  selectQueue.push(
+    [
+      {
+        documentCount: new Set(rows.map((row) => row.documentId)).size,
+        chunkCount: rows.length,
+        totalCharacters: rows.reduce((total, row) => total + row.content.length, 0),
+      },
+    ],
+    rows
+  );
+}
+
 function lastOutboundText(): string {
   const out = [...inserts]
     .reverse()
@@ -502,6 +522,62 @@ describe("pipeline — pregunta concreta con handoff no autorizado", () => {
     expect(recordedDocumentChunks().length).toBeGreaterThan(0);
     expect(chatJson).not.toHaveBeenCalled();
     expect(lastOutboundText()).toContain("no detalla qué incluye cada servicio");
+  });
+
+  it("precio + qué incluye usa todos los chunks aunque el retrieval semántico sea parcial", async () => {
+    queueTurn(["me dice cuanto sale y q incluye?"]);
+    queueCompletePriceSource(CHUNKS, { semanticChunks: [CHUNKS[0]!] });
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(lastOutboundText()).toContain("- Consulta de valoración: $300 MXN");
+    expect(lastOutboundText()).toContain("- Brackets metálicos: desde $8,000 MXN");
+  });
+
+  it("sin documentos conserva el comportamiento determinista de las kb_entry manuales", async () => {
+    queueTurn(["me dice cuanto sale y q incluye?"]);
+    queueCompletePriceSource([], {
+      manualKb: [
+        {
+          id: "kb_manual",
+          organizationId: "org_1",
+          kind: "block",
+          content: "- Consulta manual: $450 MXN",
+        },
+      ],
+    });
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(lastOutboundText()).toContain("- Consulta manual: $450 MXN");
+  });
+
+  it("respalda al modelo y diagnostica motivo + documentId sin contenido ni rutas", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    chatJson.mockResolvedValueOnce({
+      ok: true,
+      data: { action: "reply", text: "Puedo compartirle lo confirmado del servicio." },
+    });
+    queueTurn(["me dice cuanto sale y q incluye?"]);
+    queueCompletePriceSource([
+      { ...CHUNKS[0]!, approved: false },
+      ...CHUNKS.slice(1),
+    ]);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).toHaveBeenCalledTimes(1);
+    expect(lastOutboundText()).toBe("Puedo compartirle lo confirmado del servicio.");
+    expect(warn).toHaveBeenCalledWith(
+      "[agente] price_source_fallback reason=chunk_not_approved documentId=doc_sonrisa"
+    );
+    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/CLÍNICA|\/data|storage/i);
+    warn.mockRestore();
   });
 
   it.each([

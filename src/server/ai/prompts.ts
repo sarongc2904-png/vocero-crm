@@ -1,6 +1,10 @@
 import type { schema } from "@/lib/db";
 import type { ChatMessage } from "@/lib/ai";
 import type { RetrievedDocumentChunk } from "@/server/kb/documents/retrieval";
+import {
+  extractPriceLinesFromText,
+  type CompletePriceSourceResult,
+} from "@/server/kb/documents/price-source";
 import { prefersInformalRegister, sameNormalizedMessage } from "@/server/ai/handoff";
 
 type AgentProfile = typeof schema.agentProfile.$inferSelect;
@@ -36,7 +40,7 @@ function appointmentRequirementsPresent(knowledgeText: string): boolean {
  * cada línea de lista con precio, con el mismo criterio que knowledgePriceLines.
  */
 function knowledgeServiceNames(knowledgeText: string): string[] {
-  return knowledgePriceLines(knowledgeText)
+  return extractPriceLinesFromText(knowledgeText)
     .lines.map((line) => line.slice(1, line.indexOf(":")).trim())
     .filter(Boolean)
     .map(normalizePolicyText);
@@ -57,41 +61,6 @@ function mentionedService(conversationText: string, serviceNames: string[]): boo
   });
 }
 
-/**
- * Líneas de lista con precio, tal como están escritas: "- Servicio: … $monto"
- * (el monto puede ir después de texto intermedio, p. ej. "valoración inicial").
- *
- * Invariante: `complete` es false si alguna línea de lista contiene un monto
- * con "$" que no encaja en ese formato. En ese caso no se debe presentar una
- * lista como "los precios de referencia": quedaría parcial.
- */
-function knowledgePriceLines(knowledgeText: string): {
-  lines: string[];
-  complete: boolean;
-} {
-  const seen = new Set<string>();
-  const lines: string[] = [];
-  let complete = true;
-  for (const raw of knowledgeText.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!/^-\s*/.test(line) || !/\$\s*\d/.test(line)) continue;
-    const colon = line.indexOf(":");
-    const parsed =
-      colon > 1 &&
-      line.slice(1, colon).trim().length > 0 &&
-      /\$\s*\d/.test(line.slice(colon + 1));
-    if (!parsed) {
-      complete = false;
-      continue;
-    }
-    const key = normalizePolicyText(line);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    lines.push(line);
-  }
-  return { lines, complete };
-}
-
 function asksForPrice(normalizedText: string): boolean {
   return (
     /\b(?:precio|precios|costo|costos|tarifa|tarifas|cotizacion)\b/.test(normalizedText) ||
@@ -103,6 +72,12 @@ function asksForPrice(normalizedText: string): boolean {
 
 /** "qué incluye", "que incluye", "q incluye" (con o sin "n"). */
 const ASKS_WHAT_IS_INCLUDED = /\b(?:que|q)\s+incluye(?:n)?\b/;
+
+/** La lista determinista sólo existe para precio + "qué incluye" en el mismo turno. */
+export function needsCompletePriceSource(inboundText: string): boolean {
+  const normalized = normalizePolicyText(inboundText);
+  return asksForPrice(normalized) && ASKS_WHAT_IS_INCLUDED.test(normalized);
+}
 
 /**
  * ¿El mensaje del agente pide el nombre del cliente? Vale como pregunta
@@ -244,6 +219,8 @@ export function groundedConversationReply(input: {
   lastAgentText?: string | null;
   /** Historial en orden cronológico, incluido el turno actual. */
   conversation?: ConversationTurn[];
+  /** Fuente exhaustiva manual + documental, cargada sólo para precio + qué incluye. */
+  completePriceSource?: CompletePriceSourceResult;
 }): string | null {
   const inbound = normalizePolicyText(input.inboundText);
   const informal = prefersInformalRegister(input.tone);
@@ -253,7 +230,8 @@ export function groundedConversationReply(input: {
     const hasValuation = /\bvaloracion\b/.test(
       normalizePolicyText(input.knowledgeText)
     );
-    const priceLines = knowledgePriceLines(input.knowledgeText);
+    const priceLines =
+      input.completePriceSource ?? extractPriceLinesFromText(input.knowledgeText);
 
     // Precio + "qué incluye" en la misma pregunta: los precios confirmados y,
     // en el mismo mensaje, la abstención sobre el detalle que la KB no tiene.
