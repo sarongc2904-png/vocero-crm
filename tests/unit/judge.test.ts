@@ -25,6 +25,7 @@ describe("judge prompt contract", () => {
     expect(prompt).toContain("agenda DESHABILITADA");
     expect(prompt).toContain("falla grave tipo=alucinacion");
     expect(prompt).toContain("`handoff_innecesario`");
+    expect(prompt).toContain("`eco_cliente`");
     expect(prompt).toContain("`repeticion`");
     expect(prompt).toContain(
       "Preguntas normales sobre opciones, servicios, precios, condiciones o intención de compra"
@@ -41,6 +42,23 @@ describe("judge prompt contract", () => {
           evidencia: "handoff observado",
           evidenceRefs: [{ source: "action_trace", index: 0 }],
           reason: "El agente escaló sin necesidad.",
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("acepta eco_cliente en el contrato estructurado", () => {
+    const result = Verdict.safeParse({
+      veredicto: "amarillo",
+      hallazgos: [
+        {
+          tipo: "eco_cliente",
+          severity: "menor",
+          evidencia: "Quiero información sobre limpieza dental.",
+          evidenceRefs: [{ source: "agent_message", index: 0 }],
+          reason: "El agente repitió al cliente sin responder.",
         },
       ],
     });
@@ -90,6 +108,86 @@ describe("judgeCase (FR-032)", () => {
           }),
         ])
       );
+    }
+  });
+
+  it("no permite verde cuando el agente sólo hace eco del mensaje del cliente", async () => {
+    chatJson.mockResolvedValue({
+      ok: true,
+      data: {
+        veredicto: "verde",
+        hallazgos: [],
+      },
+      raw: "{}",
+    });
+
+    const outcome = await judgeCase({
+      personaKey: "comprador_decidido",
+      transcript: [
+        {
+          role: "cliente",
+          text: "Quiero información sobre la limpieza dental para mañana.",
+        },
+        {
+          role: "agente",
+          text: "Entiendo que quieres información sobre la limpieza dental para mañana.",
+        },
+      ],
+      kbText: "Limpieza dental: $700 MXN.",
+      behaviorText: "Responde la pregunta y ayuda a avanzar.",
+      actionTrace: [],
+    });
+
+    expect(outcome.status).toBe("done");
+
+    if (outcome.status === "done") {
+      expect(outcome.verdict.veredicto).toBe("amarillo");
+      expect(outcome.verdict.hallazgos).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            tipo: "eco_cliente",
+            severity: "menor",
+            evidenceRefs: [{ source: "agent_message", index: 0 }],
+          }),
+        ])
+      );
+    }
+  });
+
+  it("mantiene verde cuando confirma lo entendido y aporta una respuesta útil", async () => {
+    chatJson.mockResolvedValue({
+      ok: true,
+      data: {
+        veredicto: "verde",
+        hallazgos: [],
+      },
+      raw: "{}",
+    });
+
+    const outcome = await judgeCase({
+      personaKey: "comprador_decidido",
+      transcript: [
+        {
+          role: "cliente",
+          text: "Quiero información sobre la limpieza dental para mañana.",
+        },
+        {
+          role: "agente",
+          text: "Entiendo que quieres información sobre la limpieza dental para mañana. Tiene un precio de $700 MXN e incluye evaluación y limpieza.",
+        },
+      ],
+      kbText: "Limpieza dental: $700 MXN. Incluye evaluación y limpieza.",
+      behaviorText: "Responde la pregunta y ayuda a avanzar.",
+      actionTrace: [],
+    });
+
+    expect(outcome.status).toBe("done");
+
+    if (outcome.status === "done") {
+      expect(outcome.verdict).toEqual({
+        veredicto: "verde",
+        hallazgos: [],
+      });
     }
   });
 
