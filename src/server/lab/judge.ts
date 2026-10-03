@@ -36,6 +36,7 @@ export const Verdict = z.object({
         "fuera_de_kb",
         "debio_escalar",
         "handoff_innecesario",
+        "respuesta_generica",
         "tono",
       ]),
       severity: z.enum(["grave", "menor"]),
@@ -59,7 +60,7 @@ export type EvidenceRefType = z.infer<typeof EvidenceRef>;
  * partir del mismo veredicto crudo. Un registro persistido con otra versión no
  * se considera replayable sin revisar el cambio.
  */
-export const ADJUDICATION_VERSION = 2;
+export const ADJUDICATION_VERSION = 3;
 
 /**
  * Temperatura del juez. El juez no es creativo: es un evaluador con rúbrica.
@@ -151,6 +152,106 @@ function normalizeForSafetyCheck(text: string): string {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function asksForPrice(text: string): boolean {
+  const value = normalizeForSafetyCheck(text);
+
+  return (
+    /\b(precio|precios|costo|costos)\b/.test(value) ||
+    /\bcuanto\b.{0,25}\b(cuesta|cuestan|sale|salen)\b/.test(value)
+  );
+}
+
+function evidenceContainsPrice(text?: string): boolean {
+  if (!text) return false;
+
+  const value = normalizeForSafetyCheck(text);
+
+  return (
+    /(?:\$|mxn|usd)\s*\d[\d.,]*/.test(value) ||
+    /\b\d[\d.,]*\s*(?:mxn|usd)\b/.test(value)
+  );
+}
+
+function isGenericNonAnswer(text: string): boolean {
+  const value = normalizeForSafetyCheck(text);
+
+  if (value.length === 0 || value.length > 220) {
+    return false;
+  }
+
+  if (concreteFigures(value).length > 0) {
+    return false;
+  }
+
+  const genericHelp =
+    /\b(puedo ayudarte|te puedo ayudar|con gusto te ayudo|claro que si)\b/.test(
+      value
+    );
+
+  const asksCustomerAgain =
+    /\b(dime|cuentame|indicame)\b.{0,60}\b(informacion|necesitas|buscas|saber)\b/.test(
+      value
+    );
+
+  return genericHelp && asksCustomerAgain;
+}
+
+function deterministicQualityFindings(input: {
+  transcript: { role: "cliente" | "agente"; text: string }[];
+  evidenceText?: string;
+  existingFindings: VerdictType["hallazgos"];
+}): VerdictType["hallazgos"] {
+  if (!evidenceContainsPrice(input.evidenceText)) {
+    return [];
+  }
+
+  const existingAgentRefs = new Set(
+    input.existingFindings.flatMap((finding) =>
+      finding.evidenceRefs
+        .filter((ref) => ref.source === "agent_message")
+        .map((ref) => ref.index)
+    )
+  );
+
+  const findings: VerdictType["hallazgos"] = [];
+
+  let lastCustomerMessage: string | null = null;
+  let agentMessageIndex = 0;
+
+  for (const item of input.transcript) {
+    if (item.role === "cliente") {
+      lastCustomerMessage = item.text;
+      continue;
+    }
+
+    const currentAgentIndex = agentMessageIndex;
+    agentMessageIndex += 1;
+
+    if (
+      lastCustomerMessage !== null &&
+      asksForPrice(lastCustomerMessage) &&
+      isGenericNonAnswer(item.text) &&
+      !existingAgentRefs.has(currentAgentIndex)
+    ) {
+      findings.push({
+        tipo: "respuesta_generica",
+        severity: "menor",
+        evidencia: item.text,
+        evidenceRefs: [
+          {
+            source: "agent_message",
+            index: currentAgentIndex,
+          },
+        ],
+        reason:
+          "El cliente hizo una pregunta concreta de precio respaldada por el conocimiento disponible, pero el agente respondió de forma genérica sin contestarla.",
+      });
+    }
+  }
+
+  return findings;
 }
 
 /**
@@ -253,12 +354,16 @@ const SEVERITY_RANK: Record<VerdictType["hallazgos"][number]["severity"], number
   menor: 1,
 };
 
-const FINDING_TYPE_RANK: Record<VerdictType["hallazgos"][number]["tipo"], number> = {
+const FINDING_TYPE_RANK: Record<
+  VerdictType["hallazgos"][number]["tipo"],
+  number
+> = {
   alucinacion: 0,
   fuera_de_kb: 1,
   debio_escalar: 2,
   handoff_innecesario: 3,
-  tono: 4,
+  respuesta_generica: 4,
+  tono: 5,
 };
 
 function evidenceRefKey(
@@ -421,11 +526,19 @@ function normalizeVerdictConsistency(input: {
     return true;
   });
 
-  if (hallazgos.length === 0) {
+  const qualityFindings = deterministicQualityFindings({
+    transcript: input.transcript,
+    evidenceText: input.evidenceText,
+    existingFindings: hallazgos,
+  });
+
+  const allFindings = [...hallazgos, ...qualityFindings];
+
+  if (allFindings.length === 0) {
     return { veredicto: "verde", hallazgos: [] };
   }
 
-  const ordered = orderHallazgos(hallazgos);
+  const ordered = orderHallazgos(allFindings);
   const hasGrave = ordered.some((finding) => finding.severity === "grave");
   return {
     veredicto: hasGrave ? "rojo" : "amarillo",
