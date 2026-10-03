@@ -100,7 +100,9 @@ vi.mock("@/lib/db", () => ({
           const rows = conversationVisibleTo(predicate);
           return {
             limit: async () => rows,
-            orderBy: async () => rows,
+            orderBy: () => ({
+              limit: async () => rows,
+            }),
           };
         },
       }),

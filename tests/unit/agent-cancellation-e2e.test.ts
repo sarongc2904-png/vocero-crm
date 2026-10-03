@@ -22,6 +22,25 @@ vi.mock("@/server/agenda/service", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/server/agenda/service")>();
   return { ...original, cancelBookingForConversation };
 });
+vi.mock("@/server/ai/observability", () => ({
+  createAgentRun: async (input: {
+    organizationId: string;
+    conversationId: string;
+  }) => ({
+    runId: "test-agent-run",
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+  }),
+  finishAgentRun: async () => {},
+  hasActiveAgentRun: () => false,
+  recordAgentAction: async () => {},
+  recordAgentEvidence: async () => {},
+  withAgentRun: async <T>(
+    _context: unknown,
+    fn: () => Promise<T>
+  ): Promise<T> => fn(),
+}));
+
 vi.mock("@/lib/db", () => {
   const chain = (rows: unknown[]) => {
     const value: Record<string, unknown> = {};

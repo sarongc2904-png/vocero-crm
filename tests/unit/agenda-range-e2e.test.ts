@@ -97,6 +97,25 @@ function thenableChain(rows: unknown[]) {
   return chain;
 }
 
+vi.mock("@/server/ai/observability", () => ({
+  createAgentRun: async (input: {
+    organizationId: string;
+    conversationId: string;
+  }) => ({
+    runId: "test-agent-run",
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+  }),
+  finishAgentRun: async () => {},
+  hasActiveAgentRun: () => false,
+  recordAgentAction: async () => {},
+  recordAgentEvidence: async () => {},
+  withAgentRun: async <T>(
+    _context: unknown,
+    fn: () => Promise<T>
+  ): Promise<T> => fn(),
+}));
+
 vi.mock("@/lib/db", () => ({
   getDb: () => ({
     select: () => thenableChain(selectQueue.shift() ?? []),
