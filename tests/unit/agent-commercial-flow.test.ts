@@ -70,8 +70,10 @@ describe("flujo comercial WhatsApp/IA - release hardening", () => {
 
   it("el handoff explícito se reclama antes de enviar el aviso y queda silenciado", () => {
     const pipeline = source("src/server/ai/pipeline.ts");
+    // El bloque cubre la petición explícita y la aceptación de una oferta de
+    // asesor; ambas reclaman el handoff antes de avisar al cliente.
     const handoffBlockStart = pipeline.indexOf(
-      "if (lastInbound.text && matchesHandoffIntent(lastInbound.text))"
+      "(matchesHandoffIntent(lastInbound.text) ||\n      acceptsAdvisorOffer(lastInbound.text, lastAgentTextBeforeInbound))"
     );
     const claimed = pipeline.indexOf("const claimed = await applyHandoff", handoffBlockStart);
     const notice = pipeline.indexOf(

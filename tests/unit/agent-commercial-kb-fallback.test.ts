@@ -3,7 +3,13 @@ import {
   rankDocumentChunks,
   type DocumentRetrievalCandidate,
 } from "@/server/kb/documents/retrieval";
-import { rejectedHandoffFallback, shouldAllowModelHandoff } from "@/server/ai/handoff";
+import {
+  acceptsAdvisorOffer,
+  isBriefAffirmative,
+  offeredAdvisor,
+  rejectedHandoffFallback,
+  shouldAllowModelHandoff,
+} from "@/server/ai/handoff";
 
 /**
  * Lab 2026-10-03 (Judge v6): "Preguntón de precios" y "Comprador decidido"
@@ -217,6 +223,59 @@ describe("punto de decisión — el backend no autoriza handoff para preguntas c
   });
 });
 
+describe("aceptación de una oferta explícita de asesor", () => {
+  const FALLBACK_OFFER = rejectedHandoffFallback("¿Tienen algún descuento?");
+
+  it("el fallback ofrece el asesor como pregunta, sin exigir una frase exacta", () => {
+    expect(FALLBACK_OFFER).toContain("¿Quiere que un asesor se lo confirme?");
+    expect(FALLBACK_OFFER).not.toMatch(/escr[ií]b/);
+    expect(offeredAdvisor(FALLBACK_OFFER)).toBe(true);
+  });
+
+  it.each([
+    "¿Le gustaría que un asesor se lo confirme?",
+    "No tengo ese dato confirmado. Si lo desea, puedo pasarle con un asesor.",
+    "¿Quieres que te comunique con alguien del equipo?",
+  ])("reconoce la oferta: %s", (text) => {
+    expect(offeredAdvisor(text)).toBe(true);
+  });
+
+  it.each([
+    "Un asesor le atenderá en recepción. ¿Algo más en lo que pueda ayudarle?",
+    "La limpieza cuesta $700 MXN. ¿Le gustaría agendar una cita?",
+    null,
+  ])("no confunde una mención o pregunta distinta con una oferta: %s", (text) => {
+    expect(offeredAdvisor(text)).toBe(false);
+  });
+
+  it.each(["sí", "Sí, por favor", "ok", "dale", "Claro", "de acuerdo", "sí gracias 👍"])(
+    "'%s' es una aceptación breve",
+    (text) => {
+      expect(isBriefAffirmative(text)).toBe(true);
+    }
+  );
+
+  it.each([
+    "no gracias",
+    "No, gracias",
+    "sí, ¿cuánto cuesta la limpieza?",
+    "sí pero primero quiero saber los horarios de la tarde",
+    "",
+  ])("'%s' no es una aceptación breve", (text) => {
+    expect(isBriefAffirmative(text)).toBe(false);
+  });
+
+  it("oferta + 'sí' autoriza; 'sí' sin oferta y oferta + 'no gracias' no", () => {
+    expect(acceptsAdvisorOffer("sí", FALLBACK_OFFER)).toBe(true);
+    expect(shouldAllowModelHandoff("sí", null, FALLBACK_OFFER)).toBe(true);
+    expect(acceptsAdvisorOffer("sí", "La limpieza cuesta $700 MXN.")).toBe(false);
+    expect(shouldAllowModelHandoff("sí", null, null)).toBe(false);
+    expect(shouldAllowModelHandoff("sí", null)).toBe(false);
+    expect(acceptsAdvisorOffer("no gracias", FALLBACK_OFFER)).toBe(false);
+    expect(shouldAllowModelHandoff("no gracias", null, FALLBACK_OFFER)).toBe(false);
+  });
+});
+
 describe("fallback tras handoff rechazado — nunca genérico ante una pregunta concreta", () => {
   it.each([
     "¿Cuánto cuesta cada opción?",
@@ -357,7 +416,7 @@ const PROFILE = {
   greeting: null,
 };
 
-function queueTurn(customerTexts: string[]) {
+function queueTurn(customerTexts: string[], lastAgentText = "Respuesta previa del agente.") {
   const base = Date.now() - 60_000;
   const history = customerTexts.flatMap((text, index) => {
     const rows: Record<string, unknown>[] = [
@@ -368,13 +427,14 @@ function queueTurn(customerTexts: string[]) {
         id: `out_${index}`,
         direction: "out",
         type: "text",
-        text: "Respuesta previa del agente.",
+        text: index === customerTexts.length - 2 ? lastAgentText : "Respuesta previa del agente.",
         createdAt: new Date(base + index * 2_000 + 1_000),
       });
     }
     return rows;
   });
-  selectQueue.push([CONVERSATION], [PROFILE], history, [], [], CHUNKS);
+  // La consulta real ordena por createdAt DESC y el pipeline la invierte.
+  selectQueue.push([CONVERSATION], [PROFILE], [...history].reverse(), [], [], CHUNKS);
 }
 
 function lastOutboundText(): string {
@@ -524,6 +584,64 @@ describe("pipeline — pregunta concreta con handoff no autorizado", () => {
     expect(recordAgentAction).toHaveBeenCalledWith(
       expect.objectContaining({ action: "handoff", status: "rejected" })
     );
+  });
+
+  const OFFER =
+    "Sobre descuentos o promociones, por ahora no tengo información confirmada para compartirle por este medio. ¿Quiere que un asesor se lo confirme?";
+
+  function handedOff(): boolean {
+    return updates.some(
+      (values) => values.handoffAt instanceof Date && values.handoffReason === "cliente"
+    );
+  }
+
+  it("oferta de asesor + 'sí' → handoff determinista", async () => {
+    queueTurn(["¿Tienen algún descuento o condición especial?", "sí"], OFFER);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(handedOff()).toBe(true);
+  });
+
+  it("'sí' sin oferta previa de asesor → no hay handoff aunque el modelo lo pida", async () => {
+    chatJson
+      .mockResolvedValueOnce({ ok: true, data: { action: "handoff", reason: "El cliente aceptó" } })
+      .mockResolvedValueOnce({ ok: true, data: { action: "reply", text: "Perfecto. ¿Qué día le conviene?" } });
+    queueTurn(
+      ["¿Cuánto cuesta la limpieza?", "sí"],
+      "La limpieza cuesta $700 MXN. ¿Le gustaría agendar una valoración?"
+    );
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(handedOff()).toBe(false);
+    expect(updates.some((values) => values.handoffAt instanceof Date)).toBe(false);
+    expect(recordAgentAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "handoff", status: "rejected" })
+    );
+    expect(lastOutboundText()).toBe("Perfecto. ¿Qué día le conviene?");
+  });
+
+  it("oferta de asesor + 'no gracias' → no hay handoff", async () => {
+    chatJson.mockResolvedValueOnce({
+      ok: true,
+      data: { action: "reply", text: "Entendido. ¿Le ayudo con algo más?" },
+    });
+    queueTurn(["¿Tienen algún descuento o condición especial?", "no gracias"], OFFER);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(handedOff()).toBe(false);
+    expect(updates.some((values) => values.handoffAt instanceof Date)).toBe(false);
+    expect(lastOutboundText()).toBe("Entendido. ¿Le ayudo con algo más?");
+  });
+
+  it("oferta de asesor + 'sí': si el turno llega al modelo, su handoff está autorizado", () => {
+    expect(shouldAllowModelHandoff("Sí, por favor", null, OFFER)).toBe(true);
   });
 
   it("una petición explícita de persona sigue haciendo handoff (sin pasar por el modelo)", async () => {

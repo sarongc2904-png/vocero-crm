@@ -56,12 +56,82 @@ export function matchesConfiguredEscalation(
   );
 }
 
+const ADVISOR_TERMS =
+  /asesor|miembro del equipo|alguien del equipo|persona del equipo|agente humano|una persona/;
+
+/**
+ * ¿El último mensaje del agente OFRECIÓ un asesor? Exige que la oferta sea la
+ * propia pregunta ("¿Quiere que un asesor se lo confirme?") o una oferta
+ * condicional ("si desea, puedo pasarle con un asesor"); mencionar un asesor
+ * en otra frase ("Un asesor le atenderá. ¿Algo más?") no cuenta.
+ */
+export function offeredAdvisor(agentText: string | null | undefined): boolean {
+  if (!agentText) return false;
+  const segments = normalizeHandoffText(agentText).split(/(?<=[.!?])\s+/);
+  return segments.some(
+    (segment) =>
+      ADVISOR_TERMS.test(segment) &&
+      (segment.includes("?") ||
+        /\bsi (lo )?(desea|quiere|gusta|prefiere|quieres|deseas)\b|\bpuedo (pasarl|pasart|comunicarl|comunicart|ponerl|ponert|conectarl|conectart)/.test(
+          segment
+        ))
+  );
+}
+
+const AFFIRMATIVE_OPENERS = new Set([
+  "si",
+  "claro",
+  "ok",
+  "okay",
+  "okey",
+  "va",
+  "vale",
+  "dale",
+  "sale",
+  "perfecto",
+  "adelante",
+  "porfa",
+  "correcto",
+  "bueno",
+  "andale",
+]);
+
+/** "sí", "sí por favor", "ok", "dale", "de acuerdo"… sin negación y breve. */
+export function isBriefAffirmative(text: string): boolean {
+  // "sí, ¿cuánto cuesta…?" es una pregunta nueva, no una aceptación.
+  if (text.includes("?")) return false;
+  const words: string[] = normalizeHandoffText(text).match(/[a-z]+/g) ?? [];
+  if (words.length === 0 || words.length > 5) return false;
+  if (words.includes("no") || words.includes("nel") || words.includes("tampoco")) {
+    return false;
+  }
+  const phrase = words.join(" ");
+  return (
+    AFFIRMATIVE_OPENERS.has(words[0]!) ||
+    /^(de acuerdo|esta bien|por favor|me parece)\b/.test(phrase)
+  );
+}
+
+/**
+ * Aceptación de una oferta explícita de asesor: el agente la ofreció en su
+ * último mensaje y el cliente responde con una afirmación breve. Equivale a
+ * que el cliente pida una persona. Un "sí" sin oferta previa no autoriza nada.
+ */
+export function acceptsAdvisorOffer(
+  text: string,
+  lastAgentText: string | null | undefined
+): boolean {
+  return offeredAdvisor(lastAgentText) && isBriefAffirmative(text);
+}
+
 export function shouldAllowModelHandoff(
   text: string,
-  escalationRules: string | null | undefined
+  escalationRules: string | null | undefined,
+  lastAgentText?: string | null
 ): boolean {
   return (
     matchesHandoffIntent(text) ||
+    acceptsAdvisorOffer(text, lastAgentText) ||
     matchesConfiguredEscalation(text, escalationRules)
   );
 }
@@ -135,8 +205,8 @@ export function rejectedHandoffFallback(
     const subject =
       topics.length > 0 ? topics.join(" y ") : informal ? "tu pregunta" : "su pregunta";
     return informal
-      ? `Sobre ${subject}, por ahora no tengo información confirmada para compartirte por este medio. Si quieres que un asesor te lo confirme, solo escríbeme que quieres hablar con un asesor.`
-      : `Sobre ${subject}, por ahora no tengo información confirmada para compartirle por este medio. Si desea que un asesor se lo confirme, solo escríbame que quiere hablar con un asesor.`;
+      ? `Sobre ${subject}, por ahora no tengo información confirmada para compartirte por este medio. ¿Quieres que un asesor te lo confirme?`
+      : `Sobre ${subject}, por ahora no tengo información confirmada para compartirle por este medio. ¿Quiere que un asesor se lo confirme?`;
   }
 
   return informal ? "Con gusto. ¿En qué te puedo ayudar?" : "Con gusto. ¿En qué le puedo ayudar?";

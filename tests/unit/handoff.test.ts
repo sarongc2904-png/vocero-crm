@@ -128,13 +128,13 @@ describe("fallback tras handoff rechazado", () => {
 
   it("ante una petición concreta nombra el tema, admite que no está confirmado y ofrece un asesor", () => {
     expect(rejectedHandoffFallback("¿Tienen algún descuento?")).toBe(
-      "Sobre descuentos o promociones, por ahora no tengo información confirmada para compartirle por este medio. Si desea que un asesor se lo confirme, solo escríbame que quiere hablar con un asesor."
+      "Sobre descuentos o promociones, por ahora no tengo información confirmada para compartirle por este medio. ¿Quiere que un asesor se lo confirme?"
     );
   });
 
   it("respeta el tuteo solo cuando el tono del perfil lo pide", () => {
     expect(rejectedHandoffFallback("¿Cuánto cuesta?", "Cercano, tutea al cliente")).toBe(
-      "Sobre el precio, por ahora no tengo información confirmada para compartirte por este medio. Si quieres que un asesor te lo confirme, solo escríbeme que quieres hablar con un asesor."
+      "Sobre el precio, por ahora no tengo información confirmada para compartirte por este medio. ¿Quieres que un asesor te lo confirme?"
     );
     expect(rejectedHandoffFallback("¿Cuánto cuesta?", "Profesional y cercano")).toContain(
       "compartirle"

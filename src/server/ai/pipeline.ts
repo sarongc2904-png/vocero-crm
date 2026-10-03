@@ -15,6 +15,7 @@ import {
   type AgentActionType,
 } from "@/server/ai/actions";
 import {
+  acceptsAdvisorOffer,
   matchesHandoffIntent,
   rejectedHandoffFallback,
   shouldAllowModelHandoff,
@@ -271,7 +272,23 @@ async function runAgentTurnCore(
     return;
   }
 
-  if (lastInbound.text && matchesHandoffIntent(lastInbound.text)) {
+  const lastAgentTextBeforeInbound =
+    [...history]
+      .reverse()
+      .find(
+        (message) =>
+          message.direction === "out" &&
+          message.createdAt < lastInbound.createdAt &&
+          Boolean(message.text?.trim())
+      )?.text ?? null;
+
+  // Pedir una persona y aceptar con un "sí" la oferta explícita de asesor que
+  // el agente acaba de hacer son la misma petición del cliente.
+  if (
+    lastInbound.text &&
+    (matchesHandoffIntent(lastInbound.text) ||
+      acceptsAdvisorOffer(lastInbound.text, lastAgentTextBeforeInbound))
+  ) {
     const claimed = await applyHandoff(
       conversationId,
       organizationId,
@@ -748,7 +765,11 @@ async function runAgentTurnCore(
   if (
     action.action === "handoff" &&
     inboundText &&
-    !shouldAllowModelHandoff(inboundText, profile.escalationRules)
+    !shouldAllowModelHandoff(
+      inboundText,
+      profile.escalationRules,
+      lastAgentTextBeforeInbound
+    )
   ) {
     const rejectedReason = action.reason;
     // El contrato del reintento ya no contiene handoff: no puede repetirse.
