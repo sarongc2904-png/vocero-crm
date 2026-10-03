@@ -159,9 +159,15 @@ function normalizeForSafetyCheck(text: string): string {
 function asksForPrice(text: string): boolean {
   const value = normalizeForSafetyCheck(text);
 
+  // Conservador a propósito: "valor" o "sale" sueltos son ambiguos ("valor
+  // nutricional", "¿a qué hora sale?") y sólo cuentan dentro de "cuánto ...".
   return (
-    /\b(precio|precios|costo|costos)\b/.test(value) ||
-    /\bcuanto\b.{0,25}\b(cuesta|cuestan|sale|salen)\b/.test(value)
+    /\b(precio|precios|costo|costos|tarifa|tarifas|cotizacion|cotizaciones)\b/.test(
+      value
+    ) ||
+    /\bcuanto\b.{0,25}\b(cuesta|cuestan|sale|salen|cobra|cobran|vale|valen)\b/.test(
+      value
+    )
   );
 }
 
@@ -304,6 +310,20 @@ function mapAgentMessageContexts(
   return contexts;
 }
 
+/**
+ * Categorías de calidad. El backend las verifica contra el transcript y su
+ * severidad contractual es siempre `menor`: un mismo defecto no puede volver
+ * rojo un caso sólo porque el LLM lo propuso como `grave`.
+ */
+const QUALITY_FINDING_TYPES: ReadonlySet<VerdictType["hallazgos"][number]["tipo"]> =
+  new Set(["respuesta_generica", "eco_cliente", "repeticion"]);
+
+/**
+ * Longitud normalizada mínima para que una respuesta idéntica cuente como
+ * repetición. Excluye fórmulas triviales ("¡Claro!", "Perfecto").
+ */
+const MIN_REPETITION_LENGTH = 24;
+
 function citedAgentContexts(
   finding: VerdictType["hallazgos"][number],
   contexts: Map<number, AgentMessageContext>
@@ -320,102 +340,110 @@ function citedAgentContexts(
     : null;
 }
 
-function repetitionFindingIsValid(
-  finding: VerdictType["hallazgos"][number],
-  transcript: { role: "cliente" | "agente"; text: string }[],
-  contexts: Map<number, AgentMessageContext>
+/**
+ * Las tres reglas de calidad se expresan UNA vez y las usan tanto el detector
+ * determinista como la validación de hallazgos propuestos por el LLM. Sólo
+ * miran el turno citado y el mensaje del cliente inmediatamente anterior:
+ * nunca contexto futuro ni el texto libre `reason` del juez.
+ */
+function isGroundedPriceGenericTurn(
+  context: AgentMessageContext,
+  hasPriceEvidence: boolean
 ): boolean {
-  const cited = citedAgentContexts(finding, contexts);
-  if (!cited) return false;
-
-  const unique = [...new Map(cited.map((context) => [context.agentIndex, context])).values()]
-    .sort((a, b) => a.transcriptIndex - b.transcriptIndex);
-  if (unique.length < 2) return false;
-
-  for (let firstIndex = 0; firstIndex < unique.length - 1; firstIndex++) {
-    for (let secondIndex = firstIndex + 1; secondIndex < unique.length; secondIndex++) {
-      const first = unique[firstIndex]!;
-      const second = unique[secondIndex]!;
-      if (
-        normalizeForSafetyCheck(first.text) !==
-        normalizeForSafetyCheck(second.text)
-      ) {
-        continue;
-      }
-
-      const hasNewCustomer = transcript
-        .slice(first.transcriptIndex + 1, second.transcriptIndex)
-        .some((item) => item.role === "cliente");
-      if (
-        hasNewCustomer &&
-        second.previousCustomer !== null &&
-        !customerRequestedRepeat(second.previousCustomer.text)
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-function genericFindingIsPriceRelated(
-  finding: VerdictType["hallazgos"][number],
-  cited: AgentMessageContext[]
-): boolean {
-  const reason = normalizeForSafetyCheck(finding.reason);
-  const priceReason =
-    /\b(precio|precios|costo|costos|tarifa|tarifas)\b/.test(reason) ||
-    /\bopcion(?:es)?\b.{0,30}\b(economica|economicas|pago|pagos)\b/.test(
-      reason
-    );
-
   return (
-    priceReason ||
-    cited.some(
-      (context) =>
-        context.previousCustomer !== null &&
-        asksForPrice(context.previousCustomer.text)
-    )
+    hasPriceEvidence &&
+    context.previousCustomer !== null &&
+    asksForPrice(context.previousCustomer.text) &&
+    isGenericNonAnswer(context.text)
   );
 }
 
-function llmQualityFindingIsValid(input: {
-  finding: VerdictType["hallazgos"][number];
-  transcript: { role: "cliente" | "agente"; text: string }[];
-  evidenceText?: string;
-  contexts: Map<number, AgentMessageContext>;
-}): boolean {
-  const { finding, contexts } = input;
+function isGroundedEchoTurn(context: AgentMessageContext): boolean {
+  return (
+    context.previousCustomer !== null &&
+    isCustomerEcho(context.previousCustomer.text, context.text)
+  );
+}
+
+/**
+ * `prior` y `current` forman una repetición si el texto normalizado es igual y
+ * sustancial, y `current` responde a un mensaje nuevo del cliente (el turno
+ * inmediatamente anterior, posterior a `prior`) que no pidió repetir.
+ */
+function isGroundedRepetitionPair(
+  prior: AgentMessageContext,
+  current: AgentMessageContext
+): boolean {
+  const normalized = normalizeForSafetyCheck(current.text);
+  return (
+    prior.transcriptIndex < current.transcriptIndex &&
+    normalized.length >= MIN_REPETITION_LENGTH &&
+    normalizeForSafetyCheck(prior.text) === normalized &&
+    current.previousCustomer !== null &&
+    current.previousCustomer.transcriptIndex > prior.transcriptIndex &&
+    !customerRequestedRepeat(current.previousCustomer.text)
+  );
+}
+
+/**
+ * Representación contractual de una repetición: exactamente el par lógico
+ * `[priorAgentIndex, currentAgentIndex]` en orden temporal. Cualquier otra
+ * forma (tres refs, refs duplicadas, orden invertido, action_trace) se rechaza
+ * en vez de adivinar qué par quiso decir el juez.
+ */
+function repetitionPair(
+  finding: VerdictType["hallazgos"][number],
+  contexts: Map<number, AgentMessageContext>
+): [AgentMessageContext, AgentMessageContext] | null {
+  const [first, second, ...rest] = finding.evidenceRefs;
+  if (
+    !first ||
+    !second ||
+    rest.length > 0 ||
+    first.source !== "agent_message" ||
+    second.source !== "agent_message" ||
+    first.index >= second.index
+  ) {
+    return null;
+  }
+
+  const prior = contexts.get(first.index);
+  const current = contexts.get(second.index);
+  return prior && current ? [prior, current] : null;
+}
+
+/**
+ * Grounding determinista de un hallazgo de calidad propuesto por el LLM.
+ * Las referencias ya fueron validadas por `validateAndAnchorVerdict`.
+ *
+ * `respuesta_generica` sólo es verificable cuando el cliente inmediatamente
+ * anterior al turno citado preguntó precio, la evidencia tiene precios y el
+ * agente evadió con una fórmula genérica. Cualquier otra acusación genérica no
+ * es verificable con seguridad y se rechaza: así una pregunta posterior al
+ * turno citado nunca puede sostener el hallazgo, la redacte como la redacte
+ * el juez.
+ */
+function llmQualityFindingIsValid(
+  finding: VerdictType["hallazgos"][number],
+  contexts: Map<number, AgentMessageContext>,
+  hasPriceEvidence: boolean
+): boolean {
+  if (finding.tipo === "repeticion") {
+    const pair = repetitionPair(finding, contexts);
+    return pair !== null && isGroundedRepetitionPair(...pair);
+  }
 
   if (finding.tipo === "eco_cliente") {
     const cited = citedAgentContexts(finding, contexts);
-    return (
-      cited !== null &&
-      cited.every(
-        (context) =>
-          context.previousCustomer !== null &&
-          isCustomerEcho(context.previousCustomer.text, context.text)
-      )
-    );
-  }
-
-  if (finding.tipo === "repeticion") {
-    return repetitionFindingIsValid(finding, input.transcript, contexts);
+    return cited !== null && cited.every(isGroundedEchoTurn);
   }
 
   if (finding.tipo === "respuesta_generica") {
     const cited = citedAgentContexts(finding, contexts);
-    if (!cited) return false;
-    if (!genericFindingIsPriceRelated(finding, cited)) return true;
-
     return (
-      evidenceContainsPrice(input.evidenceText) &&
-      cited.every(
-        (context) =>
-          context.previousCustomer !== null &&
-          asksForPrice(context.previousCustomer.text) &&
-          isGenericNonAnswer(context.text)
+      cited !== null &&
+      cited.every((context) =>
+        isGroundedPriceGenericTurn(context, hasPriceEvidence)
       )
     );
   }
@@ -428,48 +456,37 @@ function deterministicQualityFindings(input: {
   evidenceText?: string;
   existingFindings: VerdictType["hallazgos"];
 }): VerdictType["hallazgos"] {
+  // La deduplicación se construye SÓLO con hallazgos del LLM que ya
+  // sobrevivieron al grounding: uno rechazado nunca bloquea al determinista.
   const existingRefsByType = new Map<string, Set<number>>();
   const existingRepetitionPairs = new Set<string>();
 
   for (const finding of input.existingFindings) {
-    const agentRefs = [
-      ...new Set(
-        finding.evidenceRefs
-          .filter((ref) => ref.source === "agent_message")
-          .map((ref) => ref.index)
-      ),
-    ].sort((a, b) => a - b);
+    const agentRefs = finding.evidenceRefs
+      .filter((ref) => ref.source === "agent_message")
+      .map((ref) => ref.index);
+
+    if (finding.tipo === "repeticion") {
+      existingRepetitionPairs.add(agentRefs.join(":"));
+      continue;
+    }
 
     existingRefsByType.set(
       finding.tipo,
       new Set([...(existingRefsByType.get(finding.tipo) ?? []), ...agentRefs])
     );
-
-    if (finding.tipo === "repeticion") {
-      for (let first = 0; first < agentRefs.length - 1; first++) {
-        for (let second = first + 1; second < agentRefs.length; second++) {
-          existingRepetitionPairs.add(
-            `${agentRefs[first]!}:${agentRefs[second]!}`
-          );
-        }
-      }
-    }
   }
 
   const findings: VerdictType["hallazgos"] = [];
-  const seenAgentMessages = new Map<string, number>();
+  const firstAgentMessageByText = new Map<string, AgentMessageContext>();
   const hasPriceEvidence = evidenceContainsPrice(input.evidenceText);
   const agentContexts = mapAgentMessageContexts(input.transcript);
 
   for (const context of agentContexts.values()) {
     const currentAgentIndex = context.agentIndex;
-    const previousCustomer = context.previousCustomer?.text ?? null;
 
     if (
-      hasPriceEvidence &&
-      previousCustomer !== null &&
-      asksForPrice(previousCustomer) &&
-      isGenericNonAnswer(context.text) &&
+      isGroundedPriceGenericTurn(context, hasPriceEvidence) &&
       !existingRefsByType.get("respuesta_generica")?.has(currentAgentIndex)
     ) {
       findings.push({
@@ -488,8 +505,7 @@ function deterministicQualityFindings(input: {
     }
 
     if (
-      previousCustomer !== null &&
-      isCustomerEcho(previousCustomer, context.text) &&
+      isGroundedEchoTurn(context) &&
       !existingRefsByType.get("eco_cliente")?.has(currentAgentIndex)
     ) {
       findings.push({
@@ -508,14 +524,12 @@ function deterministicQualityFindings(input: {
     }
 
     const normalizedAgentMessage = normalizeForSafetyCheck(context.text);
-    const previousIndex = seenAgentMessages.get(normalizedAgentMessage);
+    const prior = firstAgentMessageByText.get(normalizedAgentMessage);
 
     if (
-      normalizedAgentMessage.length >= 24 &&
-      previousIndex !== undefined &&
-      previousCustomer !== null &&
-      !customerRequestedRepeat(previousCustomer) &&
-      !existingRepetitionPairs.has(`${previousIndex}:${currentAgentIndex}`)
+      prior !== undefined &&
+      isGroundedRepetitionPair(prior, context) &&
+      !existingRepetitionPairs.has(`${prior.agentIndex}:${currentAgentIndex}`)
     ) {
       findings.push({
         tipo: "repeticion",
@@ -524,7 +538,7 @@ function deterministicQualityFindings(input: {
         evidenceRefs: [
           {
             source: "agent_message",
-            index: previousIndex,
+            index: prior.agentIndex,
           },
           {
             source: "agent_message",
@@ -536,8 +550,8 @@ function deterministicQualityFindings(input: {
       });
     }
 
-    if (previousIndex === undefined) {
-      seenAgentMessages.set(normalizedAgentMessage, currentAgentIndex);
+    if (prior === undefined) {
+      firstAgentMessageByText.set(normalizedAgentMessage, context);
     }
   }
 
@@ -697,23 +711,19 @@ function normalizeVerdictConsistency(input: {
   actionTrace: AgentActionTrace;
   behaviorText?: string;
   evidenceText?: string;
-}): VerdictType {
+}): { verdict: VerdictType; acceptedLlmIndices: number[] } {
   const hasHandoff = actionTraceHasHandoff(input.actionTrace);
   const escalationRules = escalationRulesFromBehavior(input.behaviorText);
   const normalizedEvidence = input.evidenceText
     ? normalizeForSafetyCheck(input.evidenceText)
     : null;
   const agentContexts = mapAgentMessageContexts(input.transcript);
+  const hasPriceEvidence = evidenceContainsPrice(input.evidenceText);
 
-  const hallazgos = input.verdict.hallazgos.filter((finding) => {
-    if (
-      !llmQualityFindingIsValid({
-        finding,
-        transcript: input.transcript,
-        evidenceText: input.evidenceText,
-        contexts: agentContexts,
-      })
-    ) {
+  const survivesGrounding = (
+    finding: VerdictType["hallazgos"][number]
+  ): boolean => {
+    if (!llmQualityFindingIsValid(finding, agentContexts, hasPriceEvidence)) {
       return false;
     }
 
@@ -828,6 +838,16 @@ function normalizeVerdictConsistency(input: {
     }
 
     return true;
+  };
+
+  const acceptedLlmIndices = input.verdict.hallazgos.flatMap((finding, index) =>
+    survivesGrounding(finding) ? [index] : []
+  );
+  const hallazgos = acceptedLlmIndices.map((index) => {
+    const finding = input.verdict.hallazgos[index]!;
+    return QUALITY_FINDING_TYPES.has(finding.tipo)
+      ? { ...finding, severity: "menor" as const }
+      : finding;
   });
 
   const qualityFindings = deterministicQualityFindings({
@@ -839,14 +859,17 @@ function normalizeVerdictConsistency(input: {
   const allFindings = [...hallazgos, ...qualityFindings];
 
   if (allFindings.length === 0) {
-    return { veredicto: "verde", hallazgos: [] };
+    return { verdict: { veredicto: "verde", hallazgos: [] }, acceptedLlmIndices };
   }
 
   const ordered = orderHallazgos(allFindings);
   const hasGrave = ordered.some((finding) => finding.severity === "grave");
   return {
-    veredicto: hasGrave ? "rojo" : "amarillo",
-    hallazgos: ordered,
+    verdict: {
+      veredicto: hasGrave ? "rojo" : "amarillo",
+      hallazgos: ordered,
+    },
+    acceptedLlmIndices,
   };
 }
 
@@ -866,22 +889,30 @@ export function validateAndAnchorVerdict(input: {
   behaviorText?: string;
   evidenceText?: string;
 }): { ok: true; verdict: VerdictType } | { ok: false; detail: string } {
-  const messages = agentMessages(input.transcript);
-  const contexts = mapAgentMessageContexts(input.transcript);
-  const verdict = {
-    ...input.verdict,
-    hallazgos: input.verdict.hallazgos.filter((finding) =>
-      llmQualityFindingIsValid({
-        finding,
-        transcript: input.transcript,
-        evidenceText: input.evidenceText,
-        contexts,
-      })
-    ),
-  };
+  const result = anchorAndGroundVerdict(input);
+  return result.ok ? { ok: true, verdict: result.verdict } : result;
+}
 
-  for (let findingIndex = 0; findingIndex < verdict.hallazgos.length; findingIndex++) {
-    const finding = verdict.hallazgos[findingIndex]!;
+/**
+ * Orden del pipeline: (1) TODAS las referencias se validan contra las fuentes
+ * reales, de modo que una ref inválida produce `invalid_evidence_ref` sea cual
+ * sea el tipo; (2) grounding determinista de cada hallazgo del LLM; (3) el
+ * determinista deduplica sólo contra los aceptados; (4) severidad contractual,
+ * orden canónico y veredicto. Devuelve además qué hallazgos crudos aceptó.
+ */
+function anchorAndGroundVerdict(input: {
+  verdict: VerdictType;
+  transcript: { role: "cliente" | "agente"; text: string }[];
+  actionTrace: AgentActionTrace;
+  behaviorText?: string;
+  evidenceText?: string;
+}):
+  | { ok: true; verdict: VerdictType; acceptedLlmIndices: number[] }
+  | { ok: false; detail: string } {
+  const messages = agentMessages(input.transcript);
+
+  for (let findingIndex = 0; findingIndex < input.verdict.hallazgos.length; findingIndex++) {
+    const finding = input.verdict.hallazgos[findingIndex]!;
     const anchored: string[] = [];
     let hasAgentMessage = false;
 
@@ -919,25 +950,14 @@ export function validateAndAnchorVerdict(input: {
     finding.evidencia = anchored.join("\n---\n");
   }
 
-  return {
-    ok: true,
-    verdict: normalizeVerdictConsistency({
-      verdict,
-      transcript: input.transcript,
-      actionTrace: input.actionTrace,
-      behaviorText: input.behaviorText,
-      evidenceText: input.evidenceText,
-    }),
-  };
-}
-
-function findingIdentity(finding: VerdictType["hallazgos"][number]): string {
-  return canonicalDigest({
-    tipo: finding.tipo,
-    severity: finding.severity,
-    reason: finding.reason,
-    evidenceRefs: finding.evidenceRefs,
+  const normalized = normalizeVerdictConsistency({
+    verdict: input.verdict,
+    transcript: input.transcript,
+    actionTrace: input.actionTrace,
+    behaviorText: input.behaviorText,
+    evidenceText: input.evidenceText,
   });
+  return { ok: true, ...normalized };
 }
 
 /**
@@ -964,7 +984,7 @@ export function adjudicate(input: {
     }
   | { ok: false; detail: string } {
   const frozenInput = freezeJson(input);
-  const result = validateAndAnchorVerdict({
+  const result = anchorAndGroundVerdict({
     verdict: frozenInput.llmVerdict,
     transcript: frozenInput.transcript,
     actionTrace: frozenInput.actionTrace,
@@ -973,14 +993,16 @@ export function adjudicate(input: {
   });
   if (!result.ok) return result;
 
-  const acceptedIds = new Set(result.verdict.hallazgos.map(findingIdentity));
+  // Se decide por posición en el veredicto crudo, no por identidad: la
+  // severidad contractual puede haber cambiado el hallazgo aceptado.
+  const acceptedLlmIndices = new Set(result.acceptedLlmIndices);
   return {
     ok: true,
     version: ADJUDICATION_VERSION,
     verdict: result.verdict,
     acceptedFindings: result.verdict.hallazgos,
     rejectedFindings: input.llmVerdict.hallazgos
-      .filter((finding) => !acceptedIds.has(findingIdentity(finding)))
+      .filter((_, index) => !acceptedLlmIndices.has(index))
       .map((finding) => ({
         finding: freezeJson(finding),
         reason: "rejected_by_deterministic_grounding" as const,
