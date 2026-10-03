@@ -16,14 +16,21 @@ import {
 } from "@/server/ai/actions";
 import {
   acceptsAdvisorOffer,
+  closingAcknowledgementReply,
+  handoffNotice,
+  isBriefAffirmative,
+  isClosingAcknowledgement,
   matchesHandoffIntent,
   rejectedHandoffFallback,
+  sameNormalizedMessage,
   shouldAllowModelHandoff,
+  toneAwareFixedReply,
 } from "@/server/ai/handoff";
 import { matchesCancellationIntent } from "@/server/agenda/cancel-intent";
 import {
   buildAgentSystemPrompt,
   buildDocumentKnowledgeMessages,
+  groundedConversationReply,
 } from "@/server/ai/prompts";
 import { retrieveRelevantDocumentChunks } from "@/server/kb/documents/retrieval";
 import { agendaEnabled } from "@/server/agenda/flag";
@@ -297,7 +304,7 @@ async function runAgentTurnCore(
     if (claimed) {
       await deliverReply(
         conversation,
-        "Claro. Voy a pasar tu conversación a un asesor. La IA queda en pausa mientras te atienden."
+        handoffNotice(profile.tone)
       );
     }
     return;
@@ -359,7 +366,10 @@ async function runAgentTurnCore(
           status: turn.ok ? "completed" : "rejected",
           payload: { startUtc: pending.startUtc },
         });
-        await deliverReply(conversation, turn.text);
+        await deliverReply(
+          conversation,
+          toneAwareFixedReply(turn.text, profile.tone)
+        );
         if (turn.ok) {
           publish(organizationId, {
             type: "conversation.updated",
@@ -396,7 +406,10 @@ async function runAgentTurnCore(
               intro: "Ese horario ya no sirve para mover tu cita. Elige otro:",
             });
             await recordOfferedSlots(organizationId, conversationId, turn);
-            await deliverReply(conversation, turn.text);
+            await deliverReply(
+              conversation,
+              toneAwareFixedReply(turn.text, profile.tone)
+            );
           } else if (err instanceof BookingError && err.code === "not_found") {
             await deliverReply(
               conversation,
@@ -433,6 +446,17 @@ async function runAgentTurnCore(
     return;
   }
 
+  if (
+    inboundText &&
+    isClosingAcknowledgement(inboundText, lastAgentTextBeforeInbound)
+  ) {
+    await deliverReply(
+      conversation,
+      closingAcknowledgementReply(profile.tone)
+    );
+    return;
+  }
+
   const kb = await db
     .select()
     .from(schema.kbEntry)
@@ -454,17 +478,64 @@ async function runAgentTurnCore(
     )
     .slice(-2)
     .map((message) => message.text!);
+  const purchaseIntentRetrievalHint = lastInbound.text &&
+    /\b(?:quiero|quisiera|necesito)\s+(?:avanzar|contratar|comprar|empezar|iniciar)(?:\s+(?:hoy|ya|ahora))?\b/i.test(
+      lastInbound.text.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    )
+      ? "agendar cita solicitar nombre completo numero telefono servicio motivo consulta"
+      : "";
   const documentChunks = await retrieveRelevantDocumentChunks({
     organizationId,
     query: lastInbound.text ?? "",
-    contextQuery: previousInboundTexts.join("\n"),
+    contextQuery: [...previousInboundTexts, purchaseIntentRetrievalHint]
+      .filter(Boolean)
+      .join("\n"),
     maxChunks: 5,
     maxCharacters: 7_500,
   });
-
+  const knowledgeText = [
+    ...kb.map((entry) =>
+      entry.kind === "qa"
+        ? `${entry.question ?? ""}\n${entry.answer ?? ""}`
+        : entry.content ?? ""
+    ),
+    ...documentChunks.map((chunk) => chunk.content),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const customerHistoryText = history
+    .filter((message) => message.direction === "in" && message.text)
+    .map((message) => message.text)
+    .join("\n");
+  const groundedReply = inboundText
+    ? groundedConversationReply({
+        inboundText,
+        customerHistoryText,
+        knowledgeText,
+        tone: profile.tone,
+      })
+    : null;
   const agenda = agendaEnabled();
   const safeModelReply = (text: string) =>
     enforceAgentCapabilities({ text, agenda });
+  const safeQualityReply = (text: string) => {
+    const repeatsInbound = Boolean(
+      inboundText && sameNormalizedMessage(text, inboundText)
+    );
+    const repeatsPrevious = Boolean(
+      lastAgentTextBeforeInbound &&
+        sameNormalizedMessage(text, lastAgentTextBeforeInbound)
+    );
+    if (
+      inboundText &&
+      (repeatsInbound || repeatsPrevious) &&
+      (isBriefAffirmative(inboundText) ||
+        isClosingAcknowledgement(inboundText, lastAgentTextBeforeInbound))
+    ) {
+      return closingAcknowledgementReply(profile.tone);
+    }
+    return safeModelReply(text);
+  };
   const agendaContext = agenda
     ? { settings: await getSettings(organizationId), now: new Date() }
     : null;
@@ -540,6 +611,11 @@ async function runAgentTurnCore(
         ]
       : []),
   ]);
+
+  if (groundedReply) {
+    await deliverReply(conversation, groundedReply);
+    return;
+  }
 
   let todayInfo: { iso: string; label: string } | undefined;
   let scheduleIntent: ScheduleIntent = { kind: "none" };
@@ -671,10 +747,13 @@ async function runAgentTurnCore(
           });
           await deliverReply(
             conversation,
-            `Perfecto. Tengo ${selectedOfferConfirmationLabel(
-              chosen.startUtc,
-              agendaContext.settings.timezone
-            )} disponible. ¿Quieres que agende tu cita?`
+            toneAwareFixedReply(
+              `Perfecto. Tengo ${selectedOfferConfirmationLabel(
+                chosen.startUtc,
+                agendaContext.settings.timezone
+              )} disponible. ¿Quieres que agende tu cita?`,
+              profile.tone
+            )
           );
           return;
         }
@@ -686,7 +765,10 @@ async function runAgentTurnCore(
             "Ese horario acaba de dejar de estar disponible. Estas son las opciones actuales:",
         });
         await recordOfferedSlots(organizationId, conversationId, turn);
-        await deliverReply(conversation, turn.text);
+        await deliverReply(
+          conversation,
+          toneAwareFixedReply(turn.text, profile.tone)
+        );
         return;
       }
 
@@ -702,7 +784,10 @@ async function runAgentTurnCore(
           .join("\n");
         await deliverReply(
           conversation,
-          `Encontré más de una opción para esa hora:\n${choices}\n¿Cuál de estas quieres elegir?`
+          toneAwareFixedReply(
+            `Encontré más de una opción para esa hora:\n${choices}\n¿Cuál de estas quieres elegir?`,
+            profile.tone
+          )
         );
         return;
       }
@@ -715,7 +800,10 @@ async function runAgentTurnCore(
             "No encontré esa hora entre las opciones que te mostré. Estas son las opciones actuales:",
         });
         await recordOfferedSlots(organizationId, conversationId, turn);
-        await deliverReply(conversation, turn.text);
+        await deliverReply(
+          conversation,
+          toneAwareFixedReply(turn.text, profile.tone)
+        );
         return;
       }
       // Selecciones ordinales ("la primera") conservan el guardarraíl previo:
@@ -842,7 +930,10 @@ async function runAgentTurnCore(
             ? await offerGeneralAvailability({ organizationId, conversationId })
             : await offerNextAvailable({ organizationId, conversationId });
       await recordOfferedSlots(organizationId, conversationId, turn);
-      await deliverReply(conversation, turn.text);
+      await deliverReply(
+        conversation,
+        toneAwareFixedReply(turn.text, profile.tone)
+      );
       if (turn.ok) {
         publish(organizationId, {
           type: "conversation.updated",
@@ -883,7 +974,10 @@ async function runAgentTurnCore(
         cursor,
       });
       await recordOfferedSlots(organizationId, conversationId, turn);
-      await deliverReply(conversation, turn.text);
+      await deliverReply(
+        conversation,
+        toneAwareFixedReply(turn.text, profile.tone)
+      );
       if (turn.ok) {
         publish(organizationId, {
           type: "conversation.updated",
@@ -964,7 +1058,10 @@ async function runAgentTurnCore(
               });
               await deliverReply(
                 conversation,
-                `Perfecto. Tengo ${chosen.label} disponible. ¿Quieres que agende tu cita?`
+                toneAwareFixedReply(
+                  `Perfecto. Tengo ${chosen.label} disponible. ¿Quieres que agende tu cita?`,
+                  profile.tone
+                )
               );
               return;
             }
@@ -1075,7 +1172,10 @@ async function runAgentTurnCore(
               "startUtc" in action ? { startUtc: action.startUtc } : {},
           });
         }
-        await deliverReply(conversation, turn.text);
+        await deliverReply(
+          conversation,
+          toneAwareFixedReply(turn.text, profile.tone)
+        );
         if (turn.ok) {
           publish(organizationId, {
             type: "conversation.updated",
@@ -1121,7 +1221,7 @@ async function runAgentTurnCore(
         await deliverReply(
           conversation,
           action.reply
-            ? safeModelReply(action.reply)
+            ? safeQualityReply(action.reply)
             : "Entendido. Puedo seguir ayudándote por aquí."
         );
         return;
@@ -1138,7 +1238,7 @@ async function runAgentTurnCore(
         });
       }
       if (action.reply) {
-        await deliverReply(conversation, safeModelReply(action.reply));
+        await deliverReply(conversation, safeQualityReply(action.reply));
       }
       return;
     }
@@ -1148,7 +1248,7 @@ async function runAgentTurnCore(
     case "none":
       return;
     case "reply":
-      await deliverReply(conversation, safeModelReply(action.text));
+      await deliverReply(conversation, safeQualityReply(action.text));
       return;
     case "update_lead": {
       const updated = await appendLeadNote(
@@ -1170,7 +1270,7 @@ async function runAgentTurnCore(
         await deliverReply(
           conversation,
           action.reply
-            ? safeModelReply(action.reply)
+            ? safeQualityReply(action.reply)
             : "Entendido. Puedo seguir ayudándote por aquí."
         );
         return;
@@ -1181,7 +1281,7 @@ async function runAgentTurnCore(
         entityId: conversation.contactId,
       });
       if (action.reply) {
-        await deliverReply(conversation, safeModelReply(action.reply));
+        await deliverReply(conversation, safeQualityReply(action.reply));
       }
       return;
     }
@@ -1203,7 +1303,7 @@ async function runAgentTurnCore(
         "modelo"
       );
       if (claimed && action.farewell) {
-        await deliverReply(conversation, safeModelReply(action.farewell));
+        await deliverReply(conversation, safeQualityReply(action.farewell));
       }
       return;
     }

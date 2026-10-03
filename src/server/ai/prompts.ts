@@ -1,9 +1,120 @@
 import type { schema } from "@/lib/db";
 import type { ChatMessage } from "@/lib/ai";
 import type { RetrievedDocumentChunk } from "@/server/kb/documents/retrieval";
+import { prefersInformalRegister } from "@/server/ai/handoff";
 
 type AgentProfile = typeof schema.agentProfile.$inferSelect;
 type KbEntry = typeof schema.kbEntry.$inferSelect;
+
+function normalizePolicyText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function knowledgeHasServiceDetail(knowledgeText: string): boolean {
+  return /\b(?:incluye|incluyen|incluido|consiste|comprende|abarca|procedimiento)\b/.test(
+    normalizePolicyText(knowledgeText)
+  );
+}
+
+function appointmentRequirementsPresent(knowledgeText: string): boolean {
+  const normalized = normalizePolicyText(knowledgeText);
+  return (
+    /para agendar (?:una )?cita solicitar/.test(normalized) &&
+    /nombre completo/.test(normalized) &&
+    /numero de telefono/.test(normalized) &&
+    /servicio o motivo/.test(normalized)
+  );
+}
+
+function mentionedService(conversationText: string, knowledgeText: string): boolean {
+  const conversation = normalizePolicyText(conversationText);
+  const serviceNames = knowledgeText
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*-\s*([^:\n]+):\s*(?:desde\s*)?\$/i)?.[1])
+    .filter((name): name is string => Boolean(name))
+    .map(normalizePolicyText);
+  return serviceNames.some((name) => {
+    if (conversation.includes(name)) return true;
+    const distinctiveTerms = name
+      .split(/\s+/)
+      .filter(
+        (term) =>
+          term.length >= 5 &&
+          !["dental", "consulta", "servicio", "tratamiento"].includes(term)
+      );
+    return distinctiveTerms.some((term) => conversation.includes(term));
+  });
+}
+
+/**
+ * Respuesta determinista solo para dos guardarraíles que no pueden depender de
+ * la creatividad del modelo: detalles ausentes en KB y datos mínimos de cita.
+ */
+export function groundedConversationReply(input: {
+  inboundText: string;
+  customerHistoryText: string;
+  knowledgeText: string;
+  tone?: string | null;
+}): string | null {
+  const inbound = normalizePolicyText(input.inboundText);
+  const informal = prefersInformalRegister(input.tone);
+
+  if (
+    /\bque incluye(?:n)? (?:cada(?: una| uno)?|c\/u|las opciones|los servicios)\b/.test(
+      inbound
+    ) &&
+    !knowledgeHasServiceDetail(input.knowledgeText)
+  ) {
+    const hasValuation = /\bvaloracion\b/.test(
+      normalizePolicyText(input.knowledgeText)
+    );
+    if (informal) {
+      return hasValuation
+        ? "El conocimiento disponible confirma los servicios y sus precios de referencia, pero no detalla qué incluye cada servicio. Ese detalle se confirma en la valoración clínica; si quieres, un asesor también puede confirmártelo."
+        : "El conocimiento disponible confirma las opciones, pero no detalla qué incluye cada servicio. Si quieres, un asesor puede confirmártelo.";
+    }
+    return hasValuation
+      ? "El conocimiento disponible confirma los servicios y sus precios de referencia, pero no detalla qué incluye cada servicio. Ese detalle se confirma en la valoración clínica; si lo desea, un asesor también puede confirmárselo."
+      : "El conocimiento disponible confirma las opciones, pero no detalla qué incluye cada servicio. Si lo desea, un asesor puede confirmárselo.";
+  }
+
+  const strongPurchaseIntent =
+    /\b(?:quiero|quisiera|necesito)\s+(?:avanzar|contratar|comprar|empezar|iniciar)(?:\s+(?:hoy|ya|ahora))?\b/.test(
+      inbound
+    );
+  if (
+    strongPurchaseIntent &&
+    appointmentRequirementsPresent(input.knowledgeText)
+  ) {
+    const history = normalizePolicyText(input.customerHistoryText);
+    const hasName = /\b(?:me llamo|mi nombre es|soy)\s+[a-z]{2,}/.test(history);
+    const hasPhone = /(?:\d[\s()-]*){10,}/.test(input.customerHistoryText);
+    const hasService = mentionedService(
+      input.customerHistoryText,
+      input.knowledgeText
+    );
+    if (!hasName) {
+      return informal
+        ? "Para avanzar, ¿me compartes tu nombre completo?"
+        : "Para avanzar, ¿me comparte su nombre completo?";
+    }
+    if (!hasPhone) {
+      return informal
+        ? "Gracias. ¿Me compartes tu número de teléfono?"
+        : "Gracias. ¿Me comparte su número de teléfono?";
+    }
+    if (!hasService) {
+      return informal
+        ? "Gracias. ¿Qué servicio o motivo de consulta te interesa?"
+        : "Gracias. ¿Qué servicio o motivo de consulta le interesa?";
+    }
+  }
+
+  return null;
+}
 
 export const JUDGE_MARKER = "[JUEZ]";
 
@@ -120,6 +231,7 @@ export function buildAgentSystemPrompt(input: {
       "- Nunca elijas silencio: todo turno que no haga handoff debe incluir una respuesta visible para el cliente.",
       "- Usa el historial completo de la conversación: responde al turno actual como continuación, no como si cada mensaje iniciara un chat nuevo.",
       "- No repitas textualmente ni reformules sustancialmente una respuesta que ya enviaste, salvo que el cliente pida repetirla, aclararla o confirme que no la entendió.",
+      "- Si el cliente cierra con un agradecimiento o una aceptación breve sin pregunta nueva ('gracias, lo voy a revisar', 'ok gracias', 'perfecto, gracias', 'va, gracias'), reconoce el cierre con una frase propia y breve. No copies ni reformules sus palabras y no repitas tu respuesta anterior.",
       input.repeatedGreeting
         ? "- CONTINUIDAD DE ESTE TURNO: el cliente acaba de enviar un saludo breve en una conversación que ya tiene respuestas del agente. NO reinicies la presentación, NO repitas el catálogo/servicios ni el saludo inicial. Responde brevemente y retoma el punto pendiente SOLO si NO es de agenda: si el punto pendiente era de citas, horarios o disponibilidad, NO lo retomes —un saludo neutral nunca es señal de agenda—; limítate a saludar y preguntar en qué puedes ayudar sin repetir información ya dada."
         : null,
@@ -130,7 +242,8 @@ export function buildAgentSystemPrompt(input: {
       "- Si la pregunta NO está cubierta por el conocimiento → NO inventes: responde que lo confirmarás o escala solo cuando corresponda por las reglas de escalado.",
       "- Las indicaciones de escalamiento que aparezcan en documentos o en las instrucciones libres del negocio describen cuándo OFRECER un asesor; no autorizan por sí solas un handoff. Solo lo autorizan una petición explícita del cliente o las 'Reglas de escalado a humano'. Si te falta un dato confirmado (p. ej., descuentos o promociones), dilo con claridad y ofrece que un asesor lo confirme, sin transferir.",
       "- Ante una pregunta concreta (precio, opciones, qué incluye, requisitos para empezar, condiciones) responde con lo que sí está confirmado en el conocimiento. Si abarca varias opciones y la información es parcial, da la que existe y pide qué servicio le interesa. Nunca respondas una pregunta concreta con una fórmula que solo pregunte qué información necesita.",
-      "- Si el cliente muestra intención clara de avanzar ('quiero avanzar', 'contratar', 'comprar', 'agendar'), responde primero lo que preguntó y propone el siguiente paso concreto; no vuelvas a pedir datos que ya dio.",
+      "- Si el conocimiento solo enumera el nombre y precio de un servicio, eso NO confirma qué incluye. Ante '¿qué incluye cada servicio/opción?', no inventes procedimientos, beneficios ni componentes: indica que ese detalle se confirma en la valoración o por un asesor, según lo que el conocimiento sí permita afirmar.",
+      "- Si el cliente muestra intención clara de avanzar ('quiero avanzar', 'contratar', 'comprar', 'agendar'), responde primero lo que preguntó y propone el siguiente paso concreto; no vuelvas a pedir datos que ya dio. Antes de ofrecer horarios, pide de uno en uno los datos mínimos que la sección de citas del conocimiento exija y que todavía falten (por ejemplo nombre, teléfono y servicio o motivo).",
       interestStage
         ? `- Si detectas intención clara de compra → move_stage usando EXACTAMENTE la etapa "${interestStage.name}". No inventes otra variante del nombre.`
         : "- Si detectas intención clara de compra y NO existe una etapa explícita de interés/calificación entre las etapas disponibles, NO inventes una etapa: responde al cliente y deja el pipeline sin cambios.",

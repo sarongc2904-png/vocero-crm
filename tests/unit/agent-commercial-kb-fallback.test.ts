@@ -485,7 +485,7 @@ describe("pipeline — pregunta concreta con handoff no autorizado", () => {
     expect(lastOutboundText()).not.toBe(GENERIC);
   });
 
-  it("'¿Qué incluye cada una?' llega al modelo con el catálogo gracias al contexto", async () => {
+  it("'¿Qué incluye cada una?' recupera el catálogo y se abstiene si no hay detalle", async () => {
     chatJson.mockResolvedValueOnce({
       ok: true,
       data: { action: "reply", text: "¿Sobre qué servicio quiere el detalle?" },
@@ -500,7 +500,100 @@ describe("pipeline — pregunta concreta con handoff no autorizado", () => {
     await runAgentTurn("cv_lab");
 
     expect(recordedDocumentChunks().length).toBeGreaterThan(0);
-    expect(modelMessages(0)).toContain("2. SERVICIOS Y PRECIOS DE REFERENCIA");
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(lastOutboundText()).toContain("no detalla qué incluye cada servicio");
+  });
+
+  it.each([
+    "gracias, lo voy a revisar",
+    "ok gracias",
+    "perfecto, gracias",
+  ])("cierra con una respuesta propia sin hacer eco de '%s'", async (closing) => {
+    chatJson.mockResolvedValueOnce({
+      ok: true,
+      data: { action: "reply", text: closing },
+    });
+    queueTurn([closing]);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(lastOutboundText()).toBe("Con gusto. Quedo a sus órdenes.");
+    expect(lastOutboundText().toLocaleLowerCase("es-MX")).not.toBe(
+      closing.toLocaleLowerCase("es-MX")
+    );
+  });
+
+  it.each(["va, gracias", "ok"])(
+    "no repite la respuesta anterior ante la aceptación breve '%s'",
+    async (acknowledgement) => {
+      const previous = "La limpieza cuesta $700 MXN. Puede revisarlo con calma.";
+      chatJson.mockResolvedValueOnce({
+        ok: true,
+        data: { action: "reply", text: previous },
+      });
+      queueTurn(["¿Cuánto cuesta la limpieza?", acknowledgement], previous);
+
+      const { runAgentTurn } = await import("@/server/ai/pipeline");
+      await runAgentTurn("cv_lab");
+
+      expect(chatJson).not.toHaveBeenCalled();
+      expect(lastOutboundText()).toBe("Con gusto. Quedo a sus órdenes.");
+      expect(lastOutboundText()).not.toBe(previous);
+    }
+  );
+
+  it("el aviso fijo de handoff usa usted por defecto", async () => {
+    queueTurn(["Quiero hablar con un asesor"]);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(lastOutboundText()).toBe(
+      "Claro. Voy a pasar su conversación a un asesor. La IA queda en pausa mientras le atienden."
+    );
+    expect(lastOutboundText()).not.toMatch(/\btu\b|\bte\b/i);
+  });
+
+  it("no inventa qué incluye cada servicio cuando la KB solo confirma nombres y precios", async () => {
+    chatJson.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        action: "reply",
+        text: "La limpieza incluye ultrasonido y pulido; los brackets incluyen diagnóstico y controles.",
+      },
+    });
+    queueTurn([
+      "Hola, ¿qué opciones manejan?",
+      "¿Cuánto cuesta cada opción?",
+      "¿Qué incluye cada una?",
+    ]);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(lastOutboundText()).toContain("no detalla qué incluye cada servicio");
+    expect(lastOutboundText()).toContain("valoración clínica");
+    expect(lastOutboundText()).not.toMatch(/ultrasonido|pulido|diagnóstico|controles/i);
+  });
+
+  it("'quiero avanzar hoy' pide el primer dato de cita faltante antes de ofrecer horarios", async () => {
+    chatJson.mockResolvedValueOnce({
+      ok: true,
+      data: { action: "reply", text: "Claro. Le muestro los horarios disponibles." },
+    });
+    queueTurn(["Perfecto, quiero avanzar hoy. ¿Cuál es el siguiente paso?"]);
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_lab");
+
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(lastOutboundText()).toBe(
+      "Para avanzar, ¿me comparte su nombre completo?"
+    );
+    expect(lastOutboundText()).not.toMatch(/horarios|disponibilidad/i);
   });
 
   it("el reintento usa un contrato que excluye handoff", async () => {
@@ -637,7 +730,8 @@ describe("pipeline — pregunta concreta con handoff no autorizado", () => {
 
     expect(handedOff()).toBe(false);
     expect(updates.some((values) => values.handoffAt instanceof Date)).toBe(false);
-    expect(lastOutboundText()).toBe("Entendido. ¿Le ayudo con algo más?");
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(lastOutboundText()).toBe("Con gusto. Quedo a sus órdenes.");
   });
 
   it("oferta de asesor + 'sí': si el turno llega al modelo, su handoff está autorizado", () => {

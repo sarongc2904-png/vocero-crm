@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  closingAcknowledgementReply,
+  handoffNotice,
   matchesConfiguredEscalation,
   matchesHandoffIntent,
   rejectedHandoffFallback,
   shouldAllowModelHandoff,
+  toneAwareFixedReply,
 } from "@/server/ai/handoff";
 
 describe("patrón de respaldo de handoff (FR-022 / SC-006)", () => {
@@ -151,5 +154,30 @@ describe("fallback tras handoff rechazado", () => {
     );
 
     expect(source).toContain("rejectedHandoffFallback(inboundText, profile.tone)");
+  });
+});
+
+describe("copias fijas respetan el tono del perfil", () => {
+  it("usa usted por defecto en handoff, cierre y oferta de horarios", () => {
+    expect(handoffNotice(null)).toContain("su conversación");
+    expect(handoffNotice(null)).toContain("le atienden");
+    expect(closingAcknowledgementReply(null)).toBe(
+      "Con gusto. Quedo a sus órdenes."
+    );
+    expect(
+      toneAwareFixedReply(
+        "Estas son mis próximas opciones:\n• 10:00\n¿Cuál te funciona mejor?",
+        null
+      )
+    ).toContain("¿Cuál le funciona mejor?");
+  });
+
+  it("conserva tuteo solo cuando profile.tone lo solicita", () => {
+    const tone = "Cercano e informal; tutea al cliente";
+    expect(handoffNotice(tone)).toContain("tu conversación");
+    expect(closingAcknowledgementReply(tone)).toContain("necesitas");
+    expect(
+      toneAwareFixedReply("¿Te funciona alguno?", tone)
+    ).toBe("¿Te funciona alguno?");
   });
 });
