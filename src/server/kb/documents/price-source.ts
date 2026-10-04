@@ -10,6 +10,7 @@ export type ManualPriceSourceEntry = {
 
 export type PriceSourceFailureReason =
   | "malformed_price_line"
+  | "no_price_lines"
   | "truncated_price_line"
   | "conflicting_price"
   | "load_error"
@@ -42,6 +43,28 @@ function normalize(value: string): string {
     .replace(/[ \t]+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+const PRICE_NUMBER = String.raw`\d(?:[\d.,]*\d)?`;
+const PRICE_APPEARANCE = new RegExp(
+  String.raw`(?:\$\s*${PRICE_NUMBER}|${PRICE_NUMBER}\s*(?:pesos|mxn|mn)\b|\b(?:pesos|mxn|mn)\s*${PRICE_NUMBER})`,
+  "i"
+);
+const PRICE_LIST_MARKER = /^(?:[-•*]|\d+[.)])(?:\s|$)/;
+// Separa entradas concisas de catálogo de prosa narrativa: el demo mide
+// 27–50 caracteres por precio; sus líneas narrativas miden 72 y 186.
+const SHORT_PRICE_LINE_MAX_LENGTH = 60;
+
+function hasPriceAppearance(value: string): boolean {
+  return PRICE_APPEARANCE.test(value.normalize("NFKC"));
+}
+
+function hasMalformedPriceEntryShape(value: string): boolean {
+  const line = value.trim();
+  return (
+    hasPriceAppearance(line) &&
+    (PRICE_LIST_MARKER.test(line) || line.includes("|") || line.length <= SHORT_PRICE_LINE_MAX_LENGTH)
+  );
 }
 
 function priceCandidate(
@@ -78,8 +101,12 @@ export function extractPriceLinesFromText(text: string): {
   const lines: string[] = [];
   let complete = true;
   for (const raw of text.split(/\r?\n/)) {
+    if (raw.includes("|") && hasPriceAppearance(raw)) {
+      complete = false;
+      continue;
+    }
     const candidate = priceCandidate(raw, "text", "manual", null);
-    if (candidate === "malformed") {
+    if (candidate === "malformed" || (!candidate && hasMalformedPriceEntryShape(raw))) {
       complete = false;
       continue;
     }
@@ -87,7 +114,7 @@ export function extractPriceLinesFromText(text: string): {
     seen.add(candidate.normalized);
     lines.push(candidate.line);
   }
-  return { lines, complete };
+  return { lines, complete: complete && lines.length > 0 };
 }
 
 function overlapLength(left: string, right: string): number {
@@ -118,8 +145,11 @@ export function buildCompletePriceSource(input: {
     uniqueManualTexts.add(textKey);
     const lines = entry.text.split(/\r?\n/);
     for (const raw of lines) {
+      if (raw.includes("|") && hasPriceAppearance(raw)) {
+        return failure("malformed_price_line", `manual:${entry.id}`);
+      }
       const candidate = priceCandidate(raw, entry.id, `manual:${entry.id}`, null);
-      if (candidate === "malformed") {
+      if (candidate === "malformed" || (!candidate && hasMalformedPriceEntryShape(raw))) {
         return failure("malformed_price_line", `manual:${entry.id}`);
       }
       if (candidate) candidates.push(candidate);
@@ -140,18 +170,25 @@ export function buildCompletePriceSource(input: {
     const chunks = [...unordered].sort((a, b) => a.position - b.position);
     const documentCandidates: PriceCandidate[] = [];
     const rawLines: string[] = [];
+    let hasUnparsedPriceEntryShape = false;
     for (const chunk of chunks) {
       const lines = chunk.content.split(/\r?\n/);
-      lines.forEach((raw, index) => {
+      for (const [index, raw] of lines.entries()) {
         const trimmed = raw.trim();
         if (trimmed) rawLines.push(trimmed);
         const boundary = index === 0 ? "first" : index === lines.length - 1 ? "last" : null;
+        if (raw.includes("|") && hasPriceAppearance(raw)) {
+          return failure("malformed_price_line", documentId);
+        }
         const candidate = priceCandidate(raw, chunk.id, documentId, boundary);
         if (candidate === "malformed") {
           return failure("malformed_price_line", documentId);
         }
+        if (!candidate && hasMalformedPriceEntryShape(raw)) {
+          hasUnparsedPriceEntryShape = true;
+        }
         if (candidate) documentCandidates.push(candidate);
-      });
+      }
     }
 
     const normalizedLines = [...new Set(rawLines.map(normalize))];
@@ -199,6 +236,9 @@ export function buildCompletePriceSource(input: {
         }
       }
     }
+    if (hasUnparsedPriceEntryShape) {
+      return failure("malformed_price_line", documentId);
+    }
     candidates.push(...retained);
   }
 
@@ -215,5 +255,5 @@ export function buildCompletePriceSource(input: {
     seenLines.add(candidate.normalized);
     lines.push(candidate.line);
   }
-  return { complete: true, lines };
+  return lines.length > 0 ? { complete: true, lines } : failure("no_price_lines", "all");
 }

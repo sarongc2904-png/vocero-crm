@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { chunkDocumentText } from "@/server/kb/documents/chunking";
 import {
   buildCompletePriceSource,
+  extractPriceLinesFromText,
   type ManualPriceSourceEntry,
 } from "@/server/kb/documents/price-source";
+import { groundedConversationReply } from "@/server/ai/prompts";
 import {
   loadCompleteApprovedDocumentChunksWithStore,
   type CompleteDocumentChunkRow,
@@ -29,6 +31,14 @@ const DEMO_DOCUMENT = [
   ...PRICE_LINES,
   "Los precios son de referencia y pueden cambiar después de la valoración clínica.",
 ].join("\n");
+
+const DEMO_NARRATIVE_PRICE_LINE =
+  "Respuesta: La limpieza dental tiene un precio de referencia de $700 MXN. Si durante la valoración se requiere un procedimiento adicional, el dentista se lo explicará antes de realizarlo.";
+
+function unmarkedPriceLine(length: number): string {
+  const suffix = " $700 MXN";
+  return `${"x".repeat(length - suffix.length)}${suffix}`;
+}
 
 function rowsFromText(
   text: string,
@@ -168,6 +178,153 @@ describe("fuente completa DB-only", () => {
 });
 
 describe("extracción comercial completa", () => {
+  const malformedMixedPriceList = [
+    "- Limpieza facial: $700 MXN",
+    "- Peeling $900 MXN",
+    "- Botox: $3,500 MXN",
+  ].join("\n");
+
+  it.each([
+    ["pesos", "- Limpieza facial: 700 pesos"],
+    ["MXN", "- Limpieza facial: 700 MXN"],
+    ["MN", "- Limpieza facial: 700 MN"],
+    ["tabla", "| Limpieza facial | $700 MXN |"],
+    ["sin marcador", "Peeling $900 MXN"],
+    ["frase corta", "Todo desde $700 MXN"],
+  ])("apariencia de precio %s no aceptada obliga respaldo", (_label, text) => {
+    const result = buildCompletePriceSource({
+      organizationId: "org_a",
+      manualEntries: [{ id: "kb_price", text }],
+      documentChunks: [],
+    });
+    expect(result).toMatchObject({
+      complete: false,
+      lines: [],
+      reason: "malformed_price_line",
+    });
+  });
+
+  it.each([
+    ["guion", `- ${"x".repeat(130)} $700 MXN`],
+    ["viñeta", `• ${"x".repeat(130)} $700 MXN`],
+    ["asterisco", `* ${"x".repeat(130)} $700 MXN`],
+    ["numeración", `1. ${"x".repeat(130)} $700 MXN`],
+    ["numeración con paréntesis", `2) ${"x".repeat(130)} $700 MXN`],
+    ["tabla larga", `| ${"x".repeat(130)} | $700 MXN |`],
+  ])("la forma de lista %s invalida aunque la línea sea larga", (_label, text) => {
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [{ id: "kb_shaped_price", text }],
+        documentChunks: [],
+      })
+    ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
+  });
+
+  it("aplica el umbral a ambos lados sin confundir prosa larga", () => {
+    const below = unmarkedPriceLine(59);
+    const above = unmarkedPriceLine(61);
+    expect(below).toHaveLength(59);
+    expect(above).toHaveLength(61);
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [{ id: "kb_below", text: below }],
+        documentChunks: [],
+      })
+    ).toMatchObject({ complete: false, reason: "malformed_price_line" });
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [{ id: "kb_above", text: above }],
+        documentChunks: [],
+      })
+    ).toMatchObject({ complete: false, reason: "no_price_lines" });
+  });
+
+  it("ignora la línea narrativa larga y conserva los diez precios estrictos del demo", () => {
+    expect(DEMO_NARRATIVE_PRICE_LINE).toHaveLength(186);
+    expect(extractPriceLinesFromText(`${DEMO_DOCUMENT}\n${DEMO_NARRATIVE_PRICE_LINE}`)).toEqual({
+      complete: true,
+      lines: PRICE_LINES,
+    });
+  });
+
+  it.each([
+    "Horario: 10 a 14 hrs",
+    "Tel 8671234567",
+    "Duración 30 minutos",
+    "Cita con 2 horas de aviso",
+  ])("%s no se confunde con una línea de precio", (text) => {
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [{ id: "kb_information", text }],
+        documentChunks: [],
+      })
+    ).toMatchObject({ complete: false, lines: [], reason: "no_price_lines" });
+  });
+
+  it("un precio malformado dentro de un documento invalida toda la fuente", () => {
+    const result = buildCompletePriceSource({
+      organizationId: "org_a",
+      manualEntries: [],
+      documentChunks: rowsFromText(malformedMixedPriceList) as never,
+    });
+    expect(result).toMatchObject({
+      complete: false,
+      lines: [],
+      reason: "malformed_price_line",
+    });
+  });
+
+  it("una fuente documental malformada deja la pregunta en manos del modelo", () => {
+    const completePriceSource = buildCompletePriceSource({
+      organizationId: "org_a",
+      manualEntries: [],
+      documentChunks: rowsFromText(malformedMixedPriceList) as never,
+    });
+    expect(
+      groundedConversationReply({
+        inboundText: "¿Cuánto cuesta cada servicio y qué incluye?",
+        customerHistoryText: "",
+        knowledgeText: malformedMixedPriceList,
+        completePriceSource,
+      })
+    ).toBeNull();
+  });
+
+  it("el mismo precio malformado en una entrada manual invalida toda la fuente", () => {
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [{ id: "kb_malformed", text: malformedMixedPriceList }],
+        documentChunks: [],
+      })
+    ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
+  });
+
+  it("deduplica líneas iguales aunque las entradas manuales completas sean distintas", () => {
+    const shared = "- Consulta de valoración: $300 MXN";
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [
+          { id: "kb_1", text: `Nota uno\n${shared}` },
+          { id: "kb_2", text: `Nota dos\n${shared}` },
+        ],
+        documentChunks: [],
+      })
+    ).toEqual({ complete: true, lines: [shared] });
+  });
+
+  it("el documento demo conserva sus diez precios y ninguna línea malformada", () => {
+    expect(extractPriceLinesFromText(DEMO_DOCUMENT)).toEqual({
+      complete: true,
+      lines: PRICE_LINES,
+    });
+  });
+
   it("barre cortes reales de 0 a 2,000: diez líneas exactas o respaldo, nunca parcial", () => {
     for (let padding = 0; padding <= 2_000; padding += 17) {
       const rows = rowsFromText(`${"x".repeat(padding)}\n${DEMO_DOCUMENT}`);
