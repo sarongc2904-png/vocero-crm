@@ -1,6 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getEnv } from "@/lib/env";
-import { MetaApiError, graphRequest } from "@/lib/meta/client";
+import {
+  isAbortOrTimeoutError,
+  MetaApiError,
+  graphRequest,
+} from "@/lib/meta/client";
 
 /**
  * Embedded Signup (modo agencia): el cliente elige su WABA y su número
@@ -75,8 +79,11 @@ export function verifyEmbeddedSignupState(input: {
   );
 }
 
-/** Intercambia el `code` de un solo uso por un token de acceso de usuario. */
-export async function exchangeCodeForToken(code: string): Promise<string> {
+/** Intercambia el `code` de un solo uso por el token de acceso de Embedded Signup. */
+export async function exchangeCodeForToken(
+  code: string,
+  signal?: AbortSignal
+): Promise<string> {
   const env = getEnv();
   if (!env.META_APP_ID || !env.META_APP_SECRET) {
     throw new EmbeddedSignupError("Embedded Signup no está configurado en esta instancia");
@@ -88,40 +95,20 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
   url.searchParams.set("client_secret", env.META_APP_SECRET);
   url.searchParams.set("code", code);
 
-  const res = await fetch(url.toString());
-  const json = (await res.json().catch(() => null)) as
-    | { access_token?: string; error?: { message?: string } }
-    | null;
+  const res = await fetch(url.toString(), signal ? { signal } : undefined);
+  let json: { access_token?: string; error?: { message?: string } } | null;
+  try {
+    json = (await res.json()) as typeof json;
+  } catch (err) {
+    if (isAbortOrTimeoutError(err, signal)) throw err;
+    json = null;
+  }
   if (!res.ok || !json?.access_token) {
     throw new EmbeddedSignupError(
       json?.error?.message ?? "Meta rechazó el código de Embedded Signup"
     );
   }
   return json.access_token;
-}
-
-/**
- * Token de usuario → token de larga duración (~60 días). Best-effort: si
- * falla, se sigue con el corto — más vale una conexión que expira pronto que
- * ninguna.
- */
-export async function extendToken(shortLivedToken: string): Promise<string> {
-  const env = getEnv();
-  if (!env.META_APP_ID || !env.META_APP_SECRET) return shortLivedToken;
-  try {
-    const url = new URL(
-      `${env.META_GRAPH_BASE_URL}/${env.META_GRAPH_API_VERSION}/oauth/access_token`
-    );
-    url.searchParams.set("grant_type", "fb_exchange_token");
-    url.searchParams.set("client_id", env.META_APP_ID);
-    url.searchParams.set("client_secret", env.META_APP_SECRET);
-    url.searchParams.set("fb_exchange_token", shortLivedToken);
-    const res = await fetch(url.toString());
-    const json = (await res.json().catch(() => null)) as { access_token?: string } | null;
-    return json?.access_token ?? shortLivedToken;
-  } catch {
-    return shortLivedToken;
-  }
 }
 
 /**
@@ -150,30 +137,187 @@ export function registrationPinFor(phoneNumberId: string): string {
  * Embedded Signup para que el número empiece a poder enviar/recibir — Meta lo
  * documenta como paso obligatorio del flujo.
  *
- * Un número ya registrado responde con un error específico que se ignora
- * (best-effort): no es una falla del proceso, es el caso normal cuando el
- * cliente reconecta un número que ya usaba.
+ * Meta documenta 133006 como número que necesita reverificación. No se
+ * interpreta ningún otro 4xx por texto: sin un código documentado, falla
+ * cerrado. Un registro o re-registro aceptado responde success=true.
  */
+export type PhoneRegistrationResult =
+  | { status: "registered" }
+  | { status: "pending"; code: "phone_verification_pending" }
+  | {
+      status: "failed";
+      code:
+        | "phone_registration_failed"
+        | "registration_pin_invalid"
+        | "registration_attempts_exceeded"
+        | "meta_unavailable"
+        | "meta_timeout";
+    };
+
+function safeDiagnosticValue(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return String(value);
+  }
+  if (typeof value === "string" && /^\d{1,10}$/.test(value)) return value;
+  return undefined;
+}
+
+function safeTraceId(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function logMetaDiagnostics(err: MetaApiError): void {
+  const details = err.details as
+    | { error?: { error_subcode?: unknown; fbtrace_id?: unknown } }
+    | null;
+  const diagnostic = {
+    error_code: safeDiagnosticValue(err.code),
+    subcode: safeDiagnosticValue(details?.error?.error_subcode),
+    fbtrace_id: safeTraceId(details?.error?.fbtrace_id),
+  };
+  console.warn("[embedded-signup]", diagnostic);
+}
+
+function safeRegistrationState(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Z_]{1,32}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function logUnknownRegistrationState(phone: {
+  status?: string;
+  code_verification_status?: string;
+}): void {
+  const status = safeRegistrationState(phone.status);
+  const codeVerificationStatus = safeRegistrationState(
+    phone.code_verification_status
+  );
+  console.warn("[embedded-signup-state]", {
+    ...(status ? { status } : {}),
+    ...(codeVerificationStatus
+      ? { code_verification_status: codeVerificationStatus }
+      : {}),
+  });
+}
+
 export async function registerPhoneNumberIfNeeded(
   phoneNumberId: string,
-  token: string
-): Promise<void> {
-  const pin = registrationPinFor(phoneNumberId);
+  token: string,
+  signal?: AbortSignal
+): Promise<PhoneRegistrationResult> {
   try {
-    await graphRequest(`${phoneNumberId}/register`, {
-      method: "POST",
+    const phone = await graphRequest<{
+      status?: string;
+      code_verification_status?: string;
+    }>(`${phoneNumberId}?fields=status,code_verification_status`, {
       token,
-      body: { messaging_product: "whatsapp", pin },
+      signal,
     });
-  } catch (err) {
-    if (err instanceof MetaApiError && err.status >= 400 && err.status < 500) {
-      // Ya registrado, o el negocio aún no completó verificación: en ambos
-      // casos el resto de la conexión (guardar credenciales) sigue sirviendo.
-      console.warn(
-        "[embedded-signup] registro de número omitido por respuesta de Meta"
-      );
-      return;
+    if (phone.status === "CONNECTED") return { status: "registered" };
+    if (phone.status !== "DISCONNECTED") {
+      logUnknownRegistrationState(phone);
+      return { status: "failed", code: "phone_registration_failed" };
     }
-    throw err;
+    if (phone.code_verification_status === "NOT_VERIFIED") {
+      return { status: "pending", code: "phone_verification_pending" };
+    }
+    if (phone.code_verification_status !== "VERIFIED") {
+      logUnknownRegistrationState(phone);
+      return { status: "failed", code: "phone_registration_failed" };
+    }
+
+    const pin = registrationPinFor(phoneNumberId);
+    const result = await graphRequest<{ success?: boolean | string }>(
+      `${phoneNumberId}/register`,
+      {
+        method: "POST",
+        token,
+        body: { messaging_product: "whatsapp", pin },
+        signal,
+      }
+    );
+    return result?.success === true || result?.success === "true"
+      ? { status: "registered" }
+      : { status: "failed", code: "phone_registration_failed" };
+  } catch (err) {
+    if (isAbortOrTimeoutError(err, signal)) {
+      return { status: "failed", code: "meta_timeout" };
+    }
+    if (err instanceof MetaApiError) {
+      logMetaDiagnostics(err);
+      if (err.code === 133005) {
+        return { status: "failed", code: "registration_pin_invalid" };
+      }
+      if (err.code === 133016) {
+        return { status: "failed", code: "registration_attempts_exceeded" };
+      }
+      if (err.code === 133006) {
+        return { status: "pending", code: "phone_verification_pending" };
+      }
+      if (err.status === 0 || err.status >= 500) {
+        return { status: "failed", code: "meta_unavailable" };
+      }
+    }
+    return { status: "failed", code: "phone_registration_failed" };
+  }
+}
+
+type WabaPhoneNumbersPage = {
+  data?: Array<{ id?: string }>;
+  paging?: {
+    cursors?: { after?: unknown };
+    next?: unknown;
+  };
+};
+
+/** Verifica token↔WABA↔número recorriendo todas las páginas de Graph. */
+export async function verifyPhoneNumberBelongsToWaba(
+  wabaId: string,
+  phoneNumberId: string,
+  token: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  let path = `${encodeURIComponent(wabaId)}/phone_numbers?fields=id&limit=100`;
+  const seenCursors = new Set<string>();
+  let pageCount = 0;
+
+  try {
+    while (true) {
+      if (pageCount >= 10) {
+        throw new EmbeddedSignupError(
+          "No pudimos verificar el número con Meta. Intenta nuevamente."
+        );
+      }
+      pageCount += 1;
+      const page = await graphRequest<WabaPhoneNumbersPage>(path, {
+        token,
+        signal,
+      });
+      if (page.data?.some((phone) => phone.id === phoneNumberId)) return true;
+      if (!page.paging?.next) return false;
+
+      const after = page.paging.cursors?.after;
+      if (
+        typeof after !== "string" ||
+        after.length === 0 ||
+        after.length > 2048 ||
+        seenCursors.has(after)
+      ) {
+        throw new EmbeddedSignupError(
+          "No pudimos verificar el número con Meta. Intenta nuevamente."
+        );
+      }
+      seenCursors.add(after);
+      path = `${encodeURIComponent(wabaId)}/phone_numbers?fields=id&limit=100&after=${encodeURIComponent(after)}`;
+    }
+  } catch (err) {
+    if (isAbortOrTimeoutError(err, signal)) throw err;
+    if (err instanceof MetaApiError) logMetaDiagnostics(err);
+    if (err instanceof EmbeddedSignupError) throw err;
+    throw new EmbeddedSignupError(
+      "No pudimos verificar el número con Meta. Intenta nuevamente."
+    );
   }
 }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { isEmbeddedSignupConfigured } from "@/lib/env";
+import { isAbortOrTimeoutError } from "@/lib/meta/client";
 import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
   assertPhoneNumberAvailableForOrg,
@@ -9,14 +10,20 @@ import {
 } from "@/server/whatsapp/credentials";
 import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
 import {
-  EmbeddedSignupError,
   exchangeCodeForToken,
-  extendToken,
   registerPhoneNumberIfNeeded,
+  verifyPhoneNumberBelongsToWaba,
   verifyEmbeddedSignupState,
 } from "@/server/whatsapp/embedded-signup";
 
 export const dynamic = "force-dynamic";
+
+const META_REQUEST_TIMEOUT_MS = 10_000;
+const META_TIMEOUT_MESSAGE = "Meta tardó demasiado en responder. Intenta nuevamente.";
+
+function metaRequestSignal(): AbortSignal {
+  return AbortSignal.timeout(META_REQUEST_TIMEOUT_MS);
+}
 
 const bodySchema = z.object({
   code: z.string().trim().min(1),
@@ -70,30 +77,107 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
 
   let token: string;
   try {
-    const shortLived = await exchangeCodeForToken(body.data.code);
-    token = await extendToken(shortLived);
+    token = await exchangeCodeForToken(body.data.code, metaRequestSignal());
   } catch (err) {
-    if (err instanceof EmbeddedSignupError) {
-      return apiError(422, "exchange_failed", err.message);
+    if (isAbortOrTimeoutError(err)) {
+      return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
     }
-    throw err;
+    return apiError(
+      422,
+      "token_exchange_failed",
+      "No pudimos autorizar la conexión con Meta. Intenta nuevamente."
+    );
   }
 
-  const check = await testConnection(body.data.phoneNumberId, token);
+  try {
+    const belongsToWaba = await verifyPhoneNumberBelongsToWaba(
+      body.data.wabaId,
+      body.data.phoneNumberId,
+      token,
+      metaRequestSignal()
+    );
+    if (!belongsToWaba) {
+      return apiError(
+        422,
+        "phone_waba_mismatch",
+        "El número seleccionado no pertenece a la cuenta de WhatsApp indicada."
+      );
+    }
+  } catch (err) {
+    if (isAbortOrTimeoutError(err)) {
+      return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
+    }
+    return apiError(
+      503,
+      "phone_waba_check_failed",
+      "No pudimos verificar el número con Meta. Intenta nuevamente."
+    );
+  }
+
+  const check = await testConnection(
+    body.data.phoneNumberId,
+    token,
+    metaRequestSignal()
+  );
   if (!check.ok) {
-    const status = check.code === "meta_unavailable" ? 503 : 422;
+    const status =
+      check.code === "meta_unavailable" || check.code === "meta_timeout" ? 503 : 422;
     return apiError(status, check.code, check.message);
   }
 
-  // Best-effort, en ese orden: registrar el número y suscribir el webhook no
-  // deben impedir guardar una conexión que Meta ya validó arriba.
-  await registerPhoneNumberIfNeeded(body.data.phoneNumberId, token).catch(() =>
-    console.warn(
-      "[embedded-signup] no se pudo registrar el número; la conexión validada continuará"
-    )
+  const registration = await registerPhoneNumberIfNeeded(
+    body.data.phoneNumberId,
+    token,
+    metaRequestSignal()
   );
+  if (registration.status === "pending") {
+    return apiError(
+      409,
+      registration.code,
+      "El número aún tiene una verificación pendiente en Meta. Complétala e intenta nuevamente."
+    );
+  }
+  if (registration.status === "failed") {
+    if (registration.code === "meta_timeout") {
+      return apiError(503, registration.code, META_TIMEOUT_MESSAGE);
+    }
+    if (registration.code === "registration_pin_invalid") {
+      return apiError(
+        422,
+        registration.code,
+        "Meta rechazó el PIN de verificación. Restablécelo en WhatsApp Manager antes de intentar nuevamente."
+      );
+    }
+    if (registration.code === "registration_attempts_exceeded") {
+      return apiError(
+        422,
+        registration.code,
+        "Meta bloqueó temporalmente nuevos intentos de registro. Espera antes de intentar nuevamente."
+      );
+    }
+    const unavailable = registration.code === "meta_unavailable";
+    return apiError(
+      unavailable ? 503 : 422,
+      registration.code,
+      unavailable
+        ? "Meta no está disponible en este momento. Intenta nuevamente."
+        : "No pudimos registrar el número en Meta. Revisa su configuración e intenta nuevamente."
+    );
+  }
 
-  const subscribed = await subscribeAppToWaba(body.data.wabaId, token);
+  let subscribed: boolean;
+  try {
+    subscribed = await subscribeAppToWaba(
+      body.data.wabaId,
+      token,
+      metaRequestSignal()
+    );
+  } catch (err) {
+    if (isAbortOrTimeoutError(err)) {
+      return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
+    }
+    throw err;
+  }
   if (!subscribed) {
     return apiError(
       422,

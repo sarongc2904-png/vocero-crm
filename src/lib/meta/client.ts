@@ -36,12 +36,24 @@ export class MetaApiError extends Error {
   }
 }
 
+export function isAbortOrTimeoutError(
+  error: unknown,
+  signal?: AbortSignal
+): boolean {
+  return (
+    signal?.aborted === true ||
+    (error instanceof Error &&
+      (error.name === "AbortError" || error.name === "TimeoutError"))
+  );
+}
+
 export async function graphRequest<T>(
   path: string,
   opts: {
     method?: "GET" | "POST" | "DELETE";
     token: string;
     body?: unknown;
+    signal?: AbortSignal;
   }
 ): Promise<T> {
   const env = getEnv();
@@ -57,8 +69,10 @@ export async function graphRequest<T>(
           : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
   } catch (cause) {
+    if (isAbortOrTimeoutError(cause, opts.signal)) throw cause;
     throw new MetaApiError("No se pudo contactar la API de Meta", {
       status: 0,
       details: cause,

@@ -1,5 +1,92 @@
-import { describe, expect, it } from "vitest";
-import { MetaApiError, normalizeMx, normalizeRecipient } from "@/lib/meta/client";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  graphRequest,
+  MetaApiError,
+  normalizeMx,
+  normalizeRecipient,
+} from "@/lib/meta/client";
+
+beforeAll(() => {
+  process.env.APP_BASE_URL = "http://localhost:3000";
+  process.env.DATABASE_URL = "postgresql://t:t@localhost:5432/t";
+  process.env.BETTER_AUTH_SECRET = "secret-de-prueba-meta-client";
+  process.env.ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+  process.env.META_WEBHOOK_VERIFY_TOKEN = "verify-test";
+  process.env.META_GRAPH_BASE_URL = "https://graph.facebook.com";
+  process.env.META_GRAPH_API_VERSION = "v25.0";
+});
+
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("graphRequest AbortSignal", () => {
+  it("sin signal conserva exactamente los argumentos de fetch de 6b6efa0", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ id: "pn_1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await graphRequest("pn_1?fields=id", { token: "token-prueba" });
+
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      "https://graph.facebook.com/v25.0/pn_1?fields=id",
+      {
+        method: "GET",
+        headers: { Authorization: "Bearer token-prueba" },
+        body: undefined,
+      }
+    );
+  });
+
+  it("con signal ya abortado cancela y conserva AbortError distinguible", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        init?.signal?.throwIfAborted();
+        return Response.json({ ok: true });
+      })
+    );
+
+    const error = await graphRequest("pn_1", {
+      token: "token-prueba",
+      signal: controller.signal,
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(DOMException);
+    expect(error).toMatchObject({ name: "AbortError" });
+    expect(error).not.toBeInstanceOf(MetaApiError);
+  });
+
+  it("aborta una petición durante la espera y conserva AbortError", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init?: RequestInit) => {
+          if (!init?.signal) return Promise.reject(new Error("signal ausente"));
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("texto crudo", "AbortError"))
+            );
+          });
+        }
+      )
+    );
+
+    const pending = graphRequest("pn_1", {
+      token: "token-prueba",
+      signal: controller.signal,
+    });
+    controller.abort();
+    const error = await pending.catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(DOMException);
+    expect(error).toMatchObject({ name: "AbortError" });
+    expect(error).not.toBeInstanceOf(MetaApiError);
+  });
+});
 
 describe("normalizeRecipient", () => {
   it("México móvil legado: 521 + 10 dígitos → 52 + 10 dígitos", () => {
