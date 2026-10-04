@@ -55,8 +55,7 @@ type SelectedNumber = { wabaId: string; phoneNumberId: string };
 
 // Mensajes fijos: nunca se muestra el texto que manda Meta.
 const META_ERROR_MESSAGE = "No pudimos completar la conexión con Meta.";
-const PARTIAL_MESSAGE =
-  "Meta terminó sin un número de WhatsApp para conectar. Intenta de nuevo y elige un número.";
+const PARTIAL_MESSAGE = "No pudimos completar la conexión. Inténtalo de nuevo.";
 const TIMEOUT_MESSAGE = "Meta no confirmó el número a tiempo. Intenta de nuevo.";
 
 let sdkLoadPromise: Promise<void> | null = null;

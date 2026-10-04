@@ -8,10 +8,9 @@ import {
 } from "@/lib/meta/embedded-signup-message";
 
 /**
- * Embedded Signup v4: Meta añade variantes FINISH_* y reporta los errores como
- * CANCEL con error_message/error_code. El listener anterior solo reconocía
- * "FINISH" exacto y "ERROR": las variantes nuevas dejaban el botón colgado y
- * los errores se trataban como una cancelación silenciosa.
+ * Solo FINISH exacto representa una selección completa. Las variantes
+ * FINISH_* describen otros desenlaces y se cierran como parciales aunque
+ * incluyan IDs.
  */
 
 const ORIGIN = "https://www.facebook.com";
@@ -62,12 +61,10 @@ describe("FINISH", () => {
     "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
     "FINISH_OBO_MIGRATION",
     "FINISH_GRANT_ONLY_API_ACCESS",
-  ])("variante v4 %s con ambos IDs => finish", (event) => {
-    expect(parseEmbeddedSignupMessage(ORIGIN, message(event, IDS))).toMatchObject({
-      kind: "finish",
+  ])("variante %s con ambos IDs => partial", (event) => {
+    expect(parseEmbeddedSignupMessage(ORIGIN, message(event, IDS))).toEqual({
+      kind: "partial",
       event,
-      wabaId: "1234567890",
-      phoneNumberId: "9876543210",
     });
   });
 

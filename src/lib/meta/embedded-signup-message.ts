@@ -2,8 +2,8 @@
  * Lectura del postMessage "WA_EMBEDDED_SIGNUP" de Meta, como función pura.
  *
  * Cubre los formatos de v3 y v4 de Embedded Signup:
- *   - v4 añade variantes FINISH_* (FINISH_ONLY_WABA, FINISH_OBO_MIGRATION…).
- *     Sin waba_id y phone_number_id no hay nada que conectar: es "partial".
+ *   - Solo FINISH confirma una selección completa. Las variantes FINISH_*
+ *     describen flujos parciales y nunca deben iniciar la conexión.
  *   - v4 reporta los errores como CANCEL con error_message / error_code;
  *     v3 los mandaba como ERROR. Ambos son "error".
  *   - CANCEL sin datos de error es un abandono del usuario: "cancel".
@@ -82,12 +82,16 @@ export function parseEmbeddedSignupMessage(
   }
   const details = record(payload.data) ?? {};
 
-  if (payload.event.startsWith("FINISH")) {
+  if (payload.event === "FINISH") {
     const wabaId = nonEmptyString(details.waba_id);
     const phoneNumberId = nonEmptyString(details.phone_number_id);
     if (wabaId && phoneNumberId) {
       return { kind: "finish", event: payload.event, wabaId, phoneNumberId };
     }
+    return { kind: "partial", event: payload.event };
+  }
+
+  if (payload.event.startsWith("FINISH_")) {
     return { kind: "partial", event: payload.event };
   }
 
