@@ -9,10 +9,10 @@ import {
 } from "@/server/whatsapp/credentials";
 import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
 import {
-  EmbeddedSignupError,
   exchangeCodeForToken,
   extendToken,
   registerPhoneNumberIfNeeded,
+  verifyPhoneNumberBelongsToWaba,
   verifyEmbeddedSignupState,
 } from "@/server/whatsapp/embedded-signup";
 
@@ -68,15 +68,47 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     throw err;
   }
 
+  let shortLived: string;
+  try {
+    shortLived = await exchangeCodeForToken(body.data.code);
+  } catch {
+    return apiError(
+      422,
+      "token_exchange_failed",
+      "No pudimos autorizar la conexión con Meta. Intenta nuevamente."
+    );
+  }
+
   let token: string;
   try {
-    const shortLived = await exchangeCodeForToken(body.data.code);
     token = await extendToken(shortLived);
-  } catch (err) {
-    if (err instanceof EmbeddedSignupError) {
-      return apiError(422, "exchange_failed", err.message);
+  } catch {
+    return apiError(
+      422,
+      "token_extension_failed",
+      "No pudimos completar la conexión segura con Meta. Intenta nuevamente."
+    );
+  }
+
+  try {
+    const belongsToWaba = await verifyPhoneNumberBelongsToWaba(
+      body.data.wabaId,
+      body.data.phoneNumberId,
+      token
+    );
+    if (!belongsToWaba) {
+      return apiError(
+        422,
+        "phone_waba_mismatch",
+        "El número seleccionado no pertenece a la cuenta de WhatsApp indicada."
+      );
     }
-    throw err;
+  } catch {
+    return apiError(
+      503,
+      "phone_waba_check_failed",
+      "No pudimos verificar el número con Meta. Intenta nuevamente."
+    );
   }
 
   const check = await testConnection(body.data.phoneNumberId, token);
@@ -85,13 +117,27 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     return apiError(status, check.code, check.message);
   }
 
-  // Best-effort, en ese orden: registrar el número y suscribir el webhook no
-  // deben impedir guardar una conexión que Meta ya validó arriba.
-  await registerPhoneNumberIfNeeded(body.data.phoneNumberId, token).catch(() =>
-    console.warn(
-      "[embedded-signup] no se pudo registrar el número; la conexión validada continuará"
-    )
+  const registration = await registerPhoneNumberIfNeeded(
+    body.data.phoneNumberId,
+    token
   );
+  if (registration.status === "pending") {
+    return apiError(
+      409,
+      registration.code,
+      "El número aún tiene una verificación pendiente en Meta. Complétala e intenta nuevamente."
+    );
+  }
+  if (registration.status === "failed") {
+    const unavailable = registration.code === "meta_unavailable";
+    return apiError(
+      unavailable ? 503 : 422,
+      registration.code,
+      unavailable
+        ? "Meta no está disponible en este momento. Intenta nuevamente."
+        : "No pudimos registrar el número en Meta. Revisa su configuración e intenta nuevamente."
+    );
+  }
 
   const subscribed = await subscribeAppToWaba(body.data.wabaId, token);
   if (!subscribed) {
@@ -119,8 +165,6 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     targetId: session.organizationId,
     metadata: {
       channel: "whatsapp",
-      wabaId: body.data.wabaId,
-      phoneNumberId: body.data.phoneNumberId,
     },
   });
 

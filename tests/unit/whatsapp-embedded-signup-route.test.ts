@@ -18,6 +18,13 @@ const h = vi.hoisted(() => {
     audits: [] as unknown[],
     validState: true,
     metaFailure: false,
+    extensionFailure: false,
+    registrationResult: { status: "registered" } as
+      | { status: "registered" }
+      | { status: "pending"; code: "phone_verification_pending" }
+      | { status: "failed"; code: "phone_registration_failed" | "meta_unavailable" },
+    phoneBelongsToWaba: true,
+    wabaCheckFailure: false,
     subscriptionSucceeds: true,
     connectionCheck: {
       ok: true as boolean,
@@ -134,8 +141,19 @@ vi.mock("@/server/whatsapp/embedded-signup", () => ({
     if (h.metaFailure) throw new h.EmbeddedSignupError("Meta rechazó el código");
     return "token-super-secreto";
   }),
-  extendToken: vi.fn(async () => "token-largo-super-secreto"),
-  registerPhoneNumberIfNeeded: vi.fn(async () => undefined),
+  extendToken: vi.fn(async () => {
+    if (h.extensionFailure) {
+      throw new h.EmbeddedSignupError(
+        "texto crudo privado de Meta token-super-secreto code_ok"
+      );
+    }
+    return "token-largo-super-secreto";
+  }),
+  registerPhoneNumberIfNeeded: vi.fn(async () => h.registrationResult),
+  verifyPhoneNumberBelongsToWaba: vi.fn(async () => {
+    if (h.wabaCheckFailure) throw new Error("texto crudo privado de Graph");
+    return h.phoneBelongsToWaba;
+  }),
 }));
 
 import { POST as completeEmbeddedSignup } from "@/app/api/settings/whatsapp/embedded-signup/route";
@@ -174,6 +192,10 @@ beforeEach(() => {
   h.audits.length = 0;
   h.validState = true;
   h.metaFailure = false;
+  h.extensionFailure = false;
+  h.registrationResult = { status: "registered" };
+  h.phoneBelongsToWaba = true;
+  h.wabaCheckFailure = false;
   h.subscriptionSucceeds = true;
   h.connectionCheck = {
     ok: true,
@@ -224,6 +246,64 @@ describe("Meta Embedded Signup — contrato MVP multi-tenant", () => {
     const response = await completeEmbeddedSignup(signupRequest());
 
     expect(response.status).toBe(422);
+    expect(h.credentials.size).toBe(0);
+  });
+
+  it("un fallo al extender el token responde fijo y no persiste el token corto", async () => {
+    session("org_a");
+    h.extensionFailure = true;
+
+    const response = await completeEmbeddedSignup(signupRequest());
+    const responseText = await response.text();
+
+    expect(response.status).toBe(422);
+    expect(responseText).toContain('"code":"token_extension_failed"');
+    expect(responseText).toContain(
+      "No pudimos completar la conexión segura con Meta. Intenta nuevamente."
+    );
+    expect(responseText).not.toContain("token-super-secreto");
+    expect(responseText).not.toContain("code_ok");
+    expect(responseText).not.toContain("texto crudo privado de Meta");
+    expect(h.credentials.size).toBe(0);
+  });
+
+  it.each([
+    [{ status: "pending", code: "phone_verification_pending" } as const, "phone_verification_pending"],
+    [{ status: "failed", code: "phone_registration_failed" } as const, "phone_registration_failed"],
+    [{ status: "failed", code: "meta_unavailable" } as const, "meta_unavailable"],
+  ])("ningun resultado de registro distinto de registrado guarda connected", async (result, code) => {
+    session("org_a");
+    h.registrationResult = result;
+
+    const response = await completeEmbeddedSignup(signupRequest());
+
+    expect(response.status).not.toBe(200);
+    expect((await response.json()).error.code).toBe(code);
+    expect(h.credentials.size).toBe(0);
+  });
+
+  it("rechaza un phoneNumberId que no pertenece a la WABA antes de guardar", async () => {
+    session("org_a");
+    h.phoneBelongsToWaba = false;
+
+    const response = await completeEmbeddedSignup(signupRequest());
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).error.code).toBe("phone_waba_mismatch");
+    expect(h.credentials.size).toBe(0);
+  });
+
+  it("rechaza un fallo de Graph al comprobar WABA sin filtrar texto crudo", async () => {
+    session("org_a");
+    h.wabaCheckFailure = true;
+
+    const response = await completeEmbeddedSignup(signupRequest("pn_a", "code_privado"));
+    const responseText = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(responseText).toContain('"code":"phone_waba_check_failed"');
+    expect(responseText).not.toContain("texto crudo privado de Graph");
+    expect(responseText).not.toContain("code_privado");
     expect(h.credentials.size).toBe(0);
   });
 
@@ -289,6 +369,9 @@ describe("Meta Embedded Signup — contrato MVP multi-tenant", () => {
     const auditText = JSON.stringify(h.audits);
     expect(auditText).not.toContain("token-super-secreto");
     expect(auditText).not.toContain("token-largo-super-secreto");
+    expect(auditText).not.toContain("waba_a");
+    expect(auditText).not.toContain("pn_a");
+    expect(auditText).not.toContain("code_ok");
 
     session("org_b");
     h.credentials.set("org_b", {
