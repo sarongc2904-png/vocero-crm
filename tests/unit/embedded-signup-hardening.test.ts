@@ -27,7 +27,6 @@ vi.mock("@/lib/meta/client", async (importOriginal) => {
 
 import { MetaApiError } from "@/lib/meta/client";
 import {
-  extendToken,
   registerPhoneNumberIfNeeded,
   verifyPhoneNumberBelongsToWaba,
 } from "@/server/whatsapp/embedded-signup";
@@ -35,6 +34,7 @@ import {
 const TOKEN = "token-super-secreto";
 const OAUTH_CODE = "codigo-oauth-super-secreto";
 const RAW_META_TEXT = "texto crudo privado de Meta";
+const SIGNAL = new AbortController().signal;
 
 function metaError(status: number, code: number | null, subcode = 0) {
   return new MetaApiError(RAW_META_TEXT, {
@@ -60,30 +60,97 @@ beforeEach(() => {
 });
 
 describe("clasificacion cerrada del registro de numero", () => {
-  it("clasifica el 200 documentado como registrado, tambien al reintentar", async () => {
-    h.graphRequest.mockResolvedValue({ success: true });
+  it("omite /register si el estado oficial ya es CONNECTED", async () => {
+    h.graphRequest.mockResolvedValue({
+      status: "CONNECTED",
+      code_verification_status: "VERIFIED",
+    });
 
-    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN)).resolves.toEqual({
+    await expect(
+      registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)
+    ).resolves.toEqual({ status: "registered" });
+    expect(h.graphRequest).toHaveBeenCalledExactlyOnceWith(
+      "pn_1?fields=status,code_verification_status",
+      { token: TOKEN, signal: SIGNAL }
+    );
+  });
+
+  it("consulta estado y registra solo un numero verificado no conectado", async () => {
+    h.graphRequest
+      .mockResolvedValueOnce({
+        status: "DISCONNECTED",
+        code_verification_status: "VERIFIED",
+      })
+      .mockResolvedValueOnce({ success: true });
+
+    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)).resolves.toEqual({
       status: "registered",
     });
-    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN)).resolves.toEqual({
-      status: "registered",
-    });
+    expect(h.graphRequest).toHaveBeenNthCalledWith(
+      2,
+      "pn_1/register",
+      expect.objectContaining({ method: "POST", token: TOKEN, signal: SIGNAL })
+    );
+  });
+
+  it.each(["PENDING", "UNVERIFIED"])(
+    "clasifica estado %s como verificacion pendiente sin llamar /register",
+    async (status) => {
+      h.graphRequest.mockResolvedValue({
+        status,
+        code_verification_status: "UNVERIFIED",
+      });
+
+      await expect(
+        registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)
+      ).resolves.toEqual({
+        status: "pending",
+        code: "phone_verification_pending",
+      });
+      expect(h.graphRequest).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    [133005, "registration_pin_invalid"],
+    [133016, "registration_attempts_exceeded"],
+  ] as const)("clasifica %s con codigo estable distinto y no reintenta", async (code, stableCode) => {
+    h.graphRequest
+      .mockResolvedValueOnce({
+        status: "DISCONNECTED",
+        code_verification_status: "VERIFIED",
+      })
+      .mockRejectedValueOnce(metaError(400, code));
+
+    await expect(
+      registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)
+    ).resolves.toEqual({ status: "failed", code: stableCode });
+    expect(h.graphRequest).toHaveBeenCalledTimes(2);
   });
 
   it("clasifica 133006 como verificacion pendiente de forma explicita", async () => {
-    h.graphRequest.mockRejectedValue(metaError(400, 133006, 2388001));
+    h.graphRequest
+      .mockResolvedValueOnce({
+        status: "DISCONNECTED",
+        code_verification_status: "VERIFIED",
+      })
+      .mockRejectedValueOnce(metaError(400, 133006, 2388001));
 
-    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN)).resolves.toEqual({
+    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)).resolves.toEqual({
       status: "pending",
       code: "phone_verification_pending",
     });
   });
 
   it("trata cualquier otro 4xx como fallo con codigo estable", async () => {
-    h.graphRequest.mockRejectedValue(metaError(400, 999999, 123));
+    h.graphRequest
+      .mockResolvedValueOnce({
+        status: "DISCONNECTED",
+        code_verification_status: "VERIFIED",
+      })
+      .mockRejectedValueOnce(metaError(400, 999999, 123));
 
-    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN)).resolves.toEqual({
+    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)).resolves.toEqual({
       status: "failed",
       code: "phone_registration_failed",
     });
@@ -93,9 +160,14 @@ describe("clasificacion cerrada del registro de numero", () => {
     ["5xx", metaError(503, 2)],
     ["red", new MetaApiError(RAW_META_TEXT, { status: 0, details: new Error(RAW_META_TEXT) })],
   ])("trata %s como fallo, nunca como exito", async (_case, error) => {
-    h.graphRequest.mockRejectedValue(error);
+    h.graphRequest
+      .mockResolvedValueOnce({
+        status: "DISCONNECTED",
+        code_verification_status: "VERIFIED",
+      })
+      .mockRejectedValueOnce(error);
 
-    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN)).resolves.toEqual({
+    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)).resolves.toEqual({
       status: "failed",
       code: "meta_unavailable",
     });
@@ -103,21 +175,26 @@ describe("clasificacion cerrada del registro de numero", () => {
 
   it("no filtra token, texto crudo ni identificadores sin validar en logs", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    h.graphRequest.mockRejectedValue(
-      new MetaApiError(`${RAW_META_TEXT} ${TOKEN} ${OAUTH_CODE}`, {
-        status: 400,
-        code: 999999,
-        details: {
-          error: {
-            message: `${RAW_META_TEXT} ${TOKEN} ${OAUTH_CODE}`,
-            error_subcode: "123;token-super-secreto",
-            fbtrace_id: "trace con espacios token-super-secreto",
-          },
-        },
+    h.graphRequest
+      .mockResolvedValueOnce({
+        status: "DISCONNECTED",
+        code_verification_status: "VERIFIED",
       })
-    );
+      .mockRejectedValueOnce(
+        new MetaApiError(`${RAW_META_TEXT} ${TOKEN} ${OAUTH_CODE}`, {
+          status: 400,
+          code: 999999,
+          details: {
+            error: {
+              message: `${RAW_META_TEXT} ${TOKEN} ${OAUTH_CODE}`,
+              error_subcode: "123;token-super-secreto",
+              fbtrace_id: "trace con espacios token-super-secreto",
+            },
+          },
+        })
+      );
 
-    await registerPhoneNumberIfNeeded("pn_1", TOKEN);
+    await registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL);
 
     const output = JSON.stringify(warn.mock.calls);
     expect(output).not.toContain(TOKEN);
@@ -127,34 +204,12 @@ describe("clasificacion cerrada del registro de numero", () => {
   });
 });
 
-describe("extension obligatoria del token", () => {
-  it("falla cerrado si falta META_APP_ID y no devuelve el token corto", async () => {
-    delete h.env.META_APP_ID;
-
-    await expect(extendToken(TOKEN)).rejects.toThrow(
-      "No pudimos completar la conexión segura con Meta"
-    );
-  });
-
-  it.each([
-    ["respuesta no ok", async () => new Response(RAW_META_TEXT, { status: 400 })],
-    ["excepcion", async () => Promise.reject(new Error(`${RAW_META_TEXT} ${TOKEN}`))],
-    ["access_token ausente", async () => Response.json({ expires_in: 3600 })],
-  ])("falla cerrado ante %s y no usa el token corto", async (_case, fetchImpl) => {
-    vi.stubGlobal("fetch", vi.fn(fetchImpl));
-
-    await expect(extendToken(TOKEN)).rejects.toThrow(
-      "No pudimos completar la conexión segura con Meta"
-    );
-  });
-});
-
 describe("pertenencia phoneNumberId a WABA", () => {
   it("rechaza un numero que no aparece en la lista completa", async () => {
     h.graphRequest.mockResolvedValue({ data: [{ id: "pn_otro" }] });
 
     await expect(
-      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN)
+      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN, SIGNAL)
     ).resolves.toBe(false);
   });
 
@@ -167,13 +222,43 @@ describe("pertenencia phoneNumberId a WABA", () => {
       .mockResolvedValueOnce({ data: [{ id: "pn_1" }] });
 
     await expect(
-      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN)
+      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN, SIGNAL)
     ).resolves.toBe(true);
     expect(h.graphRequest).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining("after=cursor-seguro"),
-      { token: TOKEN }
+      { token: TOKEN, signal: SIGNAL }
     );
+  });
+
+  it("impone un tope de 10 paginas y falla cerrado", async () => {
+    h.graphRequest.mockImplementation(async () => {
+      if (h.graphRequest.mock.calls.length > 10) {
+        throw metaError(503, 2);
+      }
+      return {
+        data: [{ id: "pn_otro" }],
+        paging: {
+          cursors: { after: `cursor-${h.graphRequest.mock.calls.length}` },
+          next: "https://example.invalid/next",
+        },
+      };
+    });
+
+    await expect(
+      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN, SIGNAL)
+    ).rejects.toThrow("No pudimos verificar el número con Meta");
+    expect(h.graphRequest).toHaveBeenCalledTimes(10);
+  });
+
+  it("trata AbortError como timeout fijo sin texto crudo", async () => {
+    h.graphRequest.mockRejectedValue(
+      new DOMException(`${RAW_META_TEXT} ${TOKEN}`, "AbortError")
+    );
+
+    await expect(
+      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN, SIGNAL)
+    ).rejects.toThrow("Meta tardó demasiado en responder");
   });
 
   it("rechaza si Graph falla y no filtra el error", async () => {
@@ -181,7 +266,7 @@ describe("pertenencia phoneNumberId a WABA", () => {
     h.graphRequest.mockRejectedValue(metaError(503, 2));
 
     await expect(
-      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN)
+      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN, SIGNAL)
     ).rejects.toThrow("No pudimos verificar el número con Meta");
     expect(JSON.stringify(warn.mock.calls)).not.toContain(RAW_META_TEXT);
   });

@@ -75,8 +75,11 @@ export function verifyEmbeddedSignupState(input: {
   );
 }
 
-/** Intercambia el `code` de un solo uso por un token de acceso de usuario. */
-export async function exchangeCodeForToken(code: string): Promise<string> {
+/** Intercambia el `code` de un solo uso por el token de acceso de Embedded Signup. */
+export async function exchangeCodeForToken(
+  code: string,
+  signal?: AbortSignal
+): Promise<string> {
   const env = getEnv();
   if (!env.META_APP_ID || !env.META_APP_SECRET) {
     throw new EmbeddedSignupError("Embedded Signup no está configurado en esta instancia");
@@ -88,7 +91,7 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
   url.searchParams.set("client_secret", env.META_APP_SECRET);
   url.searchParams.set("code", code);
 
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), signal ? { signal } : undefined);
   const json = (await res.json().catch(() => null)) as
     | { access_token?: string; error?: { message?: string } }
     | null;
@@ -98,34 +101,6 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
     );
   }
   return json.access_token;
-}
-
-const TOKEN_EXTENSION_ERROR =
-  "No pudimos completar la conexión segura con Meta. Intenta nuevamente.";
-
-/** Token de usuario → token de larga duración (~60 días), obligatorio. */
-export async function extendToken(shortLivedToken: string): Promise<string> {
-  const env = getEnv();
-  if (!env.META_APP_ID || !env.META_APP_SECRET) {
-    throw new EmbeddedSignupError(TOKEN_EXTENSION_ERROR);
-  }
-  try {
-    const url = new URL(
-      `${env.META_GRAPH_BASE_URL}/${env.META_GRAPH_API_VERSION}/oauth/access_token`
-    );
-    url.searchParams.set("grant_type", "fb_exchange_token");
-    url.searchParams.set("client_id", env.META_APP_ID);
-    url.searchParams.set("client_secret", env.META_APP_SECRET);
-    url.searchParams.set("fb_exchange_token", shortLivedToken);
-    const res = await fetch(url.toString());
-    const json = (await res.json().catch(() => null)) as { access_token?: string } | null;
-    if (!res.ok || !json?.access_token) {
-      throw new EmbeddedSignupError(TOKEN_EXTENSION_ERROR);
-    }
-    return json.access_token;
-  } catch {
-    throw new EmbeddedSignupError(TOKEN_EXTENSION_ERROR);
-  }
 }
 
 /**
@@ -163,8 +138,24 @@ export type PhoneRegistrationResult =
   | { status: "pending"; code: "phone_verification_pending" }
   | {
       status: "failed";
-      code: "phone_registration_failed" | "meta_unavailable";
+      code:
+        | "phone_registration_failed"
+        | "registration_pin_invalid"
+        | "registration_attempts_exceeded"
+        | "meta_unavailable"
+        | "meta_timeout";
     };
+
+export class EmbeddedSignupTimeoutError extends EmbeddedSignupError {
+  constructor() {
+    super("Meta tardó demasiado en responder. Intenta nuevamente.");
+    this.name = "EmbeddedSignupTimeoutError";
+  }
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
 
 function safeDiagnosticValue(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
@@ -194,24 +185,57 @@ function logMetaDiagnostics(err: MetaApiError): void {
 
 export async function registerPhoneNumberIfNeeded(
   phoneNumberId: string,
-  token: string
+  token: string,
+  signal?: AbortSignal
 ): Promise<PhoneRegistrationResult> {
-  const pin = registrationPinFor(phoneNumberId);
   try {
+    const phone = await graphRequest<{
+      status?: string;
+      code_verification_status?: string;
+    }>(`${phoneNumberId}?fields=status,code_verification_status`, {
+      token,
+      signal,
+    });
+    if (phone.status === "CONNECTED") return { status: "registered" };
+    if (
+      phone.status === "PENDING" ||
+      phone.status === "UNVERIFIED" ||
+      phone.code_verification_status === "UNVERIFIED"
+    ) {
+      return { status: "pending", code: "phone_verification_pending" };
+    }
+    if (
+      phone.status !== "DISCONNECTED" ||
+      phone.code_verification_status !== "VERIFIED"
+    ) {
+      return { status: "failed", code: "phone_registration_failed" };
+    }
+
+    const pin = registrationPinFor(phoneNumberId);
     const result = await graphRequest<{ success?: boolean | string }>(
       `${phoneNumberId}/register`,
       {
-      method: "POST",
-      token,
-      body: { messaging_product: "whatsapp", pin },
+        method: "POST",
+        token,
+        body: { messaging_product: "whatsapp", pin },
+        signal,
       }
     );
     return result?.success === true || result?.success === "true"
       ? { status: "registered" }
       : { status: "failed", code: "phone_registration_failed" };
   } catch (err) {
+    if (isAbortError(err)) {
+      return { status: "failed", code: "meta_timeout" };
+    }
     if (err instanceof MetaApiError) {
       logMetaDiagnostics(err);
+      if (err.code === 133005) {
+        return { status: "failed", code: "registration_pin_invalid" };
+      }
+      if (err.code === 133016) {
+        return { status: "failed", code: "registration_attempts_exceeded" };
+      }
       if (err.code === 133006) {
         return { status: "pending", code: "phone_verification_pending" };
       }
@@ -235,14 +259,25 @@ type WabaPhoneNumbersPage = {
 export async function verifyPhoneNumberBelongsToWaba(
   wabaId: string,
   phoneNumberId: string,
-  token: string
+  token: string,
+  signal?: AbortSignal
 ): Promise<boolean> {
   let path = `${encodeURIComponent(wabaId)}/phone_numbers?fields=id&limit=100`;
   const seenCursors = new Set<string>();
+  let pageCount = 0;
 
   try {
     while (true) {
-      const page = await graphRequest<WabaPhoneNumbersPage>(path, { token });
+      if (pageCount >= 10) {
+        throw new EmbeddedSignupError(
+          "No pudimos verificar el número con Meta. Intenta nuevamente."
+        );
+      }
+      pageCount += 1;
+      const page = await graphRequest<WabaPhoneNumbersPage>(path, {
+        token,
+        signal,
+      });
       if (page.data?.some((phone) => phone.id === phoneNumberId)) return true;
       if (!page.paging?.next) return false;
 
@@ -261,6 +296,7 @@ export async function verifyPhoneNumberBelongsToWaba(
       path = `${encodeURIComponent(wabaId)}/phone_numbers?fields=id&limit=100&after=${encodeURIComponent(after)}`;
     }
   } catch (err) {
+    if (isAbortError(err)) throw new EmbeddedSignupTimeoutError();
     if (err instanceof MetaApiError) logMetaDiagnostics(err);
     if (err instanceof EmbeddedSignupError) throw err;
     throw new EmbeddedSignupError(

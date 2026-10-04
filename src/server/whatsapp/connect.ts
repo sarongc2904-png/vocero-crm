@@ -6,7 +6,11 @@ export type ConnectionCheck =
       displayPhoneNumber: string;
       verifiedName: string | null;
     }
-  | { ok: false; code: "invalid_token" | "meta_unavailable" | "meta_error"; message: string };
+  | {
+      ok: false;
+      code: "invalid_token" | "meta_unavailable" | "meta_timeout" | "meta_error";
+      message: string;
+    };
 
 /**
  * Valida token↔número contra la Graph API SIN persistir nada (FR-040):
@@ -14,7 +18,8 @@ export type ConnectionCheck =
  */
 export async function testConnection(
   phoneNumberId: string,
-  token: string
+  token: string,
+  signal?: AbortSignal
 ): Promise<ConnectionCheck> {
   try {
     const res = await graphRequest<{
@@ -23,6 +28,7 @@ export async function testConnection(
       id: string;
     }>(`${phoneNumberId}?fields=display_phone_number,verified_name`, {
       token,
+      signal,
     });
     if (!res.display_phone_number) {
       return {
@@ -38,6 +44,13 @@ export async function testConnection(
       verifiedName: res.verified_name ?? null,
     };
   } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        code: "meta_timeout",
+        message: "Meta tardó demasiado en responder. Intenta nuevamente.",
+      };
+    }
     if (err instanceof MetaApiError) {
       if (err.isAuthError) {
         return {
@@ -54,7 +67,12 @@ export async function testConnection(
           message: "Meta no está disponible en este momento; intenta de nuevo",
         };
       }
-      return { ok: false, code: "meta_error", message: err.message };
+      return {
+        ok: false,
+        code: "meta_error",
+        message:
+          "Meta rechazó la verificación del número. Revisa la configuración e intenta nuevamente.",
+      };
     }
     throw err;
   }
@@ -67,15 +85,18 @@ export async function testConnection(
  */
 export async function subscribeAppToWaba(
   wabaId: string,
-  token: string
+  token: string,
+  signal?: AbortSignal
 ): Promise<boolean> {
   try {
     await graphRequest(`${wabaId}/subscribed_apps`, {
       method: "POST",
       token,
+      signal,
     });
     return true;
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw err;
     console.warn(
       "[connect] subscribed_apps falló (esperado en modo agencia)"
     );

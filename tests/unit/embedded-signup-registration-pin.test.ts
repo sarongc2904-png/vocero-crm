@@ -44,7 +44,11 @@ describe("PIN de registro del número (Embedded Signup)", () => {
 
   it("el registro envía el PIN derivado del secreto del servidor, sin Math.random", async () => {
     const random = vi.spyOn(Math, "random");
-    graphRequest.mockResolvedValue({ success: true });
+    graphRequest
+      .mockResolvedValueOnce({ status: "DISCONNECTED", code_verification_status: "VERIFIED" })
+      .mockResolvedValueOnce({ success: true })
+      .mockResolvedValueOnce({ status: "DISCONNECTED", code_verification_status: "VERIFIED" })
+      .mockResolvedValueOnce({ success: true });
     const { deriveRegistrationPin, registerPhoneNumberIfNeeded } = await import(
       "@/server/whatsapp/embedded-signup"
     );
@@ -53,8 +57,8 @@ describe("PIN de registro del número (Embedded Signup)", () => {
     await registerPhoneNumberIfNeeded("1234567890", "token-de-prueba");
 
     const expected = deriveRegistrationPin("1234567890", ENCRYPTION_KEY);
-    expect(graphRequest).toHaveBeenCalledTimes(2);
-    for (const call of graphRequest.mock.calls) {
+    expect(graphRequest).toHaveBeenCalledTimes(4);
+    for (const call of [graphRequest.mock.calls[1]!, graphRequest.mock.calls[3]!]) {
       expect(call[0]).toBe("1234567890/register");
       expect(call[1]).toMatchObject({
         method: "POST",

@@ -10,13 +10,24 @@ import {
 import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
 import {
   exchangeCodeForToken,
-  extendToken,
   registerPhoneNumberIfNeeded,
   verifyPhoneNumberBelongsToWaba,
   verifyEmbeddedSignupState,
 } from "@/server/whatsapp/embedded-signup";
 
 export const dynamic = "force-dynamic";
+
+const META_REQUEST_TIMEOUT_MS = 10_000;
+const META_TIMEOUT_MESSAGE = "Meta tardó demasiado en responder. Intenta nuevamente.";
+
+function metaRequestSignal(): AbortSignal {
+  return AbortSignal.timeout(META_REQUEST_TIMEOUT_MS);
+}
+
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof Error &&
+    (err.name === "AbortError" || err.name === "EmbeddedSignupTimeoutError");
+}
 
 const bodySchema = z.object({
   code: z.string().trim().min(1),
@@ -68,10 +79,13 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     throw err;
   }
 
-  let shortLived: string;
+  let token: string;
   try {
-    shortLived = await exchangeCodeForToken(body.data.code);
-  } catch {
+    token = await exchangeCodeForToken(body.data.code, metaRequestSignal());
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
+    }
     return apiError(
       422,
       "token_exchange_failed",
@@ -79,22 +93,12 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     );
   }
 
-  let token: string;
-  try {
-    token = await extendToken(shortLived);
-  } catch {
-    return apiError(
-      422,
-      "token_extension_failed",
-      "No pudimos completar la conexión segura con Meta. Intenta nuevamente."
-    );
-  }
-
   try {
     const belongsToWaba = await verifyPhoneNumberBelongsToWaba(
       body.data.wabaId,
       body.data.phoneNumberId,
-      token
+      token,
+      metaRequestSignal()
     );
     if (!belongsToWaba) {
       return apiError(
@@ -103,7 +107,10 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
         "El número seleccionado no pertenece a la cuenta de WhatsApp indicada."
       );
     }
-  } catch {
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
+    }
     return apiError(
       503,
       "phone_waba_check_failed",
@@ -111,15 +118,21 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     );
   }
 
-  const check = await testConnection(body.data.phoneNumberId, token);
+  const check = await testConnection(
+    body.data.phoneNumberId,
+    token,
+    metaRequestSignal()
+  );
   if (!check.ok) {
-    const status = check.code === "meta_unavailable" ? 503 : 422;
+    const status =
+      check.code === "meta_unavailable" || check.code === "meta_timeout" ? 503 : 422;
     return apiError(status, check.code, check.message);
   }
 
   const registration = await registerPhoneNumberIfNeeded(
     body.data.phoneNumberId,
-    token
+    token,
+    metaRequestSignal()
   );
   if (registration.status === "pending") {
     return apiError(
@@ -129,6 +142,23 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     );
   }
   if (registration.status === "failed") {
+    if (registration.code === "meta_timeout") {
+      return apiError(503, registration.code, META_TIMEOUT_MESSAGE);
+    }
+    if (registration.code === "registration_pin_invalid") {
+      return apiError(
+        422,
+        registration.code,
+        "Meta rechazó el PIN de verificación. Restablécelo en WhatsApp Manager antes de intentar nuevamente."
+      );
+    }
+    if (registration.code === "registration_attempts_exceeded") {
+      return apiError(
+        422,
+        registration.code,
+        "Meta bloqueó temporalmente nuevos intentos de registro. Espera antes de intentar nuevamente."
+      );
+    }
     const unavailable = registration.code === "meta_unavailable";
     return apiError(
       unavailable ? 503 : 422,
@@ -139,7 +169,19 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     );
   }
 
-  const subscribed = await subscribeAppToWaba(body.data.wabaId, token);
+  let subscribed: boolean;
+  try {
+    subscribed = await subscribeAppToWaba(
+      body.data.wabaId,
+      token,
+      metaRequestSignal()
+    );
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
+    }
+    throw err;
+  }
   if (!subscribed) {
     return apiError(
       422,
@@ -165,6 +207,8 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
     targetId: session.organizationId,
     metadata: {
       channel: "whatsapp",
+      wabaId: body.data.wabaId,
+      phoneNumberId: body.data.phoneNumberId,
     },
   });
 

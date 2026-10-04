@@ -42,6 +42,7 @@ export async function graphRequest<T>(
     method?: "GET" | "POST" | "DELETE";
     token: string;
     body?: unknown;
+    signal?: AbortSignal;
   }
 ): Promise<T> {
   const env = getEnv();
@@ -57,8 +58,10 @@ export async function graphRequest<T>(
           : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
   } catch (cause) {
+    if (opts.signal?.aborted) throw cause;
     throw new MetaApiError("No se pudo contactar la API de Meta", {
       status: 0,
       details: cause,
