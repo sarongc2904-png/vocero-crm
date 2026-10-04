@@ -27,6 +27,7 @@ vi.mock("@/lib/meta/client", async (importOriginal) => {
 
 import { MetaApiError } from "@/lib/meta/client";
 import {
+  exchangeCodeForToken,
   registerPhoneNumberIfNeeded,
   verifyPhoneNumberBelongsToWaba,
 } from "@/server/whatsapp/embedded-signup";
@@ -93,23 +94,54 @@ describe("clasificacion cerrada del registro de numero", () => {
     );
   });
 
-  it.each(["PENDING", "UNVERIFIED"])(
-    "clasifica estado %s como verificacion pendiente sin llamar /register",
-    async (status) => {
-      h.graphRequest.mockResolvedValue({
-        status,
-        code_verification_status: "UNVERIFIED",
-      });
+  it("clasifica NOT_VERIFIED como verificacion pendiente sin llamar /register", async () => {
+    h.graphRequest.mockResolvedValue({
+      status: "DISCONNECTED",
+      code_verification_status: "NOT_VERIFIED",
+    });
 
-      await expect(
-        registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)
-      ).resolves.toEqual({
-        status: "pending",
-        code: "phone_verification_pending",
-      });
-      expect(h.graphRequest).toHaveBeenCalledTimes(1);
-    }
-  );
+    await expect(
+      registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)
+    ).resolves.toEqual({
+      status: "pending",
+      code: "phone_verification_pending",
+    });
+    expect(h.graphRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("mantiene PENDING como fallo cerrado y registra solo estados seguros", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.graphRequest.mockResolvedValue({
+      status: "PENDING",
+      code_verification_status: "NOT_VERIFIED",
+    });
+
+    await expect(
+      registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)
+    ).resolves.toEqual({
+      status: "failed",
+      code: "phone_registration_failed",
+    });
+    expect(warn).toHaveBeenCalledWith("[embedded-signup-state]", {
+      status: "PENDING",
+      code_verification_status: "NOT_VERIFIED",
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("pn_1");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(TOKEN);
+  });
+
+  it("no registra valores de estado que no pasan la regex segura", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    h.graphRequest.mockResolvedValue({
+      status: "PENDING token-super-secreto",
+      code_verification_status: "not_verified",
+    });
+
+    await registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL);
+
+    expect(warn).toHaveBeenCalledWith("[embedded-signup-state]", {});
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("token-super-secreto");
+  });
 
   it.each([
     [133005, "registration_pin_invalid"],
@@ -204,6 +236,30 @@ describe("clasificacion cerrada del registro de numero", () => {
   });
 });
 
+describe("intercambio de code con timeout real", () => {
+  it("no oculta un TimeoutError ocurrido al leer el cuerpo", async () => {
+    const signal = AbortSignal.timeout(10);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+          }),
+      }))
+    );
+
+    const error = await exchangeCodeForToken(OAUTH_CODE, signal).catch(
+      (caught) => caught
+    );
+
+    expect(error).toMatchObject({ name: "TimeoutError" });
+  });
+});
+
 describe("pertenencia phoneNumberId a WABA", () => {
   it("rechaza un numero que no aparece en la lista completa", async () => {
     h.graphRequest.mockResolvedValue({ data: [{ id: "pn_otro" }] });
@@ -251,14 +307,27 @@ describe("pertenencia phoneNumberId a WABA", () => {
     expect(h.graphRequest).toHaveBeenCalledTimes(10);
   });
 
-  it("trata AbortError como timeout fijo sin texto crudo", async () => {
-    h.graphRequest.mockRejectedValue(
-      new DOMException(`${RAW_META_TEXT} ${TOKEN}`, "AbortError")
+  it("conserva TimeoutError real para que la ruta lo convierta en mensaje fijo", async () => {
+    const signal = AbortSignal.timeout(10);
+    h.graphRequest.mockImplementation(
+      (_path: string, opts: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          opts.signal?.addEventListener(
+            "abort",
+            () => reject(opts.signal?.reason),
+            { once: true }
+          );
+        })
     );
 
-    await expect(
-      verifyPhoneNumberBelongsToWaba("waba_1", "pn_1", TOKEN, SIGNAL)
-    ).rejects.toThrow("Meta tardó demasiado en responder");
+    const error = await verifyPhoneNumberBelongsToWaba(
+      "waba_1",
+      "pn_1",
+      TOKEN,
+      signal
+    ).catch((caught) => caught);
+
+    expect(error).toMatchObject({ name: "TimeoutError" });
   });
 
   it("rechaza si Graph falla y no filtra el error", async () => {

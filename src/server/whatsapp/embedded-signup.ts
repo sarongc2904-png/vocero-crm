@@ -1,6 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getEnv } from "@/lib/env";
-import { MetaApiError, graphRequest } from "@/lib/meta/client";
+import {
+  isAbortOrTimeoutError,
+  MetaApiError,
+  graphRequest,
+} from "@/lib/meta/client";
 
 /**
  * Embedded Signup (modo agencia): el cliente elige su WABA y su número
@@ -92,9 +96,13 @@ export async function exchangeCodeForToken(
   url.searchParams.set("code", code);
 
   const res = await fetch(url.toString(), signal ? { signal } : undefined);
-  const json = (await res.json().catch(() => null)) as
-    | { access_token?: string; error?: { message?: string } }
-    | null;
+  let json: { access_token?: string; error?: { message?: string } } | null;
+  try {
+    json = (await res.json()) as typeof json;
+  } catch (err) {
+    if (isAbortOrTimeoutError(err, signal)) throw err;
+    json = null;
+  }
   if (!res.ok || !json?.access_token) {
     throw new EmbeddedSignupError(
       json?.error?.message ?? "Meta rechazó el código de Embedded Signup"
@@ -146,17 +154,6 @@ export type PhoneRegistrationResult =
         | "meta_timeout";
     };
 
-export class EmbeddedSignupTimeoutError extends EmbeddedSignupError {
-  constructor() {
-    super("Meta tardó demasiado en responder. Intenta nuevamente.");
-    this.name = "EmbeddedSignupTimeoutError";
-  }
-}
-
-function isAbortError(err: unknown): boolean {
-  return err instanceof Error && err.name === "AbortError";
-}
-
 function safeDiagnosticValue(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
     return String(value);
@@ -183,6 +180,28 @@ function logMetaDiagnostics(err: MetaApiError): void {
   console.warn("[embedded-signup]", diagnostic);
 }
 
+function safeRegistrationState(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Z_]{1,32}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function logUnknownRegistrationState(phone: {
+  status?: string;
+  code_verification_status?: string;
+}): void {
+  const status = safeRegistrationState(phone.status);
+  const codeVerificationStatus = safeRegistrationState(
+    phone.code_verification_status
+  );
+  console.warn("[embedded-signup-state]", {
+    ...(status ? { status } : {}),
+    ...(codeVerificationStatus
+      ? { code_verification_status: codeVerificationStatus }
+      : {}),
+  });
+}
+
 export async function registerPhoneNumberIfNeeded(
   phoneNumberId: string,
   token: string,
@@ -197,17 +216,15 @@ export async function registerPhoneNumberIfNeeded(
       signal,
     });
     if (phone.status === "CONNECTED") return { status: "registered" };
-    if (
-      phone.status === "PENDING" ||
-      phone.status === "UNVERIFIED" ||
-      phone.code_verification_status === "UNVERIFIED"
-    ) {
+    if (phone.status !== "DISCONNECTED") {
+      logUnknownRegistrationState(phone);
+      return { status: "failed", code: "phone_registration_failed" };
+    }
+    if (phone.code_verification_status === "NOT_VERIFIED") {
       return { status: "pending", code: "phone_verification_pending" };
     }
-    if (
-      phone.status !== "DISCONNECTED" ||
-      phone.code_verification_status !== "VERIFIED"
-    ) {
+    if (phone.code_verification_status !== "VERIFIED") {
+      logUnknownRegistrationState(phone);
       return { status: "failed", code: "phone_registration_failed" };
     }
 
@@ -225,7 +242,7 @@ export async function registerPhoneNumberIfNeeded(
       ? { status: "registered" }
       : { status: "failed", code: "phone_registration_failed" };
   } catch (err) {
-    if (isAbortError(err)) {
+    if (isAbortOrTimeoutError(err, signal)) {
       return { status: "failed", code: "meta_timeout" };
     }
     if (err instanceof MetaApiError) {
@@ -296,7 +313,7 @@ export async function verifyPhoneNumberBelongsToWaba(
       path = `${encodeURIComponent(wabaId)}/phone_numbers?fields=id&limit=100&after=${encodeURIComponent(after)}`;
     }
   } catch (err) {
-    if (isAbortError(err)) throw new EmbeddedSignupTimeoutError();
+    if (isAbortOrTimeoutError(err, signal)) throw err;
     if (err instanceof MetaApiError) logMetaDiagnostics(err);
     if (err instanceof EmbeddedSignupError) throw err;
     throw new EmbeddedSignupError(

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiError, parseBody, withOrgPermissions } from "@/lib/api";
 import { isEmbeddedSignupConfigured } from "@/lib/env";
+import { isAbortOrTimeoutError } from "@/lib/meta/client";
 import { auditPrivilegedAction } from "@/server/auth/audit";
 import {
   assertPhoneNumberAvailableForOrg,
@@ -22,11 +23,6 @@ const META_TIMEOUT_MESSAGE = "Meta tardó demasiado en responder. Intenta nuevam
 
 function metaRequestSignal(): AbortSignal {
   return AbortSignal.timeout(META_REQUEST_TIMEOUT_MS);
-}
-
-function isTimeoutError(err: unknown): boolean {
-  return err instanceof Error &&
-    (err.name === "AbortError" || err.name === "EmbeddedSignupTimeoutError");
 }
 
 const bodySchema = z.object({
@@ -83,7 +79,7 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
   try {
     token = await exchangeCodeForToken(body.data.code, metaRequestSignal());
   } catch (err) {
-    if (isTimeoutError(err)) {
+    if (isAbortOrTimeoutError(err)) {
       return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
     }
     return apiError(
@@ -108,7 +104,7 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
       );
     }
   } catch (err) {
-    if (isTimeoutError(err)) {
+    if (isAbortOrTimeoutError(err)) {
       return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
     }
     return apiError(
@@ -177,7 +173,7 @@ export const POST = withOrgPermissions(["settings.update"], async (session, req:
       metaRequestSignal()
     );
   } catch (err) {
-    if (isTimeoutError(err)) {
+    if (isAbortOrTimeoutError(err)) {
       return apiError(503, "meta_timeout", META_TIMEOUT_MESSAGE);
     }
     throw err;

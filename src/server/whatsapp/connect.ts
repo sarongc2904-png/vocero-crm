@@ -1,4 +1,8 @@
-import { graphRequest, MetaApiError } from "@/lib/meta/client";
+import {
+  graphRequest,
+  isAbortOrTimeoutError,
+  MetaApiError,
+} from "@/lib/meta/client";
 
 export type ConnectionCheck =
   | {
@@ -44,7 +48,7 @@ export async function testConnection(
       verifiedName: res.verified_name ?? null,
     };
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (isAbortOrTimeoutError(err, signal)) {
       return {
         ok: false,
         code: "meta_timeout",
@@ -96,7 +100,7 @@ export async function subscribeAppToWaba(
     });
     return true;
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") throw err;
+    if (isAbortOrTimeoutError(err, signal)) throw err;
     console.warn(
       "[connect] subscribed_apps falló (esperado en modo agencia)"
     );
