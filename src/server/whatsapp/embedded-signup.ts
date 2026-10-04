@@ -216,7 +216,10 @@ export async function registerPhoneNumberIfNeeded(
       signal,
     });
     if (phone.status === "CONNECTED") return { status: "registered" };
-    if (phone.status !== "DISCONNECTED") {
+    if (
+      phone.status !== "DISCONNECTED" &&
+      !(phone.status === "PENDING" && phone.code_verification_status === "VERIFIED")
+    ) {
       logUnknownRegistrationState(phone);
       return { status: "failed", code: "phone_registration_failed" };
     }

@@ -94,6 +94,25 @@ describe("clasificacion cerrada del registro de numero", () => {
     );
   });
 
+  it("registra un numero PENDING verificado", async () => {
+    h.graphRequest
+      .mockResolvedValueOnce({
+        status: "PENDING",
+        code_verification_status: "VERIFIED",
+      })
+      .mockResolvedValueOnce({ success: true });
+
+    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)).resolves.toEqual({
+      status: "registered",
+    });
+    expect(h.graphRequest).toHaveBeenNthCalledWith(
+      2,
+      "pn_1/register",
+      expect.objectContaining({ method: "POST", token: TOKEN, signal: SIGNAL })
+    );
+    expect(h.graphRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("clasifica NOT_VERIFIED como verificacion pendiente sin llamar /register", async () => {
     h.graphRequest.mockResolvedValue({
       status: "DISCONNECTED",
@@ -109,25 +128,55 @@ describe("clasificacion cerrada del registro de numero", () => {
     expect(h.graphRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("mantiene PENDING como fallo cerrado y registra solo estados seguros", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it.each([undefined, "NOT_VERIFIED", "UNKNOWN"])(
+    "mantiene PENDING sin VERIFIED como fallo cerrado (%s)",
+    async (codeVerificationStatus) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      h.graphRequest.mockResolvedValue({
+        status: "PENDING",
+        code_verification_status: codeVerificationStatus,
+      });
+
+      await expect(
+        registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)
+      ).resolves.toEqual({
+        status: "failed",
+        code: "phone_registration_failed",
+      });
+      expect(warn).toHaveBeenCalledWith("[embedded-signup-state]", {
+        status: "PENDING",
+        ...(codeVerificationStatus
+          ? { code_verification_status: codeVerificationStatus }
+          : {}),
+      });
+      expect(h.graphRequest).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("pn_1");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(TOKEN);
+    }
+  );
+
+  it.each([
+    "UNVERIFIED",
+    "FLAGGED",
+    "RESTRICTED",
+    "BANNED",
+    "MIGRATED",
+    "DELETED",
+    "RATE_LIMITED",
+    "UNKNOWN",
+    undefined,
+  ])("mantiene el estado %s como fallo cerrado", async (status) => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     h.graphRequest.mockResolvedValue({
-      status: "PENDING",
-      code_verification_status: "NOT_VERIFIED",
+      status,
+      code_verification_status: "VERIFIED",
     });
 
-    await expect(
-      registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)
-    ).resolves.toEqual({
+    await expect(registerPhoneNumberIfNeeded("pn_1", TOKEN, SIGNAL)).resolves.toEqual({
       status: "failed",
       code: "phone_registration_failed",
     });
-    expect(warn).toHaveBeenCalledWith("[embedded-signup-state]", {
-      status: "PENDING",
-      code_verification_status: "NOT_VERIFIED",
-    });
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("pn_1");
-    expect(JSON.stringify(warn.mock.calls)).not.toContain(TOKEN);
+    expect(h.graphRequest).toHaveBeenCalledTimes(1);
   });
 
   it("no registra valores de estado que no pasan la regex segura", async () => {

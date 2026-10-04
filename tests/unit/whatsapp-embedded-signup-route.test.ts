@@ -314,6 +314,21 @@ describe("Meta Embedded Signup — contrato MVP multi-tenant", () => {
     expect(h.credentials.size).toBe(0);
   });
 
+  it("un fallo de /register no suscribe, guarda ni deja auditoria parcial", async () => {
+    session("org_a");
+    h.registrationResult = {
+      status: "failed",
+      code: "phone_registration_failed",
+    };
+
+    const response = await completeEmbeddedSignup(signupRequest());
+
+    expect(response.status).toBe(422);
+    expect(h.graphSignals).toHaveLength(4);
+    expect(h.credentials.size).toBe(0);
+    expect(h.audits).toHaveLength(0);
+  });
+
   it.each([
     [
       "registration_pin_invalid" as const,
