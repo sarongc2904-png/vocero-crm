@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  EMBEDDED_SIGNUP_SELECTION_TIMEOUT_MS,
+  parseEmbeddedSignupMessage,
+} from "@/lib/meta/embedded-signup-message";
 
 /**
  * Botón "Conectar WhatsApp" con Embedded Signup de Meta: el negocio elige su
@@ -49,6 +53,11 @@ type EmbeddedSignupConfig = {
 
 type SelectedNumber = { wabaId: string; phoneNumberId: string };
 
+// Mensajes fijos: nunca se muestra el texto que manda Meta.
+const META_ERROR_MESSAGE = "No pudimos completar la conexión con Meta.";
+const PARTIAL_MESSAGE = "No pudimos completar la conexión. Inténtalo de nuevo.";
+const TIMEOUT_MESSAGE = "Meta no confirmó el número a tiempo. Intenta de nuevo.";
+
 let sdkLoadPromise: Promise<void> | null = null;
 
 /** Carga el SDK de Facebook una sola vez por página, aunque el botón se remonte. */
@@ -91,18 +100,41 @@ export function EmbeddedSignupButton({
   const codeRef = useRef<string | null>(null);
   const selectedRef = useRef<SelectedNumber | null>(null);
   const stateRef = useRef(config.state);
+  const selectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tras un partial/error/timeout, un callback tardío de FB.login no reabre
+  // el intento: hace falta un clic nuevo.
+  const attemptClosedRef = useRef(false);
 
   useEffect(() => {
     stateRef.current = config.state;
   }, [config.state]);
 
+  const clearSelectionTimer = useCallback(() => {
+    if (selectionTimerRef.current) clearTimeout(selectionTimerRef.current);
+    selectionTimerRef.current = null;
+  }, []);
+
+  useEffect(() => clearSelectionTimer, [clearSelectionTimer]);
+
   const resetAttempt = useCallback(() => {
+    clearSelectionTimer();
     codeRef.current = null;
     selectedRef.current = null;
-  }, []);
+  }, [clearSelectionTimer]);
+
+  const failAttempt = useCallback(
+    (message: string) => {
+      resetAttempt();
+      attemptClosedRef.current = true;
+      setError(message);
+      setStatus("error");
+    },
+    [resetAttempt]
+  );
 
   const tryFinish = useCallback(async () => {
     if (!codeRef.current || !selectedRef.current) return;
+    clearSelectionTimer();
     setStatus("finishing");
     const code = codeRef.current;
     const { wabaId, phoneNumberId } = selectedRef.current;
@@ -133,49 +165,37 @@ export function EmbeddedSignupButton({
     const data = (await res.json()) as { displayPhoneNumber: string };
     setStatus("idle");
     onConnected(data.displayPhoneNumber);
-  }, [onConnected]);
+  }, [onConnected, clearSelectionTimer]);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
-      if (
-        event.origin !== "https://www.facebook.com" &&
-        event.origin !== "https://web.facebook.com"
-      ) {
-        return;
-      }
-      let data: unknown;
-      try {
-        data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
-      } catch {
-        return;
-      }
-      const payload = data as {
-        type?: string;
-        event?: string;
-        data?: { waba_id?: string; phone_number_id?: string };
-      };
-      if (payload?.type !== "WA_EMBEDDED_SIGNUP") return;
-      if (payload.event === "FINISH" && payload.data?.waba_id && payload.data?.phone_number_id) {
+      const message = parseEmbeddedSignupMessage(event.origin, event.data);
+      if (message.kind === "finish") {
+        if (attemptClosedRef.current) return;
         selectedRef.current = {
-          wabaId: payload.data.waba_id,
-          phoneNumberId: payload.data.phone_number_id,
+          wabaId: message.wabaId,
+          phoneNumberId: message.phoneNumberId,
         };
         void tryFinish();
-      } else if (payload.event === "CANCEL") {
+      } else if (message.kind === "partial") {
+        failAttempt(PARTIAL_MESSAGE);
+      } else if (message.kind === "cancel") {
         resetAttempt();
         setStatus("idle");
-      } else if (payload.event === "ERROR") {
-        resetAttempt();
-        setError("No pudimos completar la conexión con Meta.");
-        setStatus("error");
+      } else if (message.kind === "error") {
+        console.warn(
+          `[embedded-signup] meta_error code=${message.errorCode ?? "-"} session=${message.sessionId ?? "-"}`
+        );
+        failAttempt(META_ERROR_MESSAGE);
       }
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [resetAttempt, tryFinish]);
+  }, [failAttempt, resetAttempt, tryFinish]);
 
   async function connect() {
     resetAttempt();
+    attemptClosedRef.current = false;
     setError(null);
     setStatus("loading_sdk");
     try {
@@ -201,12 +221,21 @@ export function EmbeddedSignupButton({
     }
     window.FB.login(
       (response) => {
+        if (attemptClosedRef.current) return;
         if (!response.authResponse?.code) {
           resetAttempt();
           setStatus("idle");
           return;
         }
         codeRef.current = response.authResponse.code;
+        if (!selectedRef.current) {
+          // El code vive 30 s: si la selección no llega antes del plazo, se
+          // reinicia en vez de dejar el botón en "Conectando…" para siempre.
+          clearSelectionTimer();
+          selectionTimerRef.current = setTimeout(() => {
+            if (codeRef.current && !selectedRef.current) failAttempt(TIMEOUT_MESSAGE);
+          }, EMBEDDED_SIGNUP_SELECTION_TIMEOUT_MS);
+        }
         void tryFinish();
       },
       {

@@ -41,7 +41,10 @@ describe("ajustes de WhatsApp simplificados", () => {
     expect(wizard).not.toContain("tokenLast4");
     expect(route).not.toContain("tokenLast4");
     expect(button).toContain("resetAttempt();");
-    expect(button).toContain('payload.event === "CANCEL"');
+    // La lectura del postMessage vive en el parser puro; el botón reinicia.
+    const parser = source("src/lib/meta/embedded-signup-message.ts");
+    expect(parser).toContain('payload.event === "CANCEL"');
+    expect(button).toContain('message.kind === "cancel"');
     expect(button).toContain("state: stateRef.current");
     expect(button).toContain('fetch("/api/settings/whatsapp")');
     expect(button).toContain("script.onerror");
