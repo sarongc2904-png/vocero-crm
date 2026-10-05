@@ -82,7 +82,7 @@ const ENDS_WITH_PRICE = new RegExp(
 );
 // Cambian el sentido del monto: no es el precio del servicio tal cual.
 const PRICE_QUALIFIER =
-  /\b(?:desde|a partir de|hasta|descuentos?|off|anticipos?|depositos?|enganches?|promocion(?:es)?|antes|ahora|referencia|aprox\w*)\b/;
+  /\b(?:desde|a partir del?|hasta|descuentos?|off|anticipos?|depositos?|enganches?|promocion(?:es)?|antes|ahora|referencia|aprox\w*|minimos?|maximos?|adicional(?:es)?|extras?|iva|ofertas?|liquidacion(?:es)?|rebajas?)\b|%/;
 
 function unmarkedPriceCandidate(
   line: string,
@@ -102,12 +102,14 @@ function unmarkedPriceCandidate(
   const service = TRAILING_PRICE.exec(text)?.[1]
     ?.replace(/[\s:–—-]+$/, "")
     .trim();
-  // Termina en monto pero no es "servicio claro + monto": respaldo, nunca omisión.
+  // Termina en monto pero no es "servicio claro + monto" (o el monto es cero):
+  // respaldo, nunca omisión.
   if (
     !service ||
     !/\p{L}/u.test(service) ||
     hasPriceAppearance(service) ||
-    PRICE_QUALIFIER.test(normalize(service))
+    PRICE_QUALIFIER.test(normalize(service)) ||
+    !/[1-9]/.test(text.slice(text.lastIndexOf("$")))
   ) {
     return "malformed";
   }

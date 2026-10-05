@@ -614,6 +614,87 @@ describe("4b endurecido: calificadores y nombre poco claro fuerzan respaldo", ()
   });
 });
 
+describe("4b: calificadores ampliados y monto cero", () => {
+  const SERVICE = "Limpieza dental profunda con ultrasonido, pulido y revisión general";
+
+  function fromManual(text: string) {
+    return buildCompletePriceSource({
+      organizationId: "org_a",
+      manualEntries: [{ id: "kb_qualifier", text }],
+      documentChunks: [],
+    });
+  }
+
+  it.each([
+    "Tratamiento de ortodoncia con brackets metálicos a partir del segundo mes $1,200 MXN",
+    "Tratamiento de ortodoncia con brackets metálicos a partir de la segunda cita $1,200 MXN",
+    "Tratamiento de ortodoncia con brackets metálicos A PARTIR DEL segundo mes $1,200 MXN",
+    `${SERVICE}, precio mínimo $700 MXN`,
+    `${SERVICE}, precio minimo $700 MXN`,
+    `${SERVICE}, precio máximo $1,200 MXN`,
+    `${SERVICE}, MAXIMO $1,200 MXN`,
+    `${SERVICE}, costo adicional $300 MXN`,
+    `${SERVICE}, cargos adicionales $300 MXN`,
+    `${SERVICE}, cargo Extra $300 MXN`,
+    `${SERVICE}, IVA incluido $700 MXN`,
+    `${SERVICE}, más IVA $700 MXN`,
+    `${SERVICE}, mas iva $700 MXN`,
+    `${SERVICE} con 30% $490 MXN`,
+    `${SERVICE} con 30 % menos $490 MXN`,
+    `${SERVICE}, oferta $490 MXN`,
+    `${SERVICE}, OFERTAS $490 MXN`,
+    `${SERVICE}, liquidación $490 MXN`,
+    `${SERVICE}, liquidacion $490 MXN`,
+    `${SERVICE}, rebaja $490 MXN`,
+    `${SERVICE}, Rebajas $490 MXN`,
+  ])("el calificador fuerza respaldo: %s", (text) => {
+    expect(text.length).toBeGreaterThan(60);
+    expect(fromManual(text)).toMatchObject({
+      complete: false,
+      lines: [],
+      reason: "malformed_price_line",
+    });
+  });
+
+  it.each([
+    "Estacionamiento gratuito para pacientes en la planta baja del edificio $0",
+    "Estacionamiento gratuito para pacientes en la planta baja del edificio $ 0 MXN",
+    "Estacionamiento gratuito para pacientes en la planta baja del edificio $0.00",
+    "Estacionamiento gratuito para pacientes en la planta baja del edificio $0,00 pesos",
+  ])("un monto cero no se reconoce como precio: %s", (text) => {
+    expect(text.length).toBeGreaterThan(60);
+    expect(fromManual(text)).toMatchObject({
+      complete: false,
+      lines: [],
+      reason: "malformed_price_line",
+    });
+  });
+
+  it.each([
+    "Extracción de muela del juicio con anestesia local y sutura reabsorbible $2,500 MXN",
+    "Revisión de extracciones previas y control de cicatrización en consultorio $350 MXN",
+    `${SERVICE}, por sesión $700 MXN`,
+    "Renta de consultorio equipado para especialistas invitados por hora $450 MXN",
+    "Taller grupal de higiene bucal para niños y padres de familia por persona $150",
+    "Plan de mantenimiento preventivo con dos limpiezas al año, mensual $299 MXN",
+    "Selladores de fosetas y fisuras para molares permanentes de niños c/u $250 MXN",
+    "Aplicación de flúor en barniz para niños de dos a doce años de edad $0.50",
+    "Consulta de valoración con radiografía panorámica incluida en la visita $10",
+  ])("sin calificador de la lista se sigue reconociendo: %s", (text) => {
+    expect(text.length).toBeGreaterThan(60);
+    expect(fromManual(text)).toEqual({ complete: true, lines: [text] });
+  });
+
+  it.each([
+    `${SERVICE}, más IVA $700 MXN.`,
+    `${SERVICE}, oferta $490 MXN por tiempo limitado`,
+    "Estacionamiento gratuito para pacientes en la planta baja del edificio $0.",
+  ])("monto seguido de punto o texto se sigue ignorando (límite conocido): %s", (text) => {
+    expect(text.length).toBeGreaterThan(60);
+    expect(fromManual(text)).toMatchObject({ complete: false, reason: "no_price_lines" });
+  });
+});
+
 describe("4b no contamina los nombres de servicio del agente", () => {
   it("una línea larga sin viñeta no aporta palabras sueltas como 'servicio mencionado'", () => {
     const knowledgeText = [
