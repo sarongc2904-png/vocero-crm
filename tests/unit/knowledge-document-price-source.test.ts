@@ -221,7 +221,7 @@ describe("extracción comercial completa", () => {
     ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
   });
 
-  it("aplica el umbral a ambos lados sin confundir prosa larga", () => {
+  it("aplica el umbral a ambos lados: corta sin viñeta respalda, larga con precio final se reconoce", () => {
     const below = unmarkedPriceLine(59);
     const above = unmarkedPriceLine(61);
     expect(below).toHaveLength(59);
@@ -239,7 +239,100 @@ describe("extracción comercial completa", () => {
         manualEntries: [{ id: "kb_above", text: above }],
         documentChunks: [],
       })
-    ).toMatchObject({ complete: false, reason: "no_price_lines" });
+    ).toEqual({ complete: true, lines: [above] });
+  });
+
+  describe("4b: línea larga sin viñeta con el precio al final", () => {
+    const LONG_UNMARKED = [
+      "Limpieza dental profunda con ultrasonido, pulido y revisión general $700 MXN",
+      "Paquete de tres sesiones de blanqueamiento con férula personalizada: $2,500 MXN",
+      "Consulta de valoración con radiografía panorámica incluida en la visita $ 450",
+      "Guarda oclusal rígida hecha a la medida en laboratorio externo $1,800.00 pesos",
+    ] as const;
+
+    it.each(LONG_UNMARKED)("se reconoce como precio: %s", (line) => {
+      expect(line.length).toBeGreaterThan(60);
+      expect(
+        buildCompletePriceSource({
+          organizationId: "org_a",
+          manualEntries: [{ id: "kb_long", text: line }],
+          documentChunks: [],
+        })
+      ).toEqual({ complete: true, lines: [line] });
+      expect(extractPriceLinesFromText(line)).toEqual({ complete: true, lines: [line] });
+    });
+
+    it("se reconoce dentro de un documento junto a los diez precios del demo", () => {
+      const line = LONG_UNMARKED[0];
+      const result = buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [],
+        documentChunks: rowsFromText(`${DEMO_DOCUMENT}\n${line}`) as never,
+      });
+      expect(result).toEqual({ complete: true, lines: [...PRICE_LINES, line] });
+    });
+
+    it.each([
+      [
+        "punto final",
+        "Limpieza dental profunda con ultrasonido, pulido y revisión general $700 MXN.",
+      ],
+      [
+        "precio a media línea",
+        "Limpieza dental profunda con ultrasonido por $700 MXN y revisión general incluida",
+      ],
+      [
+        "dos montos",
+        "Limpieza dental profunda con ultrasonido y pulido general de $500 a $700 MXN",
+      ],
+      [
+        "monto sin signo de pesos",
+        "Limpieza dental profunda con ultrasonido, pulido y revisión general 700 pesos",
+      ],
+      [
+        "pregunta",
+        "¿Sabía que la limpieza dental profunda con ultrasonido y pulido cuesta $700 MXN?",
+      ],
+      ["sin servicio antes del monto", `${".".repeat(60)} $700 MXN`],
+    ])("ambigua (%s) se ignora: no se adivina el precio", (_label, line) => {
+      expect(line.trim().length).toBeGreaterThan(60);
+      expect(
+        buildCompletePriceSource({
+          organizationId: "org_a",
+          manualEntries: [{ id: "kb_ambiguous", text: line }],
+          documentChunks: [],
+        })
+      ).toMatchObject({ complete: false, lines: [], reason: "no_price_lines" });
+    });
+
+    it("barre cortes reales con la línea larga: once líneas exactas o respaldo, nunca parcial", () => {
+      const line = LONG_UNMARKED[1];
+      const expected = [...PRICE_LINES, line];
+      for (let padding = 0; padding <= 2_000; padding += 13) {
+        const rows = rowsFromText(`${"x".repeat(padding)}\n${DEMO_DOCUMENT}\n${line}\nFIN`);
+        const result = buildCompletePriceSource({
+          organizationId: "org_a",
+          manualEntries: [],
+          documentChunks: rows as never,
+        });
+        if (result.complete) {
+          expect(result.lines, `padding=${padding}`).toEqual(expected);
+        } else {
+          expect(result.lines, `padding=${padding}`).toEqual([]);
+        }
+      }
+    });
+
+    it("partida en el borde sin copia completa obliga respaldo", () => {
+      const line = `Servicio extraordinariamente detallado ${"descripción ".repeat(28)}con todo $9,999 MXN`;
+      expect(line.length).toBeGreaterThan(200);
+      const result = buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [],
+        documentChunks: rowsFromText(`${"x".repeat(1_590)}\n${line}\nFIN`) as never,
+      });
+      expect(result).toMatchObject({ complete: false, lines: [], reason: "truncated_price_line" });
+    });
   });
 
   it("ignora la línea narrativa larga y conserva los diez precios estrictos del demo", () => {
@@ -404,5 +497,25 @@ describe("extracción comercial completa", () => {
       lines: [],
       reason: "conflicting_price",
     });
+  });
+});
+
+describe("4b no contamina los nombres de servicio del agente", () => {
+  it("una línea larga sin viñeta no aporta palabras sueltas como 'servicio mencionado'", () => {
+    const knowledgeText = [
+      "- Limpieza dental: $700 MXN",
+      "Paquete de seguimiento general con tres revisiones semestrales incluidas $1,500 MXN",
+      "Para agendar una cita solicitar:",
+      "- Nombre completo",
+      "- Número de teléfono",
+      "- Servicio o motivo de consulta",
+    ].join("\n");
+    expect(
+      groundedConversationReply({
+        inboundText: "quiero avanzar hoy",
+        customerHistoryText: "me llamo Ana Pérez, mi teléfono es 8671234567, busco algo general",
+        knowledgeText,
+      })
+    ).toMatch(/servicio o motivo/i);
   });
 });
