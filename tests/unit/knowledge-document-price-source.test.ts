@@ -282,18 +282,17 @@ describe("extracción comercial completa", () => {
         "Limpieza dental profunda con ultrasonido por $700 MXN y revisión general incluida",
       ],
       [
-        "dos montos",
-        "Limpieza dental profunda con ultrasonido y pulido general de $500 a $700 MXN",
-      ],
-      [
-        "monto sin signo de pesos",
-        "Limpieza dental profunda con ultrasonido, pulido y revisión general 700 pesos",
-      ],
-      [
         "pregunta",
         "¿Sabía que la limpieza dental profunda con ultrasonido y pulido cuesta $700 MXN?",
       ],
-      ["sin servicio antes del monto", `${".".repeat(60)} $700 MXN`],
+      [
+        "número final sin moneda",
+        "Limpieza dental profunda con ultrasonido y pulido, sesiones disponibles 2",
+      ],
+      [
+        "moneda antes del número final",
+        "Limpieza dental profunda con ultrasonido, pulido y revisión general MXN 700",
+      ],
     ])("ambigua (%s) se ignora: no se adivina el precio", (_label, line) => {
       expect(line.trim().length).toBeGreaterThan(60);
       expect(
@@ -303,6 +302,27 @@ describe("extracción comercial completa", () => {
           documentChunks: [],
         })
       ).toMatchObject({ complete: false, lines: [], reason: "no_price_lines" });
+    });
+
+    it.each([
+      [
+        "dos montos",
+        "Limpieza dental profunda con ultrasonido y pulido general de $500 a $700 MXN",
+      ],
+      ["sin servicio antes del monto", `${".".repeat(60)} $700 MXN`],
+      [
+        "monto sin signo de pesos",
+        "Limpieza dental profunda con ultrasonido, pulido y revisión general 700 pesos",
+      ],
+    ])("ambigua (%s) fuerza respaldo: no se adivina el precio", (_label, line) => {
+      expect(line.trim().length).toBeGreaterThan(60);
+      expect(
+        buildCompletePriceSource({
+          organizationId: "org_a",
+          manualEntries: [{ id: "kb_ambiguous", text: line }],
+          documentChunks: [],
+        })
+      ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
     });
 
     it("barre cortes reales con la línea larga: once líneas exactas o respaldo, nunca parcial", () => {
@@ -497,6 +517,100 @@ describe("extracción comercial completa", () => {
       lines: [],
       reason: "conflicting_price",
     });
+  });
+});
+
+describe("4b endurecido: calificadores y nombre poco claro fuerzan respaldo", () => {
+  function fromManual(text: string) {
+    return buildCompletePriceSource({
+      organizationId: "org_a",
+      manualEntries: [{ id: "kb_strict", text }],
+      documentChunks: [],
+    });
+  }
+
+  it.each([
+    "La limpieza tiene un precio de referencia de $700 MXN",
+    "Desde $700",
+    "Anticipo de $500",
+    "Descuento de $200 en tu primera sesión",
+    "Promoción de temporada $350",
+  ])("la frase corta '%s' fuerza respaldo", (text) => {
+    expect(fromManual(text)).toMatchObject({
+      complete: false,
+      lines: [],
+      reason: "malformed_price_line",
+    });
+  });
+
+  it.each([
+    "La limpieza dental profunda con ultrasonido tiene un precio de referencia de $700 MXN",
+    "Blanqueamiento dental con lámpara LED y férula personalizada desde $2,500 MXN",
+    "Tratamiento de ortodoncia con brackets metálicos a partir de $8,000 MXN",
+    "Financiamiento de implantes dentales con mensualidades hasta $1,200 MXN",
+    "Descuento especial en tu primera sesión de limpieza dental profunda $200 MXN",
+    "Limpieza dental profunda con ultrasonido y pulido con 20% off ahora $560 MXN",
+    "Anticipo para apartar la cita de ortodoncia con brackets metálicos $500 MXN",
+    "Depósito reembolsable para reservar tu valoración clínica completa $300 MXN",
+    "Enganche del plan de ortodoncia invisible con alineadores transparentes $5,000",
+    "Promoción de temporada en limpieza dental profunda con ultrasonido $350 MXN",
+    "Limpieza dental profunda con ultrasonido y pulido, antes $900 MXN",
+    "Corona dental de porcelana con prueba y ajuste en dos citas aprox $4,500 MXN",
+    "Endodoncia de molar con radiografías de control, costo aproximado $3,000 MXN",
+  ])("la línea larga con calificador fuerza respaldo: %s", (text) => {
+    expect(text.length).toBeGreaterThan(60);
+    expect(fromManual(text)).toMatchObject({
+      complete: false,
+      lines: [],
+      reason: "malformed_price_line",
+    });
+    expect(extractPriceLinesFromText(`${PRICE_LINES[0]}\n${text}`)).toEqual({
+      complete: false,
+      lines: [PRICE_LINES[0]],
+    });
+  });
+
+  it("el calificador en un documento fuerza respaldo aunque haya diez precios válidos", () => {
+    const line =
+      "La limpieza dental profunda con ultrasonido tiene un precio de referencia de $700 MXN";
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [],
+        documentChunks: rowsFromText(`${DEMO_DOCUMENT}\n${line}`) as never,
+      })
+    ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
+  });
+
+  it.each([
+    "Agenda tu valoración y conoce el plan de tratamiento que mejor se adapta a ti",
+    "Atendemos de lunes a viernes de 10 a 14 hrs y sábados con cita previa confirmada",
+    "Los precios pueden cambiar después de la valoración clínica según cada caso",
+  ])("la prosa larga sin monto final se ignora: %s", (text) => {
+    expect(text.length).toBeGreaterThan(60);
+    expect(fromManual(text)).toMatchObject({ complete: false, reason: "no_price_lines" });
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [],
+        documentChunks: rowsFromText(`${DEMO_DOCUMENT}\n${text}`) as never,
+      })
+    ).toEqual({ complete: true, lines: PRICE_LINES });
+  });
+
+  it("barre cortes con una línea que fuerza respaldo: nunca sale una lista parcial", () => {
+    const line =
+      "Promoción de temporada en limpieza dental profunda con ultrasonido $350 MXN";
+    for (let padding = 0; padding <= 2_000; padding += 13) {
+      const result = buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [],
+        documentChunks: rowsFromText(
+          `${"x".repeat(padding)}\n${DEMO_DOCUMENT}\n${line}\nFIN`
+        ) as never,
+      });
+      expect(result, `padding=${padding}`).toMatchObject({ complete: false, lines: [] });
+    }
   });
 });
 

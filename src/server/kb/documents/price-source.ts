@@ -73,13 +73,23 @@ const TRAILING_PRICE = new RegExp(
   String.raw`^(.*?)\s*\$\s*${PRICE_NUMBER}(?:\s*(?:pesos|mxn|mn))?$`,
   "i"
 );
+// Termina en "$monto" o en "número + pesos/MXN/MN": la línea da un precio y,
+// si no pasa la regla estricta, no puede omitirse en silencio. Otro final
+// (punto, número sin moneda, "MXN 700") es prosa y se ignora.
+const ENDS_WITH_PRICE = new RegExp(
+  String.raw`(?:\$\s*${PRICE_NUMBER}(?:\s*(?:pesos|mxn|mn))?|${PRICE_NUMBER}\s*(?:pesos|mxn|mn))$`,
+  "i"
+);
+// Cambian el sentido del monto: no es el precio del servicio tal cual.
+const PRICE_QUALIFIER =
+  /\b(?:desde|a partir de|hasta|descuentos?|off|anticipos?|depositos?|enganches?|promocion(?:es)?|antes|ahora|referencia|aprox\w*)\b/;
 
 function unmarkedPriceCandidate(
   line: string,
   sourceId: string,
   documentId: string,
   boundary: PriceCandidate["boundary"]
-): PriceCandidate | null {
+): PriceCandidate | "malformed" | null {
   if (
     line.length <= SHORT_PRICE_LINE_MAX_LENGTH ||
     PRICE_LIST_MARKER.test(line) ||
@@ -87,11 +97,20 @@ function unmarkedPriceCandidate(
   ) {
     return null;
   }
-  const service = TRAILING_PRICE.exec(line.normalize("NFKC"))?.[1]
+  const text = line.normalize("NFKC");
+  if (!ENDS_WITH_PRICE.test(text)) return null;
+  const service = TRAILING_PRICE.exec(text)?.[1]
     ?.replace(/[\s:–—-]+$/, "")
     .trim();
-  // Ambigua → se ignora: sin servicio legible o con otro monto antes del final.
-  if (!service || !/\p{L}/u.test(service) || hasPriceAppearance(service)) return null;
+  // Termina en monto pero no es "servicio claro + monto": respaldo, nunca omisión.
+  if (
+    !service ||
+    !/\p{L}/u.test(service) ||
+    hasPriceAppearance(service) ||
+    PRICE_QUALIFIER.test(normalize(service))
+  ) {
+    return "malformed";
+  }
   return {
     line,
     normalized: normalize(line),
