@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, gt } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -123,6 +123,44 @@ async function readPendingAction(
     return null;
   }
 
+  return {
+    id: row.id,
+    action: row.action as AgendaPendingKind,
+    bookingId: row.bookingId,
+    startUtc: row.startUtc ? row.startUtc.toISOString() : null,
+    serviceId: row.serviceId,
+    professionalId: row.professionalId,
+    expiresAt: row.expiresAt,
+  };
+}
+
+/**
+ * Toma la acción pendiente VIGENTE y la borra en una sola sentencia
+ * (`DELETE … RETURNING`). Es la única puerta para ejecutar una acción de
+ * agenda: dos confirmaciones concurrentes no pueden recibir la misma fila, y
+ * una fila expirada no se devuelve.
+ */
+export async function consumePendingAction(
+  organizationId: string,
+  conversationId: string,
+  now: Date = new Date()
+): Promise<PendingAgendaAction | null> {
+  const db = getDb();
+  const rows = await db
+    .delete(schema.pendingAgendaAction)
+    .where(
+      scoped(
+        schema.pendingAgendaAction.organizationId,
+        organizationId,
+        eq(schema.pendingAgendaAction.conversationId, conversationId),
+        gt(schema.pendingAgendaAction.expiresAt, now)
+      )
+    )
+    .returning();
+
+  const row = rows[0];
+  // El WHERE ya excluye lo expirado; se comprueba otra vez por defensa.
+  if (!row || row.expiresAt.getTime() <= now.getTime()) return null;
   return {
     id: row.id,
     action: row.action as AgendaPendingKind,
