@@ -276,23 +276,107 @@ export function selectedOfferConfirmationLabel(
   return `${weekday} ${day} a las ${timeInTz(startUtc, timezone)}`.trim();
 }
 
-/** Un "sí" al principio del mensaje, sin condicional detrás ("si me surge algo"). */
-const AFFIRMATIVE =
-  /^(?:si|sii+|sip|claro|correcto|exacto|asi es|confirmo|confirmado|confirmar|de acuerdo|ok|okay|vale|dale|va|adelante|hazlo|hazla|por favor|perfecto)\b/;
-
-const CONDITIONAL_AFTER_SI =
-  /\bsi\b\s+(?:me|te|le|nos|no|surge|pasa|puedo|tengo|acaso|es que|fuera|hubiera)\b/;
+/**
+ * Resultado de leer la respuesta del cliente a una acción de agenda pendiente.
+ *
+ * - `confirm`: confirmación explícita y sin condiciones ("sí", "dale",
+ *   "de acuerdo", "sí, gracias", "👍"). Solo esto ejecuta la acción.
+ * - `unclear`: empieza afirmando pero trae algo más que no es una condición de
+ *   hora/día ("sí, ¿y cuánto cuesta?", "ok, pero rápido", "va a llover?").
+ *   Ante la duda NO se confirma: se repite la pregunta una vez.
+ * - `other`: negativa ("claro que no", "ok no"), condicional ("si me
+ *   pudieras…"), otra hora/día ("sí pero a las 5", "vale, pero mejor el
+ *   jueves") o un tema distinto. La acción pendiente se descarta.
+ */
+export type ConfirmationVerdict = "confirm" | "unclear" | "other";
 
 /**
- * IA-W2 — ¿Es una CONFIRMACIÓN inequívoca?
- *
- * Deliberadamente estricta: "sí", "sí, cancélala", "confirmo", "dale". Un "si"
- * condicional ("si me surge algo") NO confirma nada, y un mensaje largo con
- * "sí" dentro tampoco (podría ser una pregunta que empieza igual).
+ * 👍 (con o sin tono de piel) cuenta como "ok": en WhatsApp es la forma más
+ * común de aceptar una propuesta. Cualquier otro emoji no confirma.
+ */
+const THUMBS_UP = /\u{1F44D}[\u{1F3FB}-\u{1F3FF}]?/gu;
+
+/** Frases de varias palabras que se leen como una sola. */
+const CONFIRM_PHRASES: [RegExp, string][] = [
+  [/\bclaro que si\b/g, "claro"],
+  [/\bde acuerdo\b/g, "deacuerdo"],
+  [/\besta bien\b/g, "estabien"],
+  [/\bpor favor\b/g, "porfavor"],
+  [/\basi es\b/g, "asies"],
+  [/\bmuchas gracias\b/g, "gracias"],
+];
+
+/** Palabras con las que puede empezar una confirmación. */
+const CONFIRM_OPENERS = new Set([
+  "si", "sip", "claro", "ok", "okay", "oki", "va", "vale", "dale", "perfecto",
+  "confirmo", "confirmado", "correcto", "exacto", "adelante", "deacuerdo",
+  "estabien", "porfavor", "asies", "hazlo", "hazla",
+]);
+
+/** Lo que puede acompañar a la confirmación sin cambiarla. */
+const CONFIRM_COMPANIONS = new Set([
+  ...CONFIRM_OPENERS,
+  "gracias", "porfa", "listo", "genial", "excelente", "quiero",
+  "agendala", "agendalo", "agendame", "agendamela", "agendamelo",
+  "reservala", "reservalo", "reservame", "reservamela", "reservamelo",
+  "cancelala", "cancelalo", "muevela", "muevelo", "cambiala", "cambialo",
+]);
+
+const NEGATIONS = new Set(["no", "ni", "nunca", "tampoco", "jamas", "nel", "nop", "nope"]);
+
+/** "si" condicional: "si me surge algo", "si me pudieras decir…". */
+const CONDITIONAL_AFTER_SI = new Set([
+  "me", "te", "le", "nos", "les", "surge", "pasa", "puedo", "puedes", "pudieras",
+  "pudiera", "tengo", "acaso", "es", "fuera", "hubiera", "quieres", "gustas",
+]);
+
+/** Una hora o un día distinto del propuesto convierte el "sí" en otra petición. */
+const TIME_OR_DAY = new Set([
+  "manana", "tarde", "noche", "hoy", "pasado", "temprano", "mediodia",
+  "lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo",
+  "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+  "septiembre", "setiembre", "octubre", "noviembre", "diciembre",
+  "semana", "dia", "hora", "horas", "las",
+]);
+
+/** Matices que piden algo más: ante ellos no se confirma. */
+const DOUBT_WORDS = new Set(["pero", "mejor", "aunque", "antes", "primero", "espera", "pregunta"]);
+
+const MAX_CONFIRMATION_WORDS = 6;
+
+/**
+ * IA-W2 — Clasifica la respuesta a una acción pendiente. Ante la duda NO
+ * confirma: lo que no sea una confirmación limpia es `unclear` u `other`.
+ */
+export function classifyConfirmation(text: string): ConfirmationVerdict {
+  let norm = normalize(text).replace(THUMBS_UP, " ok ");
+  const asks = /[?¿]/.test(norm);
+  const hasDigits = /\d/.test(norm);
+  norm = norm
+    .replace(/[^a-z0-9ñ\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (const [phrase, token] of CONFIRM_PHRASES) norm = norm.replace(phrase, token);
+
+  const words = norm ? norm.split(" ") : [];
+  const first = words[0];
+  const opens = first !== undefined && (CONFIRM_OPENERS.has(first) || /^si+p?$/.test(first));
+  if (!opens) return "other";
+  if (words.some((word) => NEGATIONS.has(word))) return "other";
+  if (first.startsWith("si") && words[1] && CONDITIONAL_AFTER_SI.has(words[1])) return "other";
+  if (hasDigits || words.some((word) => TIME_OR_DAY.has(word))) return "other";
+  if (asks || words.some((word) => DOUBT_WORDS.has(word))) return "unclear";
+  if (words.length > MAX_CONFIRMATION_WORDS) return "unclear";
+  const rest = words.slice(1);
+  return rest.every((word) => CONFIRM_COMPANIONS.has(word) || /^si+p?$/.test(word))
+    ? "confirm"
+    : "unclear";
+}
+
+/**
+ * IA-W2 — ¿Es una CONFIRMACIÓN inequívoca? Solo `confirm` cuenta: negaciones,
+ * preguntas, "pero"/"mejor", horas o días distintos y condicionales no.
  */
 export function isAffirmativeConfirmation(text: string): boolean {
-  const norm = normalize(text).trim();
-  if (!AFFIRMATIVE.test(norm)) return false;
-  if (CONDITIONAL_AFTER_SI.test(norm)) return false;
-  return norm.split(/\s+/).length <= 5;
+  return classifyConfirmation(text) === "confirm";
 }
