@@ -37,8 +37,80 @@ const TIME_SELECTION =
 
 export function isBareTimeSelection(text: string): boolean {
   const norm = normalize(text);
-  if (!TIME_SELECTION.test(norm)) return false;
+  if (!TIME_SELECTION.test(norm) && parseRequestedTime(text)?.kind !== "time") {
+    return false;
+  }
   return !BOOKING_CONFIRM.test(norm);
+}
+
+/**
+ * Hora que el cliente pide con sus palabras, o un número suelto.
+ *
+ * `time.candidates` son minutos del día. Sin am/pm ni "de la tarde", una hora
+ * de 1 a 11 tiene dos lecturas (4 → 04:00 y 16:00); quien resuelve decide con
+ * el horario de atención y la disponibilidad, nunca por intuición.
+ *
+ * `bare_number` es un número solo ("4"): con una lista mostrada es ambiguo
+ * (¿opción 4 u hora 4?) y se pregunta.
+ */
+export type RequestedTime =
+  | { kind: "time"; candidates: number[] }
+  | { kind: "bare_number"; value: number };
+
+const TIME_EXPRESSION =
+  /(?:^|\s)((?:a\s+)?las\s+|(?:el|la)\s+de\s+(?:las\s+)?)?(\d{1,2})(?::([0-5]\d))?(?:\s+y\s+(media|cuarto))?(?:\s*(am|pm)|\s+(?:de|en|por)\s+la\s+(manana|tarde|noche))?(?=\s|$)/g;
+
+export function parseRequestedTime(text: string): RequestedTime | null {
+  const norm = normalize(text)
+    // "p. m." / "p.m." / "pm" → "pm" antes de quitar la puntuación.
+    .replace(/\b([ap])\.?\s*m\b\.?/g, "$1m")
+    .replace(/[¿?¡!.,;]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/^\d{1,2}$/.test(norm)) {
+    return { kind: "bare_number", value: Number(norm) };
+  }
+
+  for (const match of norm.matchAll(TIME_EXPRESSION)) {
+    const [, prefix, hourRaw, minuteRaw, fraction, ampm, daypart] = match;
+    // Sin dos puntos, fracción, am/pm, bloque ni "a las": no es una hora
+    // ("el 7 de octubre", "martes 6").
+    if (!prefix && !minuteRaw && !fraction && !ampm && !daypart) continue;
+
+    let hour = Number(hourRaw);
+    const minute = minuteRaw
+      ? Number(minuteRaw)
+      : fraction === "media"
+        ? 30
+        : fraction === "cuarto"
+          ? 15
+          : 0;
+    if (hour > 23) continue;
+
+    const pm = ampm === "pm" || daypart === "tarde" || daypart === "noche";
+    const am = ampm === "am" || daypart === "manana";
+    if (pm) {
+      if (hour > 12) continue;
+      if (hour < 12) hour += 12;
+      return { kind: "time", candidates: [hour * 60 + minute] };
+    }
+    if (am) {
+      if (hour > 12) continue;
+      if (hour === 12) hour = 0;
+      return { kind: "time", candidates: [hour * 60 + minute] };
+    }
+    // "07:00" (con cero a la izquierda) ya es reloj de 24 h: una sola lectura.
+    const twentyFourHour = Boolean(minuteRaw) && hourRaw!.length === 2;
+    if (hour >= 13 || hour === 0 || hour === 12 || twentyFourHour) {
+      return { kind: "time", candidates: [hour * 60 + minute] };
+    }
+    return {
+      kind: "time",
+      candidates: [hour * 60 + minute, (hour + 12) * 60 + minute],
+    };
+  }
+  return null;
 }
 
 /**
