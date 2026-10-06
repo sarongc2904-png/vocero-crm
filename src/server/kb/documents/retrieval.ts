@@ -1,8 +1,10 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 
 const CANDIDATE_LIMIT = 400;
+const COMPLETE_SOURCE_MAX_CHUNKS = 2_000;
+const COMPLETE_SOURCE_MAX_CHARACTERS = 2_000_000;
 
 const SPANISH_STOPWORDS = new Set([
   "con",
@@ -66,6 +68,56 @@ export type DocumentRetrievalStore = {
     organizationId: string,
     limit: number
   ): Promise<DocumentRetrievalCandidate[]>;
+};
+
+export type CompleteDocumentSourcePreflight = {
+  documentCount: number;
+  chunkCount: number;
+  totalCharacters: number;
+};
+
+export type CompleteDocumentChunkRow = {
+  id: string | null;
+  organizationId: string;
+  documentId: string;
+  documentStatus: string;
+  approved: boolean | null;
+  content: string | null;
+  position: number | null;
+  page: number | null;
+};
+
+export type CompleteApprovedDocumentChunk = {
+  id: string;
+  organizationId: string;
+  documentId: string;
+  content: string;
+  position: number;
+  page: number | null;
+};
+
+export type CompleteDocumentSourceFailureReason =
+  | "corpus_limit"
+  | "tenant_mismatch"
+  | "document_not_ready"
+  | "missing_chunks"
+  | "chunk_not_approved"
+  | "position_duplicate"
+  | "position_gap"
+  | "preflight_mismatch";
+
+export type CompleteDocumentSourceResult =
+  | { complete: true; chunks: CompleteApprovedDocumentChunk[] }
+  | {
+      complete: false;
+      chunks: [];
+      reason: CompleteDocumentSourceFailureReason;
+      documentId: string;
+    };
+
+export type CompleteDocumentSourceStore = {
+  loadPreflight(organizationId: string): Promise<CompleteDocumentSourcePreflight>;
+  loadRows(organizationId: string): Promise<CompleteDocumentChunkRow[]>;
 };
 
 /**
@@ -236,6 +288,189 @@ const databaseStore: DocumentRetrievalStore = {
       .limit(limit);
   },
 };
+
+function numeric(value: number | string | null | undefined): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+const completeSourceDatabaseStore: CompleteDocumentSourceStore = {
+  async loadPreflight(organizationId) {
+    const rows = await getDb()
+      .select({
+        documentCount: sql<number>`count(distinct ${schema.kbDocument.id})::int`,
+        chunkCount: sql<number>`count(${schema.kbDocumentChunk.id})::int`,
+        totalCharacters: sql<number>`coalesce(sum(length(${schema.kbDocumentChunk.content})), 0)::int`,
+      })
+      .from(schema.kbDocument)
+      .leftJoin(
+        schema.kbDocumentChunk,
+        and(
+          eq(schema.kbDocument.organizationId, schema.kbDocumentChunk.organizationId),
+          eq(schema.kbDocument.id, schema.kbDocumentChunk.documentId),
+          eq(schema.kbDocumentChunk.organizationId, organizationId)
+        )
+      )
+      .where(
+        scoped(
+          schema.kbDocument.organizationId,
+          organizationId,
+          eq(schema.kbDocument.status, "ready")
+        )
+      );
+    const row = rows[0];
+    return {
+      documentCount: numeric(row?.documentCount),
+      chunkCount: numeric(row?.chunkCount),
+      totalCharacters: numeric(row?.totalCharacters),
+    };
+  },
+  async loadRows(organizationId) {
+    return getDb()
+      .select({
+        id: schema.kbDocumentChunk.id,
+        organizationId: schema.kbDocument.organizationId,
+        documentId: schema.kbDocument.id,
+        documentStatus: schema.kbDocument.status,
+        approved: schema.kbDocumentChunk.approved,
+        content: schema.kbDocumentChunk.content,
+        position: schema.kbDocumentChunk.position,
+        page: schema.kbDocumentChunk.page,
+      })
+      .from(schema.kbDocument)
+      .leftJoin(
+        schema.kbDocumentChunk,
+        and(
+          eq(schema.kbDocument.organizationId, schema.kbDocumentChunk.organizationId),
+          eq(schema.kbDocument.id, schema.kbDocumentChunk.documentId),
+          eq(schema.kbDocumentChunk.organizationId, organizationId)
+        )
+      )
+      .where(
+        scoped(
+          schema.kbDocument.organizationId,
+          organizationId,
+          eq(schema.kbDocument.status, "ready")
+        )
+      )
+      .orderBy(asc(schema.kbDocument.id), asc(schema.kbDocumentChunk.position));
+  },
+};
+
+function completeSourceFailure(
+  reason: CompleteDocumentSourceFailureReason,
+  documentId = "all"
+): CompleteDocumentSourceResult {
+  return { complete: false, chunks: [], reason, documentId };
+}
+
+function characterLength(value: string): number {
+  let length = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= 0xdc00 &&
+      value.charCodeAt(index + 1) <= 0xdfff
+    ) {
+      index += 1;
+    }
+    length += 1;
+  }
+  return length;
+}
+
+export async function loadCompleteApprovedDocumentChunksWithStore(
+  store: CompleteDocumentSourceStore,
+  input: { organizationId: string }
+): Promise<CompleteDocumentSourceResult> {
+  if (!input.organizationId) throw new Error("organizationId_required");
+  const preflight = await store.loadPreflight(input.organizationId);
+  if (
+    preflight.chunkCount > COMPLETE_SOURCE_MAX_CHUNKS ||
+    preflight.totalCharacters > COMPLETE_SOURCE_MAX_CHARACTERS
+  ) {
+    return completeSourceFailure("corpus_limit");
+  }
+  if (preflight.documentCount === 0) {
+    if (preflight.chunkCount !== 0 || preflight.totalCharacters !== 0) {
+      return completeSourceFailure("preflight_mismatch");
+    }
+    return { complete: true, chunks: [] };
+  }
+
+  const rows = await store.loadRows(input.organizationId);
+  const byDocument = new Map<string, CompleteDocumentChunkRow[]>();
+  for (const row of rows) {
+    if (row.organizationId !== input.organizationId) {
+      return completeSourceFailure("tenant_mismatch", row.documentId);
+    }
+    if (row.documentStatus !== "ready") {
+      return completeSourceFailure("document_not_ready", row.documentId);
+    }
+    const group = byDocument.get(row.documentId) ?? [];
+    group.push(row);
+    byDocument.set(row.documentId, group);
+  }
+  if (byDocument.size !== preflight.documentCount) {
+    return completeSourceFailure("preflight_mismatch");
+  }
+
+  const chunks: CompleteApprovedDocumentChunk[] = [];
+  for (const [documentId, group] of [...byDocument.entries()].sort(([a], [b]) =>
+    a.localeCompare(b)
+  )) {
+    if (
+      group.length === 0 ||
+      group.some(
+        (row) => row.id === null || row.content === null || row.position === null
+      )
+    ) {
+      return completeSourceFailure("missing_chunks", documentId);
+    }
+    const ordered = [...group].sort(
+      (left, right) => left.position! - right.position! || left.id!.localeCompare(right.id!)
+    );
+    const seenPositions = new Set<number>();
+    for (let index = 0; index < ordered.length; index += 1) {
+      const row = ordered[index]!;
+      if (row.approved !== true) {
+        return completeSourceFailure("chunk_not_approved", documentId);
+      }
+      if (seenPositions.has(row.position!)) {
+        return completeSourceFailure("position_duplicate", documentId);
+      }
+      seenPositions.add(row.position!);
+      if (row.position !== index) {
+        return completeSourceFailure("position_gap", documentId);
+      }
+      chunks.push({
+        id: row.id!,
+        organizationId: row.organizationId,
+        documentId,
+        content: row.content!,
+        position: row.position!,
+        page: row.page,
+      });
+    }
+  }
+  if (
+    chunks.length !== preflight.chunkCount ||
+    chunks.reduce((total, chunk) => total + characterLength(chunk.content), 0) !==
+      preflight.totalCharacters
+  ) {
+    return completeSourceFailure("preflight_mismatch");
+  }
+  return { complete: true, chunks };
+}
+
+export async function loadCompleteApprovedDocumentChunks(input: {
+  organizationId: string;
+}): Promise<CompleteDocumentSourceResult> {
+  return loadCompleteApprovedDocumentChunksWithStore(completeSourceDatabaseStore, input);
+}
 
 export async function retrieveRelevantDocumentChunksWithStore(
   store: DocumentRetrievalStore,

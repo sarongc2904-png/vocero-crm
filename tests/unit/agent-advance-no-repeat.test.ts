@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { groundedConversationReply } from "@/server/ai/prompts";
+import {
+  groundedConversationReply,
+  needsCompletePriceSource,
+} from "@/server/ai/prompts";
 import { isClosingAcknowledgement } from "@/server/ai/handoff";
 
 /**
@@ -275,6 +278,26 @@ describe("pregunta combinada de precio y 'qué incluye' con modismos", () => {
       conversation: [{ role: "customer", text: "¿qué incluye la limpieza?" }],
     });
     expect(answer).toBeNull();
+  });
+});
+
+describe("límite de activación de la fuente completa", () => {
+  it.each([
+    ["solo precio", "¿Cuánto cuesta cada opción?", null],
+    ["solo qué incluye", "¿Qué incluye la limpieza?", null],
+    ["cita", "Quiero avanzar hoy", ASK_NAME],
+    ["saludo", "Hola", null],
+  ])("%s conserva exactamente el resultado base", (_label, inbound, expected) => {
+    expect(needsCompletePriceSource(inbound)).toBe(false);
+    expect(reply({ inbound, conversation: [{ role: "customer", text: inbound }] })).toBe(expected);
+  });
+
+  it.each([
+    "¿Cuánto cuesta y qué incluye?",
+    "precio y que incluye cada opción",
+    "me dice cuanto sale y q incluye?",
+  ])("solo precio + qué incluye activa la fuente completa: %s", (inbound) => {
+    expect(needsCompletePriceSource(inbound)).toBe(true);
   });
 });
 

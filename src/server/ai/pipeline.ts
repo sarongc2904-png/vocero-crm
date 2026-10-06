@@ -31,8 +31,16 @@ import {
   buildAgentSystemPrompt,
   buildDocumentKnowledgeMessages,
   groundedConversationReply,
+  needsCompletePriceSource,
 } from "@/server/ai/prompts";
-import { retrieveRelevantDocumentChunks } from "@/server/kb/documents/retrieval";
+import {
+  loadCompleteApprovedDocumentChunks,
+  retrieveRelevantDocumentChunks,
+} from "@/server/kb/documents/retrieval";
+import {
+  buildCompletePriceSource,
+  type CompletePriceSourceResult,
+} from "@/server/kb/documents/price-source";
 import { agendaEnabled } from "@/server/agenda/flag";
 import {
   bookSlot,
@@ -503,6 +511,49 @@ async function runAgentTurnCore(
   ]
     .filter(Boolean)
     .join("\n\n");
+  let completePriceSource: CompletePriceSourceResult | undefined;
+  if (inboundText && needsCompletePriceSource(inboundText)) {
+    try {
+      const documents = await loadCompleteApprovedDocumentChunks({ organizationId });
+      if (!documents.complete) {
+        console.warn(
+          `[agente] price_source_fallback reason=${documents.reason} documentId=${documents.documentId}`
+        );
+        completePriceSource = {
+          complete: false,
+          lines: [],
+          reason: documents.reason,
+          documentId: documents.documentId,
+        };
+      } else {
+        const manualEntries = kb.map((entry) => ({
+          id: entry.id,
+          text:
+            entry.kind === "qa"
+              ? `${entry.question ?? ""}\n${entry.answer ?? ""}`
+              : entry.content ?? "",
+        }));
+        completePriceSource = buildCompletePriceSource({
+          organizationId,
+          manualEntries,
+          documentChunks: documents.chunks,
+        });
+        if (!completePriceSource.complete) {
+          console.warn(
+            `[agente] price_source_fallback reason=${completePriceSource.reason} documentId=${completePriceSource.documentId}`
+          );
+        }
+      }
+    } catch {
+      completePriceSource = {
+        complete: false,
+        lines: [],
+        reason: "load_error",
+        documentId: "all",
+      };
+      console.warn("[agente] price_source_fallback reason=load_error documentId=all");
+    }
+  }
   const customerHistoryText = history
     .filter((message) => message.direction === "in" && message.text)
     .map((message) => message.text)
@@ -512,6 +563,7 @@ async function runAgentTurnCore(
         inboundText,
         customerHistoryText,
         knowledgeText,
+        completePriceSource,
         tone: profile.tone,
         lastAgentText: lastAgentTextBeforeInbound,
         conversation: history
