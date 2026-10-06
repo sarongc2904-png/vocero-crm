@@ -60,15 +60,26 @@ import {
   findOffered,
   getOffers,
   mapaDeHuecosParaModelo,
+  replaceOffers,
+  type OfferedSlot,
 } from "@/server/agenda/offers";
 import { resolveExpandRequest, type ExpandWindow } from "@/server/agenda/expand";
 import {
   hasBookingConfirmation,
   isAffirmativeConfirmation,
   isBareTimeSelection,
+  offersShownInLastMessage,
+  parseRequestedTime,
   resolveOfferedTimeSelection,
   selectedOfferConfirmationLabel,
 } from "@/server/agenda/selection";
+import {
+  businessHoursLabel,
+  freeStartsByDay,
+  hhmm,
+  isWithinBusinessHours,
+  resolveRequestedTime,
+} from "@/server/agenda/time-request";
 import {
   clearPendingAction,
   getPendingAction,
@@ -79,10 +90,19 @@ import {
   resetOfferCursor,
 } from "@/server/agenda/offer-cursor";
 import { getSettings } from "@/server/agenda/settings";
-import { findSlot } from "@/server/agenda/availability";
+import { computeAvailability, findSlot } from "@/server/agenda/availability";
 import { findProfessionalSlot } from "@/server/agenda/professional-availability";
-import { todayInTz, todayLabelInTz } from "@/lib/time/slots";
 import {
+  dayIsoInTz,
+  dayLabelInTz,
+  labelInTz,
+  timeInTz,
+  todayInTz,
+  todayLabelInTz,
+  zonedWallClockToUtc,
+} from "@/lib/time/slots";
+import {
+  capitalize,
   factualHoursReply,
   resolveScheduleIntent,
   type ScheduleIntent,
@@ -607,6 +627,46 @@ async function runAgentTurnCore(
     : [];
   const mapaDeHuecos = mapaDeHuecosParaModelo(ofertas);
 
+  /**
+   * La última lista de horarios que el cliente VIO. Se busca en los últimos
+   * mensajes salientes (no solo el último): tras una pregunta de aclaración
+   * ("¿las 16:00 o la opción 4?") "la cuarta" sigue apuntando a esa lista.
+   */
+  const shownContext = (() => {
+    if (!agendaContext || ofertas.length === 0) return null;
+    const outbound = history
+      .filter(
+        (message) =>
+          message.direction === "out" &&
+          message.createdAt < lastInbound.createdAt &&
+          Boolean(message.text?.trim())
+      )
+      .reverse()
+      .slice(0, 3);
+    for (const message of outbound) {
+      const shownOffers = offersShownInLastMessage({
+        offers: ofertas,
+        lastOutboundText: message.text!,
+        timezone: agendaContext.settings.timezone,
+        shownAt: message.createdAt,
+      });
+      if (shownOffers.length > 0) {
+        const tz = agendaContext.settings.timezone;
+        const days = [
+          ...new Set(shownOffers.map((offer) => dayIsoInTz(new Date(offer.startUtc), tz))),
+        ];
+        const referenceDay = days[0]!;
+        const lastShownTime = shownOffers
+          .filter((offer) => dayIsoInTz(new Date(offer.startUtc), tz) === referenceDay)
+          .map((offer) => timeInTz(offer.startUtc, tz))
+          .sort()
+          .at(-1);
+        return { message, shownOffers, days, referenceDay, lastShownTime };
+      }
+    }
+    return null;
+  })();
+
   await recordAgentEvidence([
     {
       sourceType: "conversation_context",
@@ -741,6 +801,186 @@ async function runAgentTurnCore(
     schedulingSignal || expandRequest !== null || slotChoiceSignal;
 
   /**
+   * Hora pedida con palabras ("4 de la tarde", "a las 4 y media", "16:00") o
+   * número suelto ("4"), con una lista de horarios ya mostrada.
+   *
+   * La hora se comprueba contra TODA la disponibilidad del día mostrado, no
+   * solo contra los horarios visibles: libre → selección pendiente de
+   * confirmar (nunca se agenda directo); ocupada o fuera de horario → se dice
+   * y se ofrecen los huecos libres más cercanos del mismo día. Un número
+   * suelto es ambiguo (¿opción 4 u hora 4?) y se pregunta sin el modelo.
+   * "La cuarta" y similares siguen por la selección de la lista mostrada.
+   *
+   * Con contexto de servicio/profesional se conserva el camino anterior: la
+   * disponibilidad de ese motor no está en el catálogo general.
+   */
+  const requestedTime =
+    agendaContext && lastInbound.text && !hasBookingConfirmation(lastInbound.text)
+      ? parseRequestedTime(lastInbound.text)
+      : null;
+  if (
+    agendaContext &&
+    requestedTime &&
+    shownContext &&
+    !shownContext.shownOffers.some((offer) => offer.serviceId || offer.professionalId)
+  ) {
+    const { settings, now } = agendaContext;
+    const tz = settings.timezone;
+    const shown = shownContext.shownOffers;
+
+    if (requestedTime.kind === "bare_number" && requestedTime.value >= 1) {
+      const option = shown[requestedTime.value - 1];
+      if (option) {
+        // La lectura como hora: la que cae dentro del horario de atención.
+        const hourReading = [requestedTime.value, requestedTime.value + 12]
+          .filter((hour) => hour <= 23)
+          .map((hour) => hour * 60)
+          .find((minute) =>
+            isWithinBusinessHours(shownContext.referenceDay, minute, settings.weeklyHours, tz)
+          );
+        const optionLabel = `la opción ${requestedTime.value} (${timeInTz(option.startUtc, tz)})`;
+        await deliverReply(
+          conversation,
+          hourReading !== undefined
+            ? `Para confirmar: ¿las ${hhmm(hourReading)} o ${optionLabel}?`
+            : `Para confirmar: ¿${optionLabel}?`
+        );
+        return;
+      }
+    }
+
+    const candidates =
+      requestedTime.kind === "time"
+        ? requestedTime.candidates
+        : requestedTime.value >= 1 && requestedTime.value <= 23
+          ? requestedTime.value < 12
+            ? [requestedTime.value * 60, (requestedTime.value + 12) * 60]
+            : [requestedTime.value * 60]
+          : [];
+
+    if (candidates.length > 0) {
+      // Libres = catálogo persistido ∪ disponibilidad fresca de esos días.
+      let freeStarts = ofertas.map((offer) => offer.startUtc);
+      try {
+        const sortedDays = [...shownContext.days].sort();
+        const fresh = await computeAvailability(organizationId, {
+          settings,
+          now,
+          fromISO: sortedDays[0],
+          toISO: sortedDays.at(-1),
+        });
+        if (Array.isArray(fresh)) {
+          freeStarts = [...freeStarts, ...fresh.map((slot) => slot.startUtc)];
+        }
+      } catch (err) {
+        console.warn(`[agente] disponibilidad del día no disponible: ${err}`);
+      }
+
+      const resolve = () =>
+        resolveRequestedTime({
+          candidates,
+          days: shownContext.days,
+          freeByDay: freeStartsByDay(freeStarts, shownContext.days, tz),
+          weeklyHours: settings.weeklyHours,
+          timezone: tz,
+        });
+      let resolution = resolve();
+
+      if (resolution?.kind === "free") {
+        const startUtc = resolution.startUtc;
+        const stillAvailable = await findSlot(organizationId, startUtc, { now, settings });
+        if (stillAvailable) {
+          if (!findOffered(ofertas, startUtc)) {
+            // Libre pero fuera del catálogo persistido: se añade para que la
+            // confirmación posterior pase la regla "solo se reserva lo ofrecido".
+            const added: OfferedSlot = { startUtc, label: labelInTz(startUtc, tz) };
+            await replaceOffers(organizationId, conversationId, [...ofertas, added]);
+          }
+          await setPendingAction({
+            organizationId,
+            conversationId,
+            action: "book",
+            startUtc,
+            serviceId: null,
+            professionalId: null,
+          });
+          await recordAgentAction({
+            action: "set_pending_book",
+            payload: { startUtc },
+          });
+          await deliverReply(
+            conversation,
+            toneAwareFixedReply(
+              `Perfecto. Tengo ${selectedOfferConfirmationLabel(startUtc, tz)} disponible. ¿Quieres que agende tu cita?`,
+              profile.tone
+            )
+          );
+          return;
+        }
+        // Se ocupó entre la oferta y ahora: se trata como ocupada.
+        freeStarts = freeStarts.filter(
+          (slot) => new Date(slot).toISOString() !== startUtc
+        );
+        resolution = resolve();
+      }
+
+      if (resolution?.kind === "multiple") {
+        const choices = resolution.startUtcs
+          .map((startUtc) => `• ${selectedOfferConfirmationLabel(startUtc, tz)}`)
+          .join("\n");
+        await deliverReply(
+          conversation,
+          toneAwareFixedReply(
+            `Encontré más de una opción para esa hora:\n${choices}\n¿Cuál de estas quieres elegir?`,
+            profile.tone
+          )
+        );
+        return;
+      }
+
+      if (resolution && (resolution.kind === "taken" || resolution.kind === "outside_hours")) {
+        const requested = hhmm(resolution.minute);
+        const heading =
+          resolution.kind === "outside_hours"
+            ? `Las ${requested} están fuera del horario de atención${
+                businessHoursLabel(resolution.day, settings.weeklyHours, tz)
+                  ? ` (${businessHoursLabel(resolution.day, settings.weeklyHours, tz)})`
+                  : ""
+              }.`
+            : `${capitalize(
+                selectedOfferConfirmationLabel(
+                  zonedWallClockToUtc(resolution.day, requested, tz)!.toISOString(),
+                  tz
+                )
+              )} no está disponible.`;
+        if (resolution.nearest.length > 0) {
+          const dayTitle = capitalize(dayLabelInTz(resolution.nearest[0]!, tz, now));
+          const list = resolution.nearest.map((startUtc) => `• ${timeInTz(startUtc, tz)}`).join("\n");
+          await deliverReply(
+            conversation,
+            toneAwareFixedReply(
+              `${heading} Los horarios libres más cercanos ese día son:\n${dayTitle}\n${list}\n¿Cuál te funciona mejor?`,
+              profile.tone
+            )
+          );
+          return;
+        }
+        const turn = await offerSlots({
+          organizationId,
+          conversationId,
+          intro: "Ese día ya no tengo horarios libres. Estas son mis próximas opciones:",
+        });
+        await recordOfferedSlots(organizationId, conversationId, turn);
+        await deliverReply(
+          conversation,
+          toneAwareFixedReply(`${heading}\n${turn.text}`, profile.tone)
+        );
+        return;
+      }
+    }
+  }
+
+  /**
    * Selección horaria determinista: el modelo no decide si "2:20" significa
    * el 14:20 que el backend acaba de mostrar. Se reconstruye la última ventana
    * desde el último mensaje saliente y se cruza únicamente con esas ofertas.
@@ -750,14 +990,16 @@ async function runAgentTurnCore(
     lastInbound.text &&
     isBareTimeSelection(lastInbound.text)
   ) {
-    const lastOutbound = [...history]
-      .reverse()
-      .find(
-        (message) =>
-          message.direction === "out" &&
-          message.createdAt < lastInbound.createdAt &&
-          Boolean(message.text?.trim())
-      );
+    const lastOutbound =
+      shownContext?.message ??
+      [...history]
+        .reverse()
+        .find(
+          (message) =>
+            message.direction === "out" &&
+            message.createdAt < lastInbound.createdAt &&
+            Boolean(message.text?.trim())
+        );
 
     if (lastOutbound?.text) {
       const resolution = resolveOfferedTimeSelection({
@@ -1021,16 +1263,23 @@ async function runAgentTurnCore(
        * de ampliación, así que cambiar a "más tarde"/"fin de semana" reinicia
        * el cursor de ese criterio en vez de arrastrar el anterior.
        */
-      const cursor = await advanceOfferCursor({
-        organizationId,
-        conversationId,
-        mode: expandRequest,
-      });
+      // Mañana/tarde/más tarde se anclan al día mostrado; el cursor solo pagina
+      // "otro día" y "fin de semana".
+      const cursor =
+        expandRequest === "next_day" || expandRequest === "weekend"
+          ? await advanceOfferCursor({
+              organizationId,
+              conversationId,
+              mode: expandRequest,
+            })
+          : 0;
       const turn = await offerSlots({
         organizationId,
         conversationId,
         expand: expandRequest,
         cursor,
+        referenceDay: shownContext?.referenceDay,
+        afterTime: shownContext?.lastShownTime,
       });
       await recordOfferedSlots(organizationId, conversationId, turn);
       await deliverReply(
