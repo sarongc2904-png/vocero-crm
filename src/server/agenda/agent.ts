@@ -4,9 +4,26 @@ import { spreadByDay, type SpreadSlot } from "@/server/agenda/spread";
 import { replaceOffers } from "@/server/agenda/offers";
 import { BookingError, createSessionBooking } from "@/server/agenda/service";
 import { googleAddEventUrl } from "@/lib/calendar-link";
-import { dayIsoInTz, dayLabelInTz, timeInTz, weekdayKeyOf } from "@/lib/time/slots";
+import {
+  dateLabelInTz,
+  dayIsoInTz,
+  dayLabelInTz,
+  timeInTz,
+  weekdayKeyOf,
+} from "@/lib/time/slots";
 import { capitalize, formatHoursEs } from "@/server/agenda/schedule-intent";
 import { type ExpandWindow } from "@/server/agenda/expand";
+import {
+  OTHER_TIME_INVITE,
+  daypartOf,
+  formatDayPresentation,
+  offerClosing,
+  presentBlock,
+  presentFullDay,
+  presentationSlots,
+  timeMinutes,
+  type DayPresentation,
+} from "@/server/agenda/presentation";
 
 const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -15,20 +32,15 @@ const DAY_ISO = /^\d{4}-\d{2}-\d{2}$/;
  *
  * La herramienta conserva TODA la disponibilidad internamente (se persiste en
  * `offered_slot` para reservar/reprogramar con alternativas legítimas); lo que
- * se limita es SOLO lo que se muestra al cliente. Sin fecha → 1 día y pocos
- * horarios; un día pedido → ese día con tope; un día lleno → el día siguiente.
- * Ampliar más solo ante una petición explícita (otro día / más tarde / tarde /
- * mañana / fin de semana).
+ * se limita es SOLO lo que se muestra al cliente. Sin fecha → 1 día; un día
+ * pedido → ese día; un día lleno → el día siguiente. Cada día se presenta en
+ * mañana y tarde repartidas (ver `presentation.ts`). Ampliar más solo ante una
+ * petición explícita (otro día / más tarde / tarde / mañana / fin de semana).
+ *
+ * Los topes por día de la oferta de un día viven en `presentation.ts`; aquí
+ * queda el tope por día de un rango explícito.
  */
 export const COMPACT_PRESENTATION = {
-  /** Horarios visibles al pedir disponibilidad sin fecha (1 día). */
-  noDateSlots: 4,
-  /** Horarios visibles al pedir un día concreto. */
-  specificDaySlots: 5,
-  /** Horarios visibles cuando el día pedido está lleno (día siguiente). */
-  altDaySlots: 4,
-  /** Horarios visibles al ampliar (otro día / tarde / mañana / fin de semana). */
-  expandSlots: 4,
   /** Tope por día al pedir un rango explícito (mantiene la respuesta legible). */
   rangePerDaySlots: 4,
 } as const;
@@ -104,73 +116,91 @@ function distinctDays(slots: SpreadSlot[]): string[] {
   return [...new Set(slots.map((s) => s.dayIso))];
 }
 
-/** Los horarios del PRIMER día disponible, hasta `max`. */
-function firstDaySlots(slots: SpreadSlot[], max: number): SpreadSlot[] {
-  if (slots.length === 0) return [];
-  const firstDay = slots[0]!.dayIso;
-  return slots.filter((s) => s.dayIso === firstDay).slice(0, max);
+/** Todos los horarios de un día del catálogo. */
+function slotsOfDay(slots: SpreadSlot[], day: string): SpreadSlot[] {
+  return slots.filter((s) => s.dayIso === day);
 }
 
-/** "10:40" → 640 minutos. */
-function timeMinutes(time: string): number {
-  const [h, m] = time.split(":").map(Number);
-  return (h ?? 0) * 60 + (m ?? 0);
-}
+type ExpandResult = { notice?: string; presentation: DayPresentation };
 
 /**
- * IA-3 — Ventana de ampliación, con CURSOR.
+ * Ventana de ampliación sobre el día que se está mostrando (`referenceDay`).
  *
- * `cursor` es el índice de ventana ya avanzado por el pipeline (0 = primera
- * ventana de ese criterio). Antes `next_day` devolvía siempre `days[1]`, así que
- * pedir "otros horarios" dos veces mostraba el mismo bloque.
+ * - "por la mañana" / "por la tarde": ese bloque del día mostrado, repartido.
+ *   Si ese día ya no tiene el bloque, se avisa y se usa el siguiente que sí.
+ * - "más tarde": horarios POSTERIORES a `afterTime` en el día mostrado. Si ya
+ *   no hay, se avisa y se presenta el día siguiente completo.
+ * - "otro día": el día disponible siguiente al mostrado.
+ *
+ * Sin día de referencia (primer turno de agenda) se conserva el CURSOR de
+ * IA-3: la (cursor)-ésima jornada que cumple el criterio.
  */
-function windowSlots(
+function expandWindow(
   slots: SpreadSlot[],
   window: ExpandWindow,
   timezone: string,
-  cursor = 0
-): SpreadSlot[] {
+  cursor: number,
+  referenceDay?: string,
+  afterTime?: string
+): ExpandResult | null {
   const days = distinctDays(slots);
-  const limit = COMPACT_PRESENTATION.expandSlots;
-  const inDaypart = (day: string) =>
-    slots.some(
-      (s) =>
-        s.dayIso === day &&
-        (window === "afternoon"
-          ? timeMinutes(s.time) >= 12 * 60
-          : timeMinutes(s.time) < 12 * 60)
-    );
+  const inDaypart = (slot: SpreadSlot) =>
+    window === "afternoon" || window === "morning"
+      ? daypartOf(slot.time) === window
+      : true;
   const isWeekendDay = (day: string) => {
     const weekday = weekdayKeyOf(day, timezone);
     return weekday === "sat" || weekday === "sun";
   };
+  const dayName = (day: string) => dateLabelInTz(day, timezone);
 
   if (window === "next_day") {
     // El día 0 es el de la oferta base; el cursor empieza en el siguiente.
-    const target = days[1 + cursor];
-    if (!target) return [];
-    return slots.filter((s) => s.dayIso === target).slice(0, limit);
+    const target = referenceDay
+      ? days.find((day) => day > referenceDay)
+      : days[1 + cursor];
+    if (!target) return null;
+    return { presentation: presentFullDay(slotsOfDay(slots, target)) };
   }
 
-  // morning / afternoon / weekend: la (cursor)-ésima jornada que cumple el
-  // criterio, para que también avancen en vez de repetirse.
-  const matchingDays = days.filter((day) =>
-    window === "weekend" ? isWeekendDay(day) : inDaypart(day)
-  );
-  const target = matchingDays[cursor];
-  if (!target) return [];
   if (window === "weekend") {
-    return slots.filter((s) => s.dayIso === target).slice(0, limit);
+    const target = days.filter(isWeekendDay)[cursor];
+    if (!target) return null;
+    return { presentation: presentFullDay(slotsOfDay(slots, target)) };
   }
-  return slots
-    .filter(
-      (s) =>
-        s.dayIso === target &&
-        (window === "afternoon"
-          ? timeMinutes(s.time) >= 12 * 60
-          : timeMinutes(s.time) < 12 * 60)
-    )
-    .slice(0, limit);
+
+  if (window === "later") {
+    const day = referenceDay ?? days[0];
+    if (!day) return null;
+    // Sin horarios mostrados ese día, "más tarde" es la parte tarde del día.
+    const later = slotsOfDay(slots, day).filter((s) =>
+      afterTime ? timeMinutes(s.time) > timeMinutes(afterTime) : daypartOf(s.time) === "afternoon"
+    );
+    if (later.length > 0) return { presentation: presentBlock(later) };
+    const next = days.find((d) => d > day);
+    if (!next) return null;
+    return {
+      notice: `Para el ${dayName(day)} ya no hay horarios más tarde.`,
+      presentation: presentFullDay(slotsOfDay(slots, next)),
+    };
+  }
+
+  // morning / afternoon
+  const matchingDays = days.filter((day) => slotsOfDay(slots, day).some(inDaypart));
+  const target = referenceDay
+    ? matchingDays.find((day) => day >= referenceDay)
+    : matchingDays[cursor];
+  if (!target) return null;
+  const notice =
+    referenceDay && target !== referenceDay
+      ? `Para el ${dayName(referenceDay)} ya no hay horarios ${
+          window === "afternoon" ? "por la tarde" : "por la mañana"
+        }.`
+      : undefined;
+  return {
+    notice,
+    presentation: presentBlock(slotsOfDay(slots, target).filter(inDaypart)),
+  };
 }
 
 function expandIntro(window: ExpandWindow): string {
@@ -183,6 +213,8 @@ function expandIntro(window: ExpandWindow): string {
       return "En fin de semana tengo:";
     case "next_day":
       return "Otro día tengo:";
+    case "later":
+      return "Más tarde tengo:";
   }
 }
 
@@ -196,6 +228,8 @@ function expandEmptyText(window: ExpandWindow): string {
       return "No me quedan horarios en fin de semana. ¿Quieres que revise otro día?";
     case "next_day":
       return "No me quedan más días disponibles por ahora. ¿Quieres que revise otra semana?";
+    case "later":
+      return "No me quedan horarios más tarde. ¿Quieres que revise otro día?";
   }
 }
 
@@ -208,6 +242,10 @@ export async function offerSlots(input: {
   expand?: ExpandWindow;
   /** IA-3: índice de ventana ya avanzado por el pipeline (0 = la primera). */
   cursor?: number;
+  /** Día (YYYY-MM-DD) que el cliente está viendo: ancla de las ampliaciones. */
+  referenceDay?: string;
+  /** Última hora mostrada ese día ("13:30"): ancla de "más tarde". */
+  afterTime?: string;
   businessFact?: { businessOpen: boolean; businessHours: string; dateLabel: string };
 }): Promise<AgendaTurn> {
   const settings = await getSettings(input.organizationId);
@@ -251,38 +289,46 @@ export async function offerSlots(input: {
   // Ampliación solicitada explícitamente: se muestra el siguiente conjunto
   // relevante, nunca la agenda completa.
   if (input.expand) {
-    const window = windowSlots(
+    const result = expandWindow(
       spread,
       input.expand,
       settings.timezone,
-      input.cursor ?? 0
+      input.cursor ?? 0,
+      input.referenceDay,
+      input.afterTime
     );
-    if (window.length === 0) {
+    if (!result || presentationSlots(result.presentation).length === 0) {
       return { ok: false, text: expandEmptyText(input.expand) };
     }
-    const list = formatSlotBlocks(window, settings.timezone, now);
+    const list = formatDayPresentation(result.presentation, settings.timezone, now);
     return {
       ok: true,
-      text: `${expandIntro(input.expand)}\n${list}\n¿Cuál te funciona mejor?`,
+      text: [
+        result.notice,
+        expandIntro(input.expand),
+        list,
+        offerClosing(result.presentation),
+      ]
+        .filter(Boolean)
+        .join("\n"),
     };
   }
 
   if (input.day) {
     if (requestedDayHasAvailability) {
-      const list = formatSlotBlocks(
-        dayShown.slice(0, COMPACT_PRESENTATION.specificDaySlots),
-        settings.timezone,
-        now
-      );
+      const presentation = presentFullDay(dayShown);
+      const list = formatDayPresentation(presentation, settings.timezone, now);
       const intro = safeOfferIntro(input.intro) || "Tengo estos horarios disponibles:";
-      return { ok: true, text: `${intro}\n${list}` };
+      return {
+        ok: true,
+        text: [intro, list, presentation.truncated ? OTHER_TIME_INVITE : undefined]
+          .filter(Boolean)
+          .join("\n"),
+      };
     }
 
-    const list = formatSlotBlocks(
-      firstDaySlots(spread, COMPACT_PRESENTATION.altDaySlots),
-      settings.timezone,
-      now
-    );
+    const presentation = firstDayPresentation(spread);
+    const list = formatDayPresentation(presentation, settings.timezone, now);
     const heading = input.businessFact
       ? input.businessFact.businessOpen
         ? `Sí abrimos ${input.businessFact.dateLabel} de ${formatHoursEs(input.businessFact.businessHours)}, pero ya no tengo horarios disponibles ese día.`
@@ -290,17 +336,22 @@ export async function offerSlots(input: {
       : "Ese día no tengo horarios disponibles.";
     return {
       ok: true,
-      text: `${heading} Estas son mis próximas opciones:\n${list}\n¿Te funciona alguno?`,
+      text: `${heading} Estas son mis próximas opciones:\n${list}\n¿Te funciona alguno?${
+        presentation.truncated ? ` ${OTHER_TIME_INVITE}` : ""
+      }`,
     };
   }
 
-  const list = formatSlotBlocks(
-    firstDaySlots(spread, COMPACT_PRESENTATION.noDateSlots),
-    settings.timezone,
-    now
-  );
+  const presentation = firstDayPresentation(spread);
+  const list = formatDayPresentation(presentation, settings.timezone, now);
   const intro = safeOfferIntro(input.intro) || "Tengo estos horarios disponibles:";
-  return { ok: true, text: `${intro}\n${list}\n¿Cuál te funciona mejor?` };
+  return { ok: true, text: `${intro}\n${list}\n${offerClosing(presentation)}` };
+}
+
+/** El primer día disponible, presentado en mañana y tarde. */
+function firstDayPresentation(slots: SpreadSlot[]): DayPresentation {
+  const firstDay = slots[0]?.dayIso;
+  return presentFullDay(firstDay ? slotsOfDay(slots, firstDay) : []);
 }
 
 async function offerGrouped(input: {
@@ -396,22 +447,19 @@ export async function offerGeneralAvailability(input: {
   }
   const spread = enrichAll(all, settings.timezone, now);
 
-  // Igual que la oferta sin fecha: 1 día y pocos horarios. El catálogo completo
-  // queda persistido internamente para poder ampliar si el cliente lo pide.
+  // Igual que la oferta sin fecha: el primer día, en mañana y tarde. El
+  // catálogo completo queda persistido para poder ampliar o resolver una hora.
   await replaceOffers(
     input.organizationId,
     input.conversationId,
     spread.map((slot) => ({ startUtc: slot.startUtc, label: slot.label }))
   );
 
-  const list = formatSlotBlocks(
-    firstDaySlots(spread, COMPACT_PRESENTATION.noDateSlots),
-    settings.timezone,
-    now
-  );
+  const presentation = firstDayPresentation(spread);
+  const list = formatDayPresentation(presentation, settings.timezone, now);
   return {
     ok: true,
-    text: `Esta es la disponibilidad que tengo:\n${list}\n¿Cuál te funciona mejor?`,
+    text: `Esta es la disponibilidad que tengo:\n${list}\n${offerClosing(presentation)}`,
   };
 }
 

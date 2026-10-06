@@ -12,7 +12,19 @@
  * se normaliza a "manana".
  */
 
-export type ExpandWindow = "afternoon" | "morning" | "weekend" | "next_day";
+/**
+ * `later` ("más tarde") pide horarios POSTERIORES a los ya mostrados ese día;
+ * `afternoon` / `morning` ("por la tarde" / "por la mañana") piden ese bloque
+ * del día que se está mostrando. Pasar de día es solo `next_day`.
+ */
+export type ExpandWindow = "afternoon" | "morning" | "weekend" | "next_day" | "later";
+
+/**
+ * "4 de la tarde", "las 10 de la mañana", "4:30 de la tarde": un número antes
+ * del bloque es una HORA concreta, nunca una ampliación.
+ */
+const HOUR_BEFORE_DAYPART =
+  /\b\d{1,2}(?::[0-5]\d)?(?:\s+y\s+(?:media|cuarto))?\s+(?:de|en|por)\s+la\s+(?:tarde|manana|noche)\b/;
 
 function normalize(text: string): string {
   return text
@@ -23,6 +35,7 @@ function normalize(text: string): string {
 
 export function resolveExpandRequest(text: string): ExpandWindow | null {
   const norm = normalize(text);
+  if (HOUR_BEFORE_DAYPART.test(norm)) return null;
 
   // "fin de semana" / "finde" — pide explícitamente sábado/domingo.
   if (/\bfin\s+de\s+semana\b|\bfinde\b/.test(norm)) return "weekend";
@@ -31,10 +44,11 @@ export function resolveExpandRequest(text: string): ExpandWindow | null {
   // mañana) NO entra aquí: lo resuelve `resolveTargetDate` como fecha única.
   if (/\b(?:por|en|de)\s+la\s+manana\b/.test(norm)) return "morning";
 
-  // Tarde: "por/en/de la tarde" o "más tarde".
-  if (/\b(?:por|en|de)\s+la\s+tarde\b|\bmas\s+tarde\b/.test(norm)) {
-    return "afternoon";
-  }
+  // "Más tarde": horarios posteriores a los ya mostrados el mismo día.
+  if (/\bmas\s+tarde\b/.test(norm)) return "later";
+
+  // Tarde: "por/en/de la tarde".
+  if (/\b(?:por|en|de)\s+la\s+tarde\b/.test(norm)) return "afternoon";
 
   // Más opciones / otro día / otros horarios.
   if (
