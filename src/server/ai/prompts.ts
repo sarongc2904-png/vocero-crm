@@ -38,12 +38,10 @@ function appointmentRequirementsPresent(knowledgeText: string): boolean {
 /**
  * Nombres de servicio del conocimiento: el texto antes de los dos puntos de
  * cada línea de lista con precio, con el mismo criterio que knowledgePriceLines.
- * Las líneas de precio sin viñeta no delimitan el servicio: no aportan nombres.
  */
 function knowledgeServiceNames(knowledgeText: string): string[] {
   return extractPriceLinesFromText(knowledgeText)
-    .lines.filter((line) => line.startsWith("-"))
-    .map((line) => line.slice(1, line.indexOf(":")).trim())
+    .lines.map((line) => line.slice(1, line.indexOf(":")).trim())
     .filter(Boolean)
     .map(normalizePolicyText);
 }

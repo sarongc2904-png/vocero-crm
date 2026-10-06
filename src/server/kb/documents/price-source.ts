@@ -46,8 +46,10 @@ function normalize(value: string): string {
 }
 
 const PRICE_NUMBER = String.raw`\d(?:[\d.,]*\d)?`;
+// La cifra seguida de moneda sólo se intenta desde el inicio de su corrida de
+// dígitos/puntos/comas: reintentarla desde cada dígito era cuadrático.
 const PRICE_APPEARANCE = new RegExp(
-  String.raw`(?:\$\s*${PRICE_NUMBER}|${PRICE_NUMBER}\s*(?:pesos|mxn|mn)\b|\b(?:pesos|mxn|mn)\s*${PRICE_NUMBER})`,
+  String.raw`(?:\$\s*${PRICE_NUMBER}|(?<![\d.,])[.,]*${PRICE_NUMBER}\s*(?:pesos|mxn|mn)\b|\b(?:pesos|mxn|mn)\s*${PRICE_NUMBER})`,
   "i"
 );
 const PRICE_LIST_MARKER = /^(?:[-•*]|\d+[.)])(?:\s|$)/;
@@ -67,60 +69,24 @@ function hasMalformedPriceEntryShape(value: string): boolean {
   );
 }
 
-// Línea larga sin viñeta cuyo ÚLTIMO elemento es el monto con signo de pesos
-// (moneda opcional). Sin punto final ni nada después: si no, es prosa.
-const TRAILING_PRICE = new RegExp(
-  String.raw`^(.*?)\s*\$\s*${PRICE_NUMBER}(?:\s*(?:pesos|mxn|mn))?$`,
-  "i"
-);
-// Termina en "$monto" o en "número + pesos/MXN/MN": la línea da un precio y,
-// si no pasa la regla estricta, no puede omitirse en silencio. Otro final
-// (punto, número sin moneda, "MXN 700") es prosa y se ignora.
-const ENDS_WITH_PRICE = new RegExp(
-  String.raw`(?:\$\s*${PRICE_NUMBER}(?:\s*(?:pesos|mxn|mn))?|${PRICE_NUMBER}\s*(?:pesos|mxn|mn))$`,
-  "i"
-);
-// Cambian el sentido del monto: no es el precio del servicio tal cual.
-const PRICE_QUALIFIER =
-  /\b(?:desde|a partir del?|hasta|descuentos?|off|anticipos?|depositos?|enganches?|promocion(?:es)?|antes|ahora|referencia|aprox\w*|minimos?|maximos?|adicional(?:es)?|extras?|iva|ofertas?|liquidacion(?:es)?|rebajas?)\b|%/;
+// Ventana fija al final de la línea: el chequeo cuesta lo mismo con 60 o con
+// 100,000 caracteres.
+const LINE_END_WINDOW = 40;
 
-function unmarkedPriceCandidate(
-  line: string,
-  sourceId: string,
-  documentId: string,
-  boundary: PriceCandidate["boundary"]
-): PriceCandidate | "malformed" | null {
-  if (
-    line.length <= SHORT_PRICE_LINE_MAX_LENGTH ||
-    PRICE_LIST_MARKER.test(line) ||
-    line.includes("|")
-  ) {
-    return null;
-  }
-  const text = line.normalize("NFKC");
-  if (!ENDS_WITH_PRICE.test(text)) return null;
-  const service = TRAILING_PRICE.exec(text)?.[1]
-    ?.replace(/[\s:–—-]+$/, "")
-    .trim();
-  // Termina en monto pero no es "servicio claro + monto" (o el monto es cero):
-  // respaldo, nunca omisión.
-  if (
-    !service ||
-    !/\p{L}/u.test(service) ||
-    hasPriceAppearance(service) ||
-    PRICE_QUALIFIER.test(normalize(service)) ||
-    !/[1-9]/.test(text.slice(text.lastIndexOf("$")))
-  ) {
-    return "malformed";
-  }
-  return {
-    line,
-    normalized: normalize(line),
-    service: normalize(service),
-    sourceId,
-    documentId,
-    boundary,
-  };
+/**
+ * ¿La línea sin viñeta termina en "$monto" o en "número + pesos/MXN/MN"?
+ * Si la cifra llena toda la ventana no se ve su inicio: se asume monto.
+ */
+function endsWithPriceAmount(line: string): boolean {
+  const tail = line.slice(-LINE_END_WINDOW).normalize("NFKC");
+  const currency = /\s*(?:pesos|mxn|mn)$/i.exec(tail);
+  const body = currency ? tail.slice(0, currency.index) : tail;
+  if (!/\d$/.test(body)) return false;
+  let start = body.length;
+  while (start > 0 && /[\d.,]/.test(body[start - 1]!)) start -= 1;
+  if (start === 0) return true;
+  while (start > 0 && /\s/.test(body[start - 1]!)) start -= 1;
+  return body[start - 1] === "$" || currency !== null;
 }
 
 function priceCandidate(
@@ -130,7 +96,8 @@ function priceCandidate(
   boundary: PriceCandidate["boundary"]
 ): PriceCandidate | "malformed" | null {
   const line = raw.trim();
-  if (!/^-\s*/.test(line)) return unmarkedPriceCandidate(line, sourceId, documentId, boundary);
+  // Sin viñeta nunca se reconoce un precio: si termina en monto, respaldo.
+  if (!/^-\s*/.test(line)) return endsWithPriceAmount(line) ? "malformed" : null;
   if (!/\$\s*\d/.test(line)) return null;
   const colon = line.indexOf(":");
   if (

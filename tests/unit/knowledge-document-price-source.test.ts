@@ -221,7 +221,7 @@ describe("extracción comercial completa", () => {
     ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
   });
 
-  it("aplica el umbral a ambos lados: corta sin viñeta respalda, larga con precio final se reconoce", () => {
+  it("aplica el umbral a ambos lados: corta sin viñeta respalda, larga con precio final fuerza respaldo", () => {
     const below = unmarkedPriceLine(59);
     const above = unmarkedPriceLine(61);
     expect(below).toHaveLength(59);
@@ -239,7 +239,7 @@ describe("extracción comercial completa", () => {
         manualEntries: [{ id: "kb_above", text: above }],
         documentChunks: [],
       })
-    ).toEqual({ complete: true, lines: [above] });
+    ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
   });
 
   describe("4b: línea larga sin viñeta con el precio al final", () => {
@@ -250,7 +250,7 @@ describe("extracción comercial completa", () => {
       "Guarda oclusal rígida hecha a la medida en laboratorio externo $1,800.00 pesos",
     ] as const;
 
-    it.each(LONG_UNMARKED)("se reconoce como precio: %s", (line) => {
+    it.each(LONG_UNMARKED)("fuerza respaldo: %s", (line) => {
       expect(line.length).toBeGreaterThan(60);
       expect(
         buildCompletePriceSource({
@@ -258,18 +258,18 @@ describe("extracción comercial completa", () => {
           manualEntries: [{ id: "kb_long", text: line }],
           documentChunks: [],
         })
-      ).toEqual({ complete: true, lines: [line] });
-      expect(extractPriceLinesFromText(line)).toEqual({ complete: true, lines: [line] });
+      ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
+      expect(extractPriceLinesFromText(line)).toEqual({ complete: false, lines: [] });
     });
 
-    it("se reconoce dentro de un documento junto a los diez precios del demo", () => {
+    it("fuerza respaldo dentro de un documento junto a los diez precios del demo", () => {
       const line = LONG_UNMARKED[0];
       const result = buildCompletePriceSource({
         organizationId: "org_a",
         manualEntries: [],
         documentChunks: rowsFromText(`${DEMO_DOCUMENT}\n${line}`) as never,
       });
-      expect(result).toEqual({ complete: true, lines: [...PRICE_LINES, line] });
+      expect(result).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
     });
 
     it.each([
@@ -325,9 +325,9 @@ describe("extracción comercial completa", () => {
       ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
     });
 
-    it("barre cortes reales con la línea larga: once líneas exactas o respaldo, nunca parcial", () => {
+    it("barre cortes reales con la línea larga: siempre respaldo, nunca parcial", () => {
       const line = LONG_UNMARKED[1];
-      const expected = [...PRICE_LINES, line];
+      let fallbacks = 0;
       for (let padding = 0; padding <= 2_000; padding += 13) {
         const rows = rowsFromText(`${"x".repeat(padding)}\n${DEMO_DOCUMENT}\n${line}\nFIN`);
         const result = buildCompletePriceSource({
@@ -335,12 +335,10 @@ describe("extracción comercial completa", () => {
           manualEntries: [],
           documentChunks: rows as never,
         });
-        if (result.complete) {
-          expect(result.lines, `padding=${padding}`).toEqual(expected);
-        } else {
-          expect(result.lines, `padding=${padding}`).toEqual([]);
-        }
+        expect(result, `padding=${padding}`).toMatchObject({ complete: false, lines: [] });
+        fallbacks += 1;
       }
+      expect(fallbacks).toBeGreaterThan(0);
     });
 
     it("partida en el borde sin copia completa obliga respaldo", () => {
@@ -351,7 +349,7 @@ describe("extracción comercial completa", () => {
         manualEntries: [],
         documentChunks: rowsFromText(`${"x".repeat(1_590)}\n${line}\nFIN`) as never,
       });
-      expect(result).toMatchObject({ complete: false, lines: [], reason: "truncated_price_line" });
+      expect(result).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
     });
   });
 
@@ -439,6 +437,7 @@ describe("extracción comercial completa", () => {
   });
 
   it("barre cortes reales de 0 a 2,000: diez líneas exactas o respaldo, nunca parcial", () => {
+    const branches = { complete: 0, fallback: 0 };
     for (let padding = 0; padding <= 2_000; padding += 17) {
       const rows = rowsFromText(`${"x".repeat(padding)}\n${DEMO_DOCUMENT}`);
       const result = buildCompletePriceSource({
@@ -447,14 +446,19 @@ describe("extracción comercial completa", () => {
         documentChunks: rows.map((row) => ({ ...row, id: row.id! })) as never,
       });
       if (result.complete) {
+        branches.complete += 1;
         expect(result.lines, `padding=${padding}`).toEqual(PRICE_LINES);
       } else {
+        branches.fallback += 1;
         expect(result.lines, `padding=${padding}`).toEqual([]);
       }
       for (const line of result.lines) {
         expect(PRICE_LINES, `padding=${padding}; line=${line}`).toContain(line as never);
       }
     }
+    // El barrido no es vacuo: recorre ambas ramas.
+    expect(branches.complete).toBeGreaterThan(0);
+    expect(branches.fallback).toBeGreaterThan(0);
   });
 
   it("línea corta en el borde conserva solo su copia completa", () => {
@@ -601,6 +605,7 @@ describe("4b endurecido: calificadores y nombre poco claro fuerzan respaldo", ()
   it("barre cortes con una línea que fuerza respaldo: nunca sale una lista parcial", () => {
     const line =
       "Promoción de temporada en limpieza dental profunda con ultrasonido $350 MXN";
+    let fallbacks = 0;
     for (let padding = 0; padding <= 2_000; padding += 13) {
       const result = buildCompletePriceSource({
         organizationId: "org_a",
@@ -610,7 +615,9 @@ describe("4b endurecido: calificadores y nombre poco claro fuerzan respaldo", ()
         ) as never,
       });
       expect(result, `padding=${padding}`).toMatchObject({ complete: false, lines: [] });
+      fallbacks += 1;
     }
+    expect(fallbacks).toBeGreaterThan(0);
   });
 });
 
@@ -680,9 +687,13 @@ describe("4b: calificadores ampliados y monto cero", () => {
     "Selladores de fosetas y fisuras para molares permanentes de niños c/u $250 MXN",
     "Aplicación de flúor en barniz para niños de dos a doce años de edad $0.50",
     "Consulta de valoración con radiografía panorámica incluida en la visita $10",
-  ])("sin calificador de la lista se sigue reconociendo: %s", (text) => {
+  ])("sin calificador de la lista también fuerza respaldo: %s", (text) => {
     expect(text.length).toBeGreaterThan(60);
-    expect(fromManual(text)).toEqual({ complete: true, lines: [text] });
+    expect(fromManual(text)).toMatchObject({
+      complete: false,
+      lines: [],
+      reason: "malformed_price_line",
+    });
   });
 
   it.each([
@@ -692,6 +703,68 @@ describe("4b: calificadores ampliados y monto cero", () => {
   ])("monto seguido de punto o texto se sigue ignorando (límite conocido): %s", (text) => {
     expect(text.length).toBeGreaterThan(60);
     expect(fromManual(text)).toMatchObject({ complete: false, reason: "no_price_lines" });
+  });
+});
+
+describe("4b falla cerrado: una línea sin viñeta que termina en monto fuerza respaldo", () => {
+  const AMBIGUOUS_PROSE = [
+    "El folleto informa que la limpieza dental profunda con ultrasonido cuesta $700 MXN",
+    "¿La limpieza dental profunda con ultrasonido y pulido tiene un costo de $700 MXN",
+    "Tratamiento de ortodoncia con brackets metálicos con precio estimado $8,000 MXN",
+    "Tratamiento de ortodoncia con brackets metálicos con precio orientativo $8,000 MXN",
+    "Tratamiento de ortodoncia con brackets metálicos a-partir de $8,000 MXN",
+    "Limpieza dental profunda con ultrasonido, pulido y revisión clínica $1,2,3 MXN",
+    "Promoción de la salud bucal con plática informativa y revisión general $700 MXN",
+  ] as const;
+
+  it.each(AMBIGUOUS_PROSE)("fuerza respaldo como entrada manual: %s", (line) => {
+    expect(line.length).toBeGreaterThan(60);
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [{ id: "kb_closed", text: line }],
+        documentChunks: [],
+      })
+    ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
+  });
+
+  it.each(AMBIGUOUS_PROSE)("fuerza respaldo dentro del documento demo: %s", (line) => {
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [],
+        documentChunks: rowsFromText(`${DEMO_DOCUMENT}\n${line}`) as never,
+      })
+    ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
+    expect(extractPriceLinesFromText(`${DEMO_DOCUMENT}\n${line}`)).toEqual({
+      complete: false,
+      lines: PRICE_LINES,
+    });
+  });
+
+  it.each([
+    ["con signo de pesos fuera de la ventana", `Limpieza dental profunda con ultrasonido $${"1,".repeat(30)}1`],
+    ["sin signo de pesos", `Limpieza dental profunda con ultrasonido y pulido ${"9".repeat(45)}`],
+  ])("una cifra que llena la ventana final fuerza respaldo (%s)", (_label, line) => {
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [{ id: "kb_window", text: line }],
+        documentChunks: [],
+      })
+    ).toMatchObject({ complete: false, lines: [], reason: "malformed_price_line" });
+  });
+
+  it("la narrativa del demo que termina en punto sigue ignorada", () => {
+    const narrative =
+      "Respuesta: La limpieza dental tiene un precio de referencia de $700 MXN.";
+    expect(
+      buildCompletePriceSource({
+        organizationId: "org_a",
+        manualEntries: [],
+        documentChunks: rowsFromText(`${DEMO_DOCUMENT}\n${narrative}`) as never,
+      })
+    ).toEqual({ complete: true, lines: PRICE_LINES });
   });
 });
 
