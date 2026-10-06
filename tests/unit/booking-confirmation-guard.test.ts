@@ -1,0 +1,686 @@
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import type { OfferedSlot } from "@/server/agenda/offers";
+
+/**
+ * Guardia de confirmación de citas (pipeline real, modelo simulado).
+ *
+ * Regla: ninguna cita se crea, mueve ni cancela sin una acción pendiente
+ * vigente Y una confirmación explícita del cliente en ese turno. Las acciones
+ * `book_slot`, `reschedule_slot` y `cancel_booking` del modelo solo pueden
+ * DEJAR una acción pendiente y preguntar; ejecutar es exclusivo del bloque que
+ * consume la pendiente.
+ *
+ * El almacén de pendientes se simula en memoria con la misma semántica que la
+ * tabla: una fila por conversación, expiración, y `consumePendingAction`
+ * atómico (lee y borra en un solo paso, como el DELETE … RETURNING real).
+ */
+
+const TZ = "America/Mexico_City";
+const TUE = "2026-10-06";
+const SHOWN_AT = new Date("2026-10-06T04:43:33.000Z");
+const NOW = new Date("2026-10-06T04:43:43.000Z");
+
+function at(day: string, time: string): string {
+  return new Date(`${day}T${time}:00-06:00`).toISOString();
+}
+
+const settings = {
+  weeklyHours: { tue: [{ start: "09:00", end: "18:00" }] },
+  slotMinutes: 30,
+  bufferMinutes: 0,
+  minNoticeHours: 2,
+  maxDaysAhead: 14,
+  timezone: TZ,
+  connector: "google" as const,
+  meetingLink: null,
+};
+
+type Pending = {
+  id: string;
+  action: "book" | "reschedule" | "cancel";
+  bookingId: string | null;
+  startUtc: string | null;
+  serviceId: string | null;
+  professionalId: string | null;
+  expiresAt: Date;
+};
+
+const store = vi.hoisted(() => ({
+  pending: null as null | {
+    id: string;
+    action: "book" | "reschedule" | "cancel";
+    bookingId: string | null;
+    startUtc: string | null;
+    serviceId: string | null;
+    professionalId: string | null;
+    expiresAt: Date;
+  },
+}));
+
+let offers: OfferedSlot[] = [];
+const createSessionBooking = vi.fn();
+const rescheduleForConversation = vi.fn();
+const cancelBookingForConversation = vi.fn();
+const chatJson = vi.fn();
+
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+const live = () =>
+  store.pending && store.pending.expiresAt.getTime() > Date.now() ? store.pending : null;
+
+vi.mock("@/server/agenda/pending-actions", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/server/agenda/pending-actions")>();
+  return {
+    ...original,
+    setPendingAction: async (input: {
+      action: "book" | "reschedule" | "cancel";
+      bookingId?: string | null;
+      startUtc?: string | null;
+      serviceId?: string | null;
+      professionalId?: string | null;
+    }) => {
+      await tick();
+      store.pending = {
+        id: "paa_1",
+        action: input.action,
+        bookingId: input.bookingId ?? null,
+        startUtc: input.startUtc ? new Date(input.startUtc).toISOString() : null,
+        serviceId: input.serviceId ?? null,
+        professionalId: input.professionalId ?? null,
+        expiresAt: new Date(Date.now() + original.PENDING_TTL_MS),
+      };
+    },
+    getPendingAction: async () => {
+      await tick();
+      return live();
+    },
+    peekPendingAction: async () => live(),
+    clearPendingAction: async () => {
+      await tick();
+      store.pending = null;
+    },
+    // Atómico: comprobar y borrar ocurre sin ceder el control.
+    consumePendingAction: async () => {
+      const row = live();
+      store.pending = null;
+      await tick();
+      return row;
+    },
+  };
+});
+
+vi.mock("@/lib/ai", () => ({ chatJson: (...args: unknown[]) => chatJson(...args) }));
+vi.mock("@/server/agenda/settings", () => ({ getSettings: async () => settings }));
+vi.mock("@/server/agenda/availability", () => ({
+  computeAvailability: async () =>
+    offers.map((o) => ({ startUtc: o.startUtc, endUtc: o.startUtc, label: o.label })),
+  findSlot: async (_org: string, iso: string) =>
+    offers.find((o) => o.startUtc === new Date(iso).toISOString()) ?? null,
+}));
+vi.mock("@/server/agenda/professional-availability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/agenda/professional-availability")>()),
+  findProfessionalSlot: async (_org: string, input: { startUtc: string }) =>
+    offers.find((o) => o.startUtc === input.startUtc) ?? null,
+}));
+vi.mock("@/server/agenda/service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/agenda/service")>()),
+  createSessionBooking: (...args: unknown[]) => createSessionBooking(...args),
+  rescheduleForConversation: (...args: unknown[]) => rescheduleForConversation(...args),
+  cancelBookingForConversation: (...args: unknown[]) => cancelBookingForConversation(...args),
+}));
+vi.mock("@/server/agenda/offers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/agenda/offers")>()),
+  getOffers: async () => offers,
+  replaceOffers: async (_org: string, _conv: string, slots: OfferedSlot[]) => {
+    offers = slots;
+  },
+  clearOffers: async () => {
+    offers = [];
+  },
+}));
+vi.mock("@/lib/meta/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/meta/client")>()),
+  graphRequest: vi.fn(),
+}));
+vi.mock("@/server/ai/observability", () => ({
+  createAgentRun: async (input: { organizationId: string; conversationId: string }) => ({
+    runId: "test-agent-run",
+    organizationId: input.organizationId,
+    conversationId: input.conversationId,
+  }),
+  finishAgentRun: async () => {},
+  hasActiveAgentRun: () => true,
+  recordAgentAction: async () => {},
+  recordAgentEvidence: async () => {},
+  withAgentRun: async <T>(_context: unknown, fn: () => Promise<T>): Promise<T> => fn(),
+}));
+
+/** Filas por tabla: la conversación, el perfil y el historial del turno. */
+const rowsByTable: Record<string, unknown[]> = {};
+const outbound: string[] = [];
+
+function thenableChain(rows: unknown[]) {
+  const chain: Record<string, unknown> = {};
+  for (const m of ["innerJoin", "leftJoin", "where", "orderBy", "limit"]) {
+    chain[m] = () => chain;
+  }
+  (chain as { then: unknown }).then = (resolve: (v: unknown) => void) =>
+    Promise.resolve(rows).then(resolve);
+  return chain;
+}
+
+vi.mock("@/lib/db", () => ({
+  getDb: () => ({
+    select: () => ({
+      from: (table: { __table?: string }) =>
+        thenableChain([...(rowsByTable[table.__table ?? ""] ?? [])]),
+    }),
+    insert: () => ({
+      values: (values: Record<string, unknown>) => {
+        if (values.direction === "out" && typeof values.text === "string") {
+          outbound.push(values.text);
+        }
+        const chain = {
+          onConflictDoNothing: () => chain,
+          onConflictDoUpdate: () => chain,
+          returning: () => Promise.resolve([values]),
+          then: (resolve: (v: unknown) => void) => Promise.resolve([values]).then(resolve),
+        };
+        return chain;
+      },
+    }),
+    delete: () => ({ where: () => Promise.resolve([]) }),
+    update: () => ({
+      set: () => ({
+        where: () => ({
+          returning: () => Promise.resolve([{}]),
+          then: (resolve: (v: unknown) => void) => Promise.resolve([{}]).then(resolve),
+        }),
+      }),
+    }),
+  }),
+  schema: new Proxy(
+    {},
+    {
+      get: (_t, tableName) =>
+        new Proxy(
+          {},
+          {
+            get: (_t2, col) =>
+              col === "__table" ? String(tableName) : `${String(tableName)}.${String(col)}`,
+          }
+        ),
+    }
+  ),
+}));
+
+const CONVERSATION = {
+  id: "cv_1",
+  organizationId: "org_1",
+  contactId: "ct_1",
+  isTest: true,
+  aiEnabled: true,
+  handoffAt: null,
+  handoffReason: null,
+  lastInboundAt: new Date(),
+};
+
+const PROFILE = {
+  id: "agp_1",
+  organizationId: "org_1",
+  enabled: true,
+  name: "Agente",
+  tone: null,
+  instructions: null,
+  escalationRules: null,
+  greeting: null,
+};
+
+const SHOWN = [
+  "Tengo estos horarios disponibles:",
+  "Mañana martes, 6 de octubre",
+  "• 12:00",
+  "• 13:00",
+  "• 14:00",
+  "• 16:00",
+  "¿Cuál le funciona mejor?",
+].join("\n");
+
+const PROPOSAL = "Perfecto. Tengo martes 6 a las 16:00 disponible. ¿Quiere que agende su cita?";
+
+function catalog(withService = false): OfferedSlot[] {
+  return ["12:00", "13:00", "14:00", "16:00"].map((time) => ({
+    startUtc: at(TUE, time),
+    label: `martes 6 a las ${time}`,
+    ...(withService ? { serviceId: "svc_corte", professionalId: "pro_ana" } : {}),
+  }));
+}
+
+type Msg = { direction: "in" | "out"; text: string; createdAt: Date };
+
+/** El historial en orden cronológico; la BD lo entrega del más nuevo al más viejo. */
+function setHistory(history: Msg[]) {
+  rowsByTable.conversation = [CONVERSATION];
+  rowsByTable.agentProfile = [PROFILE];
+  rowsByTable.message = history.map((m, i) => ({ id: `m${i}`, ...m })).reverse();
+}
+
+async function turn(history: Msg[]) {
+  outbound.length = 0;
+  setHistory(history);
+  const { runAgentTurn } = await import("@/server/ai/pipeline");
+  await runAgentTurn("cv_1", "org_1");
+}
+
+function lastOut(): string {
+  return outbound.at(-1) ?? "";
+}
+
+function model(data: Record<string, unknown>) {
+  chatJson.mockReset();
+  chatJson.mockResolvedValue({ ok: true, data });
+}
+
+function setPending(
+  action: Pending["action"],
+  startTime: string | null,
+  extra: Partial<Pending> = {},
+  minutesLeft = 30
+) {
+  store.pending = {
+    id: "paa_1",
+    action,
+    bookingId: null,
+    startUtc: startTime ? at(TUE, startTime) : null,
+    serviceId: null,
+    professionalId: null,
+    expiresAt: new Date(Date.now() + minutesLeft * 60_000),
+    ...extra,
+  };
+}
+
+const currentPending = (): Pending | null => store.pending;
+
+const okBooking = (input: { startUtc: string }) => ({
+  booking: { durationMinutes: 30 },
+  label: `martes 6 a las ${new Date(input.startUtc).toISOString()}`,
+  meetingLink: null,
+  linkPending: false,
+});
+
+beforeAll(async () => {
+  await import("@/server/ai/pipeline");
+}, 120_000);
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+  vi.stubEnv("OPENROUTER_API_TOKEN", "token-test");
+  vi.stubEnv("AGENDA", "on");
+  offers = catalog();
+  store.pending = null;
+  for (const key of Object.keys(rowsByTable)) delete rowsByTable[key];
+  outbound.length = 0;
+  createSessionBooking.mockReset();
+  createSessionBooking.mockImplementation(async (input: { startUtc: string }) => okBooking(input));
+  rescheduleForConversation.mockReset();
+  rescheduleForConversation.mockResolvedValue({ label: "martes 6 a las 16:00", meetingLink: null });
+  cancelBookingForConversation.mockReset();
+  cancelBookingForConversation.mockResolvedValue({ bookingId: "bk_1", label: "martes 6 a las 16:00" });
+  model({ action: "reply", text: "Respuesta del modelo." });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+const nothingExecuted = () => {
+  expect(createSessionBooking).not.toHaveBeenCalled();
+  expect(rescheduleForConversation).not.toHaveBeenCalled();
+  expect(cancelBookingForConversation).not.toHaveBeenCalled();
+};
+
+const MODEL_TRIGGERS = ["hola", "la opción 4", "me interesa", "¿puedo cancelar mi cita?", "4"];
+
+describe("las acciones de agenda del modelo NUNCA ejecutan", () => {
+  it.each(MODEL_TRIGGERS)("book_slot con '%s' → solo deja la pendiente book y pregunta", async (text) => {
+    model({ action: "book_slot", startUtc: at(TUE, "14:00") });
+    await turn([
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text, createdAt: NOW },
+    ]);
+    nothingExecuted();
+    expect(store.pending).toMatchObject({
+      action: "book",
+      startUtc: at(TUE, "14:00"),
+      serviceId: null,
+      professionalId: null,
+    });
+    expect(lastOut()).toContain("¿Quiere que agende su cita?");
+  });
+
+  it.each(MODEL_TRIGGERS)("book_slot con servicio y '%s' → la pendiente lleva servicio y profesional", async (text) => {
+    offers = catalog(true);
+    model({ action: "book_slot", startUtc: at(TUE, "14:00") });
+    await turn([
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text, createdAt: NOW },
+    ]);
+    nothingExecuted();
+    expect(store.pending).toMatchObject({
+      action: "book",
+      startUtc: at(TUE, "14:00"),
+      serviceId: "svc_corte",
+      professionalId: "pro_ana",
+    });
+  });
+
+  it.each(MODEL_TRIGGERS)("reschedule_slot con '%s' → solo deja la pendiente reschedule y pregunta", async (text) => {
+    model({ action: "reschedule_slot", startUtc: at(TUE, "16:00") });
+    await turn([
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text, createdAt: NOW },
+    ]);
+    nothingExecuted();
+    expect(store.pending).toMatchObject({ action: "reschedule", startUtc: at(TUE, "16:00") });
+    expect(lastOut()).toMatch(/mueva su cita/);
+  });
+
+  it.each(MODEL_TRIGGERS)("cancel_booking con '%s' → solo deja la pendiente cancel y pregunta", async (text) => {
+    model({ action: "cancel_booking" });
+    await turn([{ direction: "in", text, createdAt: NOW }]);
+    nothingExecuted();
+    expect(store.pending).toMatchObject({ action: "cancel" });
+    expect(lastOut()).toContain("Antes de cancelar necesito");
+  });
+
+  it("book_slot fuera del catálogo vigente → no deja pendiente y vuelve a ofrecer", async () => {
+    model({ action: "book_slot", startUtc: at(TUE, "10:00") });
+    await turn([
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text: "me interesa", createdAt: NOW },
+    ]);
+    nothingExecuted();
+    expect(store.pending).toBeNull();
+    expect(lastOut()).toMatch(/^• /m);
+  });
+
+  it("reschedule_slot fuera del catálogo vigente → no deja pendiente y vuelve a ofrecer", async () => {
+    model({ action: "reschedule_slot", startUtc: at(TUE, "10:00") });
+    await turn([
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text: "mejor más temprano", createdAt: NOW },
+    ]);
+    nothingExecuted();
+    expect(store.pending).toBeNull();
+    expect(lastOut()).toMatch(/^• /m);
+  });
+});
+
+describe("solo una confirmación explícita ejecuta la pendiente, una sola vez", () => {
+  it("book con servicio + 'sí' → createSessionBooking UNA vez con servicio y profesional", async () => {
+    setPending("book", "14:00", { serviceId: "svc_corte", professionalId: "pro_ana" });
+    offers = catalog(true);
+    await turn([
+      { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+      { direction: "in", text: "sí", createdAt: NOW },
+    ]);
+    expect(createSessionBooking).toHaveBeenCalledTimes(1);
+    expect(createSessionBooking.mock.calls[0]![0]).toMatchObject({
+      organizationId: "org_1",
+      conversationId: "cv_1",
+      startUtc: at(TUE, "14:00"),
+      serviceId: "svc_corte",
+      professionalId: "pro_ana",
+      requireOffer: true,
+    });
+    expect(store.pending).toBeNull();
+  });
+
+  it("flujo completo: book_slot del modelo → pendiente → 'sí' → cita con servicio y profesional", async () => {
+    offers = catalog(true);
+    model({ action: "book_slot", startUtc: at(TUE, "13:00") });
+    await turn([
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text: "me interesa", createdAt: NOW },
+    ]);
+    nothingExecuted();
+    const question = lastOut();
+    await turn([
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text: "me interesa", createdAt: new Date(NOW.getTime() - 5_000) },
+      { direction: "out", text: question, createdAt: new Date(NOW.getTime() - 2_000) },
+      { direction: "in", text: "sí", createdAt: NOW },
+    ]);
+    expect(createSessionBooking).toHaveBeenCalledTimes(1);
+    expect(createSessionBooking.mock.calls[0]![0]).toMatchObject({
+      startUtc: at(TUE, "13:00"),
+      serviceId: "svc_corte",
+      professionalId: "pro_ana",
+    });
+  });
+
+  it.each([
+    ["book", "16:00"],
+    ["reschedule", "16:00"],
+    ["cancel", null],
+  ] as const)("dos 'sí' CONCURRENTES con la pendiente %s → una sola ejecución", async (action, time) => {
+    setPending(action, time);
+    const history: Msg[] = [
+      { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+      { direction: "in", text: "sí", createdAt: NOW },
+    ];
+    setHistory(history);
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    // Ambos turnos arrancan antes de que cualquiera termine.
+    await Promise.all([runAgentTurn("cv_1", "org_1"), runAgentTurn("cv_1", "org_1")]);
+    const executed =
+      createSessionBooking.mock.calls.length +
+      rescheduleForConversation.mock.calls.length +
+      cancelBookingForConversation.mock.calls.length;
+    expect(executed).toBe(1);
+  });
+
+  it("'claro que no' con una cancelación pendiente NO cancela", async () => {
+    setPending("cancel", null);
+    await turn([
+      {
+        direction: "out",
+        text: "Antes de cancelar necesito tu confirmación: ¿confirmas que quieres cancelar tu cita? Responde «sí» y la cancelo.",
+        createdAt: SHOWN_AT,
+      },
+      { direction: "in", text: "claro que no", createdAt: NOW },
+    ]);
+    expect(cancelBookingForConversation).not.toHaveBeenCalled();
+  });
+
+  it("'sí' a los 29 minutos ejecuta; a los 31 no", async () => {
+    setPending("book", "16:00");
+    vi.setSystemTime(new Date(NOW.getTime() + 29 * 60_000));
+    await turn([
+      { direction: "out", text: PROPOSAL, createdAt: NOW },
+      { direction: "in", text: "sí", createdAt: new Date(NOW.getTime() + 29 * 60_000) },
+    ]);
+    expect(createSessionBooking).toHaveBeenCalledTimes(1);
+
+    createSessionBooking.mockClear();
+    vi.setSystemTime(NOW);
+    setPending("book", "16:00");
+    vi.setSystemTime(new Date(NOW.getTime() + 31 * 60_000));
+    await turn([
+      { direction: "out", text: PROPOSAL, createdAt: NOW },
+      { direction: "in", text: "sí", createdAt: new Date(NOW.getTime() + 31 * 60_000) },
+    ]);
+    expect(createSessionBooking).not.toHaveBeenCalled();
+  });
+});
+
+describe("la pendiente se invalida con cualquier mensaje que no la confirme", () => {
+  it.each([
+    ["cambio de tema", "¿tienen estacionamiento?"],
+    ["otra hora", "¿y tendrás algo más temprano?"],
+    ["otra hora con 'sí'", "sí pero a las 5"],
+    ["otro día", "vale, pero mejor el jueves"],
+    ["negativa", "no gracias"],
+  ])("%s ('%s') y luego 'sí' → NO ejecuta la propuesta vieja", async (_label, text) => {
+    setPending("book", "16:00");
+    await turn([
+      { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+      { direction: "in", text, createdAt: NOW },
+    ]);
+    nothingExecuted();
+    expect(store.pending?.startUtc ?? null).not.toBe(at(TUE, "16:00"));
+    const second = lastOut();
+
+    model({ action: "reply", text: "¿En qué más le ayudo?" });
+    await turn([
+      { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+      { direction: "in", text, createdAt: new Date(NOW.getTime() - 5_000) },
+      { direction: "out", text: second || "Respuesta.", createdAt: new Date(NOW.getTime() - 3_000) },
+      { direction: "in", text: "sí", createdAt: NOW },
+    ]);
+    expect(
+      createSessionBooking.mock.calls.filter(
+        ([input]) => (input as { startUtc: string }).startUtc === at(TUE, "16:00")
+      )
+    ).toHaveLength(0);
+  });
+
+  it("ante la duda repite la pregunta UNA vez; la segunda duda invalida", async () => {
+    setPending("book", "16:00");
+    await turn([
+      { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+      { direction: "in", text: "sí, ¿y cuánto cuesta?", createdAt: NOW },
+    ]);
+    nothingExecuted();
+    expect(chatJson).not.toHaveBeenCalled();
+    const reask = lastOut();
+    expect(reask).toContain("16:00");
+    expect(reask).toContain("¿Quiere que agende su cita?");
+    expect(store.pending?.startUtc).toBe(at(TUE, "16:00"));
+
+    await turn([
+      { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+      { direction: "in", text: "sí, ¿y cuánto cuesta?", createdAt: new Date(NOW.getTime() - 5_000) },
+      { direction: "out", text: reask, createdAt: new Date(NOW.getTime() - 3_000) },
+      { direction: "in", text: "va a llover?", createdAt: NOW },
+    ]);
+    nothingExecuted();
+    expect(store.pending).toBeNull();
+  });
+});
+
+/**
+ * Barrido: mensajes × acción del modelo × hora en/fuera del catálogo. Ninguna
+ * combinación ejecuta; cada rama (pendiente, reoferta) debe ejercitarse.
+ */
+describe("barrido de acciones del modelo", () => {
+  it("ninguna acción del modelo ejecuta; deja pendiente o vuelve a ofrecer", async () => {
+    const branches = { pending: 0, reoffer: 0, cancelPending: 0 };
+    const messages = [...MODEL_TRIGGERS, "sí", "ok", "dale", "a las 2", "cámbiala", "cancela", "gracias"];
+    for (const text of messages) {
+      for (const action of ["book_slot", "reschedule_slot", "cancel_booking"] as const) {
+        for (const inCatalog of [true, false]) {
+          offers = catalog();
+          store.pending = null;
+          createSessionBooking.mockClear();
+          rescheduleForConversation.mockClear();
+          cancelBookingForConversation.mockClear();
+          const startUtc = at(TUE, inCatalog ? "14:00" : "10:00");
+          model(action === "cancel_booking" ? { action } : { action, startUtc });
+          await turn([
+            { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+            { direction: "in", text, createdAt: NOW },
+          ]);
+          const label = `${action} '${text}' inCatalog=${inCatalog}`;
+          expect(createSessionBooking, label).not.toHaveBeenCalled();
+          expect(rescheduleForConversation, label).not.toHaveBeenCalled();
+          expect(cancelBookingForConversation, label).not.toHaveBeenCalled();
+          const pending = currentPending();
+          if (pending?.action === "cancel") branches.cancelPending += 1;
+          else if (pending) {
+            branches.pending += 1;
+            // La pendiente siempre es un horario del catálogo vigente: la del
+            // modelo o la que resolvió la selección determinista ("a las 2").
+            expect(catalog().map((o) => o.startUtc), label).toContain(pending.startUtc);
+            if (chatJson.mock.calls.length > 0) expect(pending.startUtc, label).toBe(startUtc);
+          } else branches.reoffer += 1;
+        }
+      }
+    }
+    expect(branches.pending).toBeGreaterThan(0);
+    expect(branches.reoffer).toBeGreaterThan(0);
+    expect(branches.cancelPending).toBeGreaterThan(0);
+  }, 120_000);
+
+  it("con pendiente: solo las confirmaciones explícitas ejecutan", async () => {
+    const POSITIVE = ["sí", "si", "ok", "va", "dale", "claro", "perfecto", "de acuerdo", "está bien", "sí, gracias", "👍"];
+    const NEGATIVE = [
+      "claro que no", "ok no", "por favor no", "sí pero a las 5", "vale, pero mejor el jueves",
+      "sí, ¿y cuánto cuesta?", "va a llover?", "no, sí a las 5", "no", "no gracias", "mejor no",
+      "si me pudieras decir…",
+    ];
+    const branches = { executed: 0, notExecuted: 0 };
+    for (const action of ["book", "reschedule", "cancel"] as const) {
+      for (const text of [...POSITIVE, ...NEGATIVE]) {
+        setPending(action, action === "cancel" ? null : "16:00");
+        createSessionBooking.mockClear();
+        rescheduleForConversation.mockClear();
+        cancelBookingForConversation.mockClear();
+        model({ action: "reply", text: "Respuesta del modelo." });
+        await turn([
+          { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+          { direction: "in", text, createdAt: NOW },
+        ]);
+        const executed =
+          createSessionBooking.mock.calls.length +
+          rescheduleForConversation.mock.calls.length +
+          cancelBookingForConversation.mock.calls.length;
+        const label = `${action} '${text}'`;
+        if (POSITIVE.includes(text)) {
+          expect(executed, label).toBe(1);
+          branches.executed += 1;
+        } else {
+          expect(executed, label).toBe(0);
+          branches.notExecuted += 1;
+        }
+      }
+    }
+    expect(branches.executed).toBeGreaterThan(0);
+    expect(branches.notExecuted).toBeGreaterThan(0);
+  }, 120_000);
+});
+
+/**
+ * Estructura: crear, mover y cancelar solo ocurre dentro del bloque que
+ * consume la acción pendiente. Un camino nuevo que llame al motor desde otro
+ * sitio del pipeline rompe esta prueba.
+ */
+describe("el motor de citas solo se invoca tras consumir la pendiente", () => {
+  const pipeline = readFileSync(
+    resolve(process.cwd(), "src/server/ai/pipeline.ts"),
+    "utf8"
+  ).replace(/\r\n/g, "\n");
+
+  function callSites(name: string): number[] {
+    return [...pipeline.matchAll(new RegExp(`await ${name}\\(`, "g"))].map((m) => m.index!);
+  }
+
+  it("bookSlot, rescheduleForConversation y handleCancellation: una llamada cada uno, dentro del bloque de consumo", () => {
+    const start = pipeline.indexOf("await consumePendingAction(organizationId, conversationId)");
+    const end = pipeline.indexOf("matchesCancellationIntent(inboundText)", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    for (const name of ["bookSlot", "rescheduleForConversation", "handleCancellation"]) {
+      const sites = callSites(name);
+      expect(sites, name).toHaveLength(1);
+      expect(sites[0]!, name).toBeGreaterThan(start);
+      expect(sites[0]!, name).toBeLessThan(end);
+    }
+    // cancelBookingForConversation solo vive dentro de handleCancellation.
+    const cancelSites = callSites("cancelBookingForConversation");
+    expect(cancelSites).toHaveLength(1);
+    expect(cancelSites[0]!).toBeGreaterThan(pipeline.indexOf("async function handleCancellation("));
+  });
+});

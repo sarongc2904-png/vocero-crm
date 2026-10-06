@@ -258,7 +258,12 @@ export function toneAwareFixedReply(
     .replace("En un momento te comparto", "En un momento le comparto")
     .replace("Lo reviso con el equipo y te confirmo", "Lo reviso con el equipo y le confirmo")
     .replace("Elige otro:", "Elija otro:")
-    .replace("elige uno de estos horarios", "elija uno de estos horarios");
+    .replace("elige uno de estos horarios", "elija uno de estos horarios")
+    .replace("Para cambiar tu cita,", "Para cambiar su cita,")
+    .replace("necesito tu confirmación:", "necesito su confirmación:")
+    .replace("¿confirmas que quieres cancelar tu cita?", "¿confirma que quiere cancelar su cita?")
+    .replace("¿Confirmas que mueva tu cita a", "¿Confirma que mueva su cita a")
+    .replace("Responde «sí»", "Responda «sí»");
 }
 
 /**

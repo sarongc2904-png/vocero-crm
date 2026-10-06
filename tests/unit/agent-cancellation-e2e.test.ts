@@ -73,7 +73,7 @@ vi.mock("@/lib/db", () => {
           },
         }),
       }),
-      delete: () => ({ where: () => Promise.resolve([]) }),
+      delete: () => ({ where: () => Object.assign(Promise.resolve([]), { returning: () => Promise.resolve(selectQueue.shift() ?? []) }) }),
     }),
     schema: new Proxy(
       {},

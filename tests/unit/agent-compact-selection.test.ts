@@ -288,7 +288,7 @@ vi.mock("@/lib/db", () => ({
         return chain;
       },
     }),
-    delete: () => ({ where: () => Promise.resolve([]) }),
+    delete: () => ({ where: () => Object.assign(Promise.resolve([]), { returning: () => Promise.resolve(selectQueue.shift() ?? []) }) }),
     update: () => ({
       set: () => ({
         where: () => ({
