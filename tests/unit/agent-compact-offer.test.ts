@@ -69,7 +69,7 @@ describe("presentación compacta de disponibilidad", () => {
     mocks.computeAvailability.mockReset();
   });
 
-  it("sin fecha → SOLO el primer día disponible y máximo 4 horarios", async () => {
+  it("sin fecha → SOLO el primer día disponible, en mañana y tarde, máximo 6 horarios", async () => {
     mocks.computeAvailability.mockImplementation(async (_org: string, opts?: { fromISO?: string; toISO?: string }) => {
       if (opts?.fromISO && opts.fromISO === opts.toISO) return [];
       return [...daySlots(DAY1, [9, 10, 11, 12, 13, 14]), ...daySlots(DAY2, [9, 10, 11])];
@@ -79,7 +79,11 @@ describe("presentación compacta de disponibilidad", () => {
     const turn = await offerSlots({ organizationId: "org_1", conversationId: "cv_1" });
 
     expect(turn.ok).toBe(true);
-    expect(turn.text.match(/^• /gm)).toHaveLength(4);
+    const visible = turn.text.match(/^• /gm) ?? [];
+    expect(visible.length).toBeGreaterThan(0);
+    expect(visible.length).toBeLessThanOrEqual(6);
+    expect(turn.text).toContain("Mañana:");
+    expect(turn.text).toContain("Tarde:");
     expect(turn.text).toContain("09:00");
     expect(turn.text).toContain("12:00");
     // El segundo día (17 de septiembre) NO se vuelca.
@@ -91,7 +95,7 @@ describe("presentación compacta de disponibilidad", () => {
     expect(persisted).toHaveLength(9);
   });
 
-  it("día específico → SOLO ese día y máximo 5 horarios", async () => {
+  it("día específico → SOLO ese día y máximo 6 horarios", async () => {
     mocks.computeAvailability.mockImplementation(async (_org: string, opts?: { fromISO?: string; toISO?: string }) => {
       if (opts?.fromISO && opts.fromISO === opts.toISO) {
         return opts.fromISO === DAY2 ? daySlots(DAY2, [9, 10, 11, 12, 13, 14]) : [];
@@ -103,12 +107,14 @@ describe("presentación compacta de disponibilidad", () => {
     const turn = await offerSlots({ organizationId: "org_1", conversationId: "cv_1", day: DAY2 });
 
     expect(turn.ok).toBe(true);
-    expect(turn.text.match(/^• /gm)).toHaveLength(5);
+    const visible = turn.text.match(/^• /gm) ?? [];
+    expect(visible.length).toBeGreaterThan(0);
+    expect(visible.length).toBeLessThanOrEqual(6);
     expect(turn.text).toContain("17 de septiembre");
     expect(turn.text).not.toContain("16 de septiembre"); // el día anterior NO aparece
   });
 
-  it("día pedido sin cupo → ofrece el día siguiente con máximo 4", async () => {
+  it("día pedido sin cupo → ofrece el día siguiente con máximo 6", async () => {
     mocks.computeAvailability.mockImplementation(async (_org: string, opts?: { fromISO?: string; toISO?: string }) => {
       if (opts?.fromISO && opts.fromISO === opts.toISO) return []; // el día pedido está lleno
       return [...daySlots(DAY1, [9, 10, 11, 12, 13])];
@@ -119,9 +125,12 @@ describe("presentación compacta de disponibilidad", () => {
 
     expect(turn.ok).toBe(true);
     expect(turn.text).toContain("no tengo horarios disponibles");
-    expect(turn.text.match(/^• /gm)).toHaveLength(4); // solo 4 del día siguiente
+    const visible = turn.text.match(/^• /gm) ?? [];
+    expect(visible.length).toBeGreaterThan(0);
+    expect(visible.length).toBeLessThanOrEqual(6); // tope del día siguiente
     expect(turn.text).toContain("09:00");
-    expect(turn.text).not.toContain("13:00"); // 5º slot, oculto
+    expect(turn.text).toContain("16 de septiembre"); // solo el día siguiente disponible
+    expect(turn.text).not.toContain("20 de septiembre"); // el día pedido no se lista
   });
 
   it("ampliación 'otro día' → muestra el SEGUNDO día disponible", async () => {
@@ -155,7 +164,9 @@ describe("presentación compacta de disponibilidad", () => {
     expect(turn.text).toContain("13:00");
     expect(turn.text).toContain("16:00");
     expect(turn.text).not.toContain("09:00"); // mañana no se muestra
-    expect(turn.text).not.toContain("17:00"); // 5º de la tarde, oculto
+    const visible = turn.text.match(/^• /gm) ?? [];
+    expect(visible.length).toBeLessThanOrEqual(6); // tope del bloque
+    expect(turn.text).not.toContain("17 de septiembre"); // no salta de día
   });
 
   it("ampliación 'fin de semana' → muestra solo sábado/domingo", async () => {
@@ -174,7 +185,10 @@ describe("presentación compacta de disponibilidad", () => {
     expect(turn.text).toContain("En fin de semana tengo:");
     expect(turn.text).toContain("19 de septiembre");
     expect(turn.text).not.toContain("16 de septiembre"); // día de semana descartado
-    expect(turn.text.match(/^• /gm)).toHaveLength(4);
+    expect(turn.text).not.toContain("20 de septiembre"); // un solo día por oferta
+    const visible = turn.text.match(/^• /gm) ?? [];
+    expect(visible.length).toBeGreaterThan(0);
+    expect(visible.length).toBeLessThanOrEqual(6);
   });
 
   it("nunca inventa un slot: el intro con horarios falsos se descarta y solo salen los reales", async () => {

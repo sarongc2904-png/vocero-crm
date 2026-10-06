@@ -27,7 +27,7 @@ describe("resolveExpandRequest", () => {
     expect(resolveExpandRequest("otros horarios")).toBe("next_day");
     expect(resolveExpandRequest("otro día")).toBe("next_day");
     expect(resolveExpandRequest("otra hora")).toBe("next_day");
-    expect(resolveExpandRequest("más tarde")).toBe("afternoon");
+    expect(resolveExpandRequest("más tarde")).toBe("later"); // posteriores a lo mostrado
     expect(resolveExpandRequest("por la tarde")).toBe("afternoon");
     expect(resolveExpandRequest("en la mañana")).toBe("morning");
     expect(resolveExpandRequest("fin de semana")).toBe("weekend");
@@ -376,9 +376,11 @@ describe("pipeline — ampliación y selección compacta", () => {
     await runAgentTurn("cv_lab");
 
     const texto = ultimoTextoSaliente();
-    expect(texto).toContain("Para la tarde tengo:");
+    expect(texto).toContain("Más tarde tengo:");
     expect(texto).toContain("13:00");
     expect(texto).not.toContain("09:00"); // la mañana no se repite
+    expect((texto.match(/^• /gm) ?? []).length).toBeLessThanOrEqual(6);
+    expect(texto).not.toContain("17 de septiembre"); // no salta de día
   });
 
   it("'10:20' (selección sin confirmar) NO reserva: confirma y pregunta", async () => {
