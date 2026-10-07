@@ -1765,6 +1765,8 @@ export const quoteSettings = pgTable(
     /** Puntos base: 1600 = 16 %. */
     taxRateBps: integer("tax_rate_bps").notNull().default(1600),
     defaultValidityDays: integer("default_validity_days").notNull().default(15),
+    /** 0038 — plantilla aprobada para enviar fuera de la ventana de 24 h. */
+    whatsappTemplateId: text("whatsapp_template_id"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -1940,5 +1942,55 @@ export const quoteLink = pgTable(
       name: "quote_link_quote_id_tenant_fk",
     }).onDelete("cascade"),
     check("quote_link_token_hash_ck", sql`${t.tokenHash} ~ '^[0-9a-f]{64}$'`),
+  ]
+);
+
+/**
+ * 0038 — Bitácora de envíos de cotizaciones por WhatsApp. No guarda token ni
+ * texto del mensaje. `incierto` no es un valor guardado: se calcula al leer
+ * (un `pendiente` con más de 5 minutos).
+ */
+export const quoteSend = pgTable(
+  "quote_send",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    quoteId: text("quote_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status", { enum: ["pendiente", "enviado", "fallido"] })
+      .notNull()
+      .default("pendiente"),
+    mode: text("mode", { enum: ["documento", "plantilla"] }),
+    templateId: text("template_id"),
+    quoteLinkId: text("quote_link_id"),
+    messageId: text("message_id"),
+    waMessageId: text("wa_message_id"),
+    sentBy: text("sent_by").references(() => user.id, { onDelete: "set null" }),
+    errorCode: text("error_code"),
+    resolvedBy: text("resolved_by").references(() => user.id, { onDelete: "set null" }),
+    resolution: text("resolution", { enum: ["llego", "no_llego"] }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    completedAt: timestamp("completed_at"),
+  },
+  (t) => [
+    uniqueIndex("quote_send_organization_id_id_uq").on(t.organizationId, t.id),
+    uniqueIndex("quote_send_org_key_uq").on(t.organizationId, t.idempotencyKey),
+    uniqueIndex("quote_send_one_pending_uq")
+      .on(t.organizationId, t.quoteId)
+      .where(sql`${t.status} = 'pendiente'`),
+    index("quote_send_org_created_idx").on(t.organizationId, t.createdAt),
+    foreignKey({
+      columns: [t.organizationId, t.quoteId],
+      foreignColumns: [quote.organizationId, quote.id],
+      name: "quote_send_quote_id_tenant_fk",
+    }).onDelete("cascade"),
+    // Las FKs de template/link/mensaje (SET NULL de una columna) viven en 0038.
+    check("quote_send_status_ck", sql`${t.status} in ('pendiente', 'enviado', 'fallido')`),
+    check("quote_send_mode_ck", sql`${t.mode} is null or ${t.mode} in ('documento', 'plantilla')`),
+    check("quote_send_resolution_ck", sql`${t.resolution} is null or ${t.resolution} in ('llego', 'no_llego')`),
+    check("quote_send_key_ck", sql`char_length(${t.idempotencyKey}) between 8 and 100`),
+    check("quote_send_completed_ck", sql`(${t.status} = 'pendiente') = (${t.completedAt} is null)`),
   ]
 );

@@ -57,6 +57,8 @@ const prefixes = {
   quote: "qt",
   quoteItem: "qti",
   quoteLink: "qtl",
+  // 0038 — intentos de envío por WhatsApp
+  quoteSend: "qts",
 } as const;
 
 export type IdKind = keyof typeof prefixes;
