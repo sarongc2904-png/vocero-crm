@@ -24,16 +24,21 @@ const ADS_TAB: Tab = { href: "/settings/ads", label: "Anuncios" };
 /** 017 — "Messenger" solo si el canal está encendido con CHANNELS. */
 const MESSENGER_TAB: Tab = { href: "/settings/messenger", label: "Messenger" };
 
+/** 0038 — "Cotizaciones" solo con la bandera COTIZACIONES. */
+const QUOTES_TAB: Tab = { href: "/settings/quotes", label: "Cotizaciones" };
+
 export function SettingsNav({
   role,
   agenda = false,
   atribucion = false,
   messenger = false,
+  quotes = false,
 }: {
   role: "owner" | "admin" | "agent";
   agenda?: boolean;
   atribucion?: boolean;
   messenger?: boolean;
+  quotes?: boolean;
 }) {
   const pathname = usePathname();
   // Qué pestañas existen lo decide el servidor y baja por prop: este es un
@@ -45,6 +50,7 @@ export function SettingsNav({
     ...TABS.slice(1),
     ...(agenda ? [AGENDA_TAB] : []),
     ...(atribucion ? [ADS_TAB] : []),
+    ...(quotes ? [QUOTES_TAB] : []),
   ].filter(
     (tab) =>
       role === "owner" ||
