@@ -15,12 +15,15 @@ export type QuoteSettings = {
   /** Puntos base: 1600 = 16 %. */
   taxRateBps: number;
   defaultValidityDays: number;
+  /** 0038 — plantilla para enviar fuera de la ventana de 24 h; null = no hay. */
+  whatsappTemplateId: string | null;
 };
 
 export const DEFAULT_QUOTE_SETTINGS: Readonly<QuoteSettings> = Object.freeze({
   pricesIncludeTax: false,
   taxRateBps: 1600,
   defaultValidityDays: 15,
+  whatsappTemplateId: null,
 });
 
 type Reader = Pick<ReturnType<typeof getDb>, "select">;
@@ -35,6 +38,7 @@ export async function getQuoteSettings(
       pricesIncludeTax: schema.quoteSettings.pricesIncludeTax,
       taxRateBps: schema.quoteSettings.taxRateBps,
       defaultValidityDays: schema.quoteSettings.defaultValidityDays,
+      whatsappTemplateId: schema.quoteSettings.whatsappTemplateId,
     })
     .from(schema.quoteSettings)
     .where(eq(schema.quoteSettings.organizationId, organizationId))

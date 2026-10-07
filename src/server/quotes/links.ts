@@ -37,6 +37,41 @@ export type IssuedQuoteLink = {
   expiresAt: Date;
 };
 
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/**
+ * Dentro de una transacción ya abierta (y con la cotización bloqueada por el
+ * llamador): revoca los enlaces vivos de la cotización y guarda el hash del
+ * token nuevo. Devuelve el id del enlace, nunca el token.
+ */
+export async function replaceQuoteLinkInTx(
+  tx: Tx,
+  input: { organizationId: string; quoteId: string; token: string; expiresAt: Date; now: Date }
+): Promise<string> {
+  const { organizationId, quoteId, now } = input;
+  await tx
+    .update(schema.quoteLink)
+    .set({ revokedAt: now })
+    .where(
+      scoped(
+        schema.quoteLink.organizationId,
+        organizationId,
+        eq(schema.quoteLink.quoteId, quoteId),
+        isNull(schema.quoteLink.revokedAt)
+      )
+    );
+  const id = newId("quoteLink");
+  await tx.insert(schema.quoteLink).values({
+    id,
+    organizationId,
+    quoteId,
+    tokenHash: hashQuoteToken(input.token),
+    expiresAt: input.expiresAt,
+    createdAt: now,
+  });
+  return id;
+}
+
 /**
  * Emite (o reemite) el enlace de una cotización del negocio, en `borrador` o
  * `enviada`. NO cambia el estado: el enlace de un borrador es una vista
@@ -70,25 +105,7 @@ export async function issueQuoteLink(input: {
       throw new QuoteError("invalid", "La vigencia de la cotización ya terminó");
     }
 
-    await tx
-      .update(schema.quoteLink)
-      .set({ revokedAt: now })
-      .where(
-        scoped(
-          schema.quoteLink.organizationId,
-          organizationId,
-          eq(schema.quoteLink.quoteId, quoteId),
-          isNull(schema.quoteLink.revokedAt)
-        )
-      );
-    await tx.insert(schema.quoteLink).values({
-      id: newId("quoteLink"),
-      organizationId,
-      quoteId,
-      tokenHash: hashQuoteToken(token),
-      expiresAt: quote.validUntil,
-      createdAt: now,
-    });
+    await replaceQuoteLinkInTx(tx, { organizationId, quoteId, token, expiresAt: quote.validUntil, now });
     return quote.validUntil;
   });
 

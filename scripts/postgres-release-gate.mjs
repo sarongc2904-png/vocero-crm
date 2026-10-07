@@ -46,6 +46,7 @@ const PG_VITEST_SUITES = [
   { file: "tests/unit/quotes-public-postgres.test.ts", minTests: 11 },
   { file: "tests/unit/quotes-transitions-postgres.test.ts", minTests: 44 },
   { file: "tests/unit/quotes-crm-postgres.test.ts", minTests: 13 },
+  { file: "tests/unit/quotes-whatsapp-send-postgres.test.ts", minTests: 22 },
 ];
 
 async function runPgVitestSuites() {
