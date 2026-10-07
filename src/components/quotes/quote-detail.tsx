@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useEvents } from "@/components/use-events";
 import { QuoteEditor, type EditorOptions } from "@/components/quotes/quote-editor";
 import { QuoteStatusBadge } from "@/components/quotes/quote-status-badge";
+import { WhatsAppSendPanel, type LatestSend } from "@/components/quotes/whatsapp-send-panel";
 import { formatMoneyCents } from "@/lib/money";
 import { formatQuantity, formatQuoteDate, formatTaxRate, type QuoteStatusValue } from "@/lib/quote-format";
 
@@ -39,6 +40,7 @@ export type QuoteDetailData = {
   link: { active: boolean; expiresAt: string | null; lastViewedAt: string | null; issuedAt: string | null };
   duplicatedFrom: { id: string; folio: string } | null;
   duplicates: { id: string; folio: string; status: QuoteStatusValue }[];
+  latestSend: LatestSend | null;
 };
 
 type Can = { manage: boolean; publish: boolean };
@@ -258,6 +260,10 @@ export function QuoteDetail({ quote, can, editorOptions }: { quote: QuoteDetailD
           </dl>
           {quote.notes && <p className="border-t px-3 py-2 text-sm text-text-3">Notas internas: {quote.notes}</p>}
         </section>
+      )}
+
+      {can.publish && !quote.isTest && (quote.status === "borrador" || quote.latestSend?.status === "incierto") && (
+        <WhatsAppSendPanel quoteId={quote.id} latest={quote.latestSend} />
       )}
 
       <section className="space-y-3 rounded-xl border p-4">

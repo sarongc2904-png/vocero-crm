@@ -6,6 +6,7 @@ import { quotesDisabledResponse, quotesEnabled } from "@/server/quotes/flag";
 import { quoteErrorResponse, quotePayload } from "@/server/quotes/http";
 import type { QuoteDetail } from "@/server/quotes/crm";
 import { MAX_QUOTE_ITEMS, MAX_QUOTE_NOTES } from "@/server/quotes/service";
+import { sendViewPayload } from "@/server/quotes/send-http";
 
 /**
  * Puerta única de `/api/quotes/*` (CRM con sesión):
@@ -75,5 +76,6 @@ export function crmDetailPayload(detail: QuoteDetail) {
     sentByName: detail.sentByName,
     duplicatedFrom: detail.duplicatedFrom,
     duplicates: detail.duplicates,
+    latestSend: detail.latestSend ? sendViewPayload(detail.latestSend) : null,
   };
 }

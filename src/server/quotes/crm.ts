@@ -5,6 +5,7 @@ import type { QuoteStatus } from "@/lib/db/schema";
 import { formatQuoteFolio } from "@/server/quotes/numbering";
 import { effectiveQuoteStatus, getQuote, type QuoteView } from "@/server/quotes/service";
 import { getQuoteSettings, type QuoteSettings } from "@/server/quotes/settings";
+import { getLatestQuoteSend, type QuoteSendView } from "@/server/quotes/whatsapp-send";
 
 /**
  * Lecturas para las pantallas del CRM. Todo filtrado por `organizationId` de
@@ -106,6 +107,8 @@ export type QuoteDetail = {
   sentByName: string | null;
   duplicatedFrom: { id: string; folio: string } | null;
   duplicates: { id: string; folio: string; status: QuoteStatus }[];
+  /** 0038 — último intento de envío por WhatsApp (incierto se calcula al leer). */
+  latestSend: QuoteSendView | null;
 };
 
 export async function getQuoteDetailForCrm(
@@ -117,7 +120,7 @@ export async function getQuoteDetailForCrm(
   if (!quote) return null;
   const db = getDb();
 
-  const [contacts, links, users, parents, children] = await Promise.all([
+  const [contacts, links, users, parents, children, latestSend] = await Promise.all([
     db
       .select({ name: schema.contact.name })
       .from(schema.contact)
@@ -162,6 +165,7 @@ export async function getQuoteDetailForCrm(
       .from(schema.quote)
       .where(scoped(schema.quote.organizationId, organizationId, eq(schema.quote.duplicatedFromId, quoteId)))
       .orderBy(asc(schema.quote.number)),
+    getLatestQuoteSend(organizationId, quoteId, now),
   ]);
 
   const names = new Map(users.map((u) => [u.id, u.name]));
@@ -179,6 +183,7 @@ export async function getQuoteDetailForCrm(
     sentByName: quote.sentBy ? names.get(quote.sentBy) ?? null : null,
     duplicatedFrom: parents[0] ? { id: parents[0].id, folio: formatQuoteFolio(parents[0].number) } : null,
     duplicates: children.map((c) => ({ id: c.id, folio: formatQuoteFolio(c.number), status: effectiveQuoteStatus(c, now) })),
+    latestSend,
   };
 }
 

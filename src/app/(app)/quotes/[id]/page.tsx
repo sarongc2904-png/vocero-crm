@@ -78,6 +78,15 @@ export default async function QuoteDetailPage({ params }: { params: Promise<{ id
               },
               duplicatedFrom: detail.duplicatedFrom,
               duplicates: detail.duplicates,
+              latestSend: detail.latestSend
+                ? {
+                    id: detail.latestSend.id,
+                    status: detail.latestSend.status,
+                    mode: detail.latestSend.mode,
+                    errorMessage: detail.latestSend.errorMessage,
+                    createdAt: detail.latestSend.createdAt.toISOString(),
+                  }
+                : null,
             }}
           />
         </div>
