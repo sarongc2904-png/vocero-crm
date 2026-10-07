@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   check,
   foreignKey,
@@ -1736,4 +1737,190 @@ export const capiSettings = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [uniqueIndex("capi_settings_org_uq").on(t.organizationId)]
+);
+
+/* ============================================================
+ * Cotizaciones (0037) — detrás de la bandera COTIZACIONES
+ * ============================================================ */
+
+export const QUOTE_STATUSES = [
+  "borrador",
+  "enviada",
+  "aceptada",
+  "rechazada",
+  "expirada",
+  "cancelada",
+] as const;
+
+export type QuoteStatus = (typeof QUOTE_STATUSES)[number];
+
+/** Configuración de IVA y vigencia por negocio. Sin fila = valores por defecto. */
+export const quoteSettings = pgTable(
+  "quote_settings",
+  {
+    organizationId: text("organization_id")
+      .primaryKey()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    pricesIncludeTax: boolean("prices_include_tax").notNull().default(false),
+    /** Puntos base: 1600 = 16 %. */
+    taxRateBps: integer("tax_rate_bps").notNull().default(1600),
+    defaultValidityDays: integer("default_validity_days").notNull().default(15),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    check("quote_settings_tax_rate_ck", sql`${t.taxRateBps} between 0 and 10000`),
+    check(
+      "quote_settings_validity_ck",
+      sql`${t.defaultValidityDays} between 1 and 365`
+    ),
+  ]
+);
+
+/** Folio consecutivo por negocio; se incrementa en la misma transacción del alta. */
+export const quoteCounter = pgTable(
+  "quote_counter",
+  {
+    organizationId: text("organization_id")
+      .primaryKey()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    lastNumber: integer("last_number").notNull().default(0),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [check("quote_counter_last_number_ck", sql`${t.lastNumber} >= 0`)]
+);
+
+export const quote = pgTable(
+  "quote",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    contactId: text("contact_id").notNull(),
+    conversationId: text("conversation_id"),
+    leadId: text("lead_id"),
+    number: integer("number").notNull(),
+    status: text("status", { enum: QUOTE_STATUSES })
+      .notNull()
+      .default("borrador"),
+    currency: text("currency").notNull().default("MXN"),
+    /** Copiados de quote_settings al crear: la configuración no reescribe el pasado. */
+    pricesIncludeTax: boolean("prices_include_tax").notNull(),
+    taxRateBps: integer("tax_rate_bps").notNull(),
+    subtotalCents: bigint("subtotal_cents", { mode: "number" })
+      .notNull()
+      .default(0),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
+    validUntil: timestamp("valid_until").notNull(),
+    notes: text("notes"),
+    source: text("source", { enum: ["manual", "bot", "ai"] })
+      .notNull()
+      .default("manual"),
+    isTest: boolean("is_test").notNull().default(false),
+    createdBy: text("created_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    sentAt: timestamp("sent_at"),
+    respondedAt: timestamp("responded_at"),
+    responseNote: text("response_note"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("quote_organization_id_id_uq").on(t.organizationId, t.id),
+    uniqueIndex("quote_org_number_uq").on(t.organizationId, t.number),
+    index("quote_org_status_idx").on(t.organizationId, t.status),
+    index("quote_org_created_idx").on(t.organizationId, t.createdAt),
+    index("quote_org_contact_idx").on(t.organizationId, t.contactId),
+    foreignKey({
+      columns: [t.organizationId, t.contactId],
+      foreignColumns: [contact.organizationId, contact.id],
+      name: "quote_contact_id_tenant_fk",
+    }).onDelete("cascade"),
+    // La FK de conversación y la de lead son `ON DELETE SET NULL (col)` en
+    // SQL (0037): Drizzle no sabe expresar el SET NULL de una sola columna de
+    // una FK compuesta, así que viven solo en la migración.
+    check("quote_number_ck", sql`${t.number} > 0`),
+    check("quote_tax_rate_ck", sql`${t.taxRateBps} between 0 and 10000`),
+    check(
+      "quote_amounts_ck",
+      sql`${t.subtotalCents} >= 0 and ${t.taxCents} >= 0 and ${t.totalCents} >= 0`
+    ),
+    check(
+      "quote_total_ck",
+      sql`${t.totalCents} = case when ${t.pricesIncludeTax} then ${t.subtotalCents} else ${t.subtotalCents} + ${t.taxCents} end`
+    ),
+  ]
+);
+
+export const quoteItem = pgTable(
+  "quote_item",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    quoteId: text("quote_id").notNull(),
+    /** Solo referencia al catálogo; descripción y precio quedan copiados. */
+    serviceId: text("service_id"),
+    position: integer("position").notNull(),
+    description: text("description").notNull(),
+    /** Milésimas: 1000 = 1 unidad, 1500 = 1.5. */
+    quantityMilli: integer("quantity_milli").notNull(),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull(),
+    lineTotalCents: bigint("line_total_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("quote_item_org_quote_position_uq").on(
+      t.organizationId,
+      t.quoteId,
+      t.position
+    ),
+    foreignKey({
+      columns: [t.organizationId, t.quoteId],
+      foreignColumns: [quote.organizationId, quote.id],
+      name: "quote_item_quote_id_tenant_fk",
+    }).onDelete("cascade"),
+    // quote_item_service_id_tenant_fk (SET NULL de una columna) vive en 0037.
+    check("quote_item_position_ck", sql`${t.position} >= 0`),
+    check(
+      "quote_item_description_ck",
+      sql`char_length(${t.description}) between 1 and 500`
+    ),
+    check("quote_item_quantity_ck", sql`${t.quantityMilli} > 0`),
+    check(
+      "quote_item_amounts_ck",
+      sql`${t.unitPriceCents} >= 0 and ${t.lineTotalCents} >= 0`
+    ),
+  ]
+);
+
+/** Enlace público /p/[token]: solo el SHA-256 del token vive en la base. */
+export const quoteLink = pgTable(
+  "quote_link",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    quoteId: text("quote_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    revokedAt: timestamp("revoked_at"),
+    lastViewedAt: timestamp("last_viewed_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("quote_link_token_hash_uq").on(t.tokenHash),
+    index("quote_link_org_quote_idx").on(t.organizationId, t.quoteId),
+    foreignKey({
+      columns: [t.organizationId, t.quoteId],
+      foreignColumns: [quote.organizationId, quote.id],
+      name: "quote_link_quote_id_tenant_fk",
+    }).onDelete("cascade"),
+    check("quote_link_token_hash_ck", sql`${t.tokenHash} ~ '^[0-9a-f]{64}$'`),
+  ]
 );
