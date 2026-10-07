@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -38,9 +38,11 @@ export type IssuedQuoteLink = {
 };
 
 /**
- * Emite (o reemite) el enlace de una cotización del negocio. Si estaba en
- * `borrador`, pasa a `enviada`: publicar el enlace ES entregarla al cliente.
- * Solo un usuario del CRM con sesión llega aquí; el bot no puede publicar.
+ * Emite (o reemite) el enlace de una cotización del negocio, en `borrador` o
+ * `enviada`. NO cambia el estado: el enlace de un borrador es una vista
+ * previa sin botones; pasar a `enviada` es una acción aparte
+ * (`markQuoteSent`, o un envío por WhatsApp aceptado por Meta).
+ * Solo un usuario del CRM con sesión llega aquí; el bot no puede.
  */
 export async function issueQuoteLink(input: {
   organizationId: string;
@@ -87,18 +89,6 @@ export async function issueQuoteLink(input: {
       expiresAt: quote.validUntil,
       createdAt: now,
     });
-    if (quote.status === "borrador") {
-      await tx
-        .update(schema.quote)
-        .set({ status: "enviada", sentAt: now, updatedAt: now })
-        .where(
-          scoped(
-            schema.quote.organizationId,
-            organizationId,
-            and(eq(schema.quote.id, quoteId), eq(schema.quote.status, "borrador"))
-          )
-        );
-    }
     return quote.validUntil;
   });
 

@@ -89,6 +89,8 @@ export function quoteErrorStatus(code: QuoteError["code"]): number {
     case "service_inactive":
     case "currency_mismatch":
       return 422;
+    case "invalid_transition":
+      return 409;
   }
 }
 

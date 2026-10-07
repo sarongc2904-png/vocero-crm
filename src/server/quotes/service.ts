@@ -27,7 +27,13 @@ export const MAX_QUOTE_NOTES = 2000;
 
 export class QuoteError extends Error {
   constructor(
-    readonly code: "not_found" | "invalid" | "service_inactive" | "currency_mismatch",
+    readonly code:
+      | "not_found"
+      | "invalid"
+      | "service_inactive"
+      | "currency_mismatch"
+      /** La cotización no está en un estado que permita esa acción. */
+      | "invalid_transition",
     message: string
   ) {
     super(message);
@@ -63,8 +69,13 @@ export type QuoteView = {
   notes: string | null;
   source: "manual" | "bot" | "ai";
   isTest: boolean;
+  createdBy: string | null;
   sentAt: Date | null;
+  sentVia: "enlace" | "whatsapp" | null;
+  sentBy: string | null;
+  duplicatedFromId: string | null;
   respondedAt: Date | null;
+  responseNote: string | null;
   createdAt: Date;
   updatedAt: Date;
   items: QuoteItemView[];
@@ -96,20 +107,89 @@ export type CreateDraftInput = {
   now?: Date;
 };
 
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+type PricedLine = Omit<QuoteItemView, "id">;
+
+function validateItemsAndNotes(
+  items: readonly unknown[],
+  rawNotes: string | null | undefined
+): string | null {
+  if (items.length === 0) {
+    throw new QuoteError("invalid", "La cotización necesita al menos una línea");
+  }
+  if (items.length > MAX_QUOTE_ITEMS) {
+    throw new QuoteError("invalid", `Máximo ${MAX_QUOTE_ITEMS} líneas por cotización`);
+  }
+  const notes = rawNotes?.trim() ? rawNotes.trim() : null;
+  if (notes && notes.length > MAX_QUOTE_NOTES) {
+    throw new QuoteError("invalid", `Las notas admiten hasta ${MAX_QUOTE_NOTES} caracteres`);
+  }
+  return notes;
+}
+
+function validityToDate(days: number, now: Date): Date {
+  if (!Number.isInteger(days) || days < 1 || days > 365) {
+    throw new QuoteError("invalid", "La vigencia debe estar entre 1 y 365 días");
+  }
+  return new Date(now.getTime() + days * 86_400_000);
+}
+
+/**
+ * Líneas con precio del CATÁLOGO del negocio. Un servicio ajeno o inexistente
+ * es `not_found` (sin decir cuál de los dos); inactivo o de otra moneda, 422.
+ */
+async function priceLinesFromCatalog(
+  tx: Tx,
+  organizationId: string,
+  items: readonly { serviceId: string; quantityMilli: number }[]
+): Promise<{ lines: PricedLine[]; currency: string }> {
+  const serviceIds = [...new Set(items.map((item) => item.serviceId))];
+  const services = await tx
+    .select({
+      id: schema.service.id,
+      name: schema.service.name,
+      priceCents: schema.service.priceCents,
+      currency: schema.service.currency,
+      active: schema.service.active,
+    })
+    .from(schema.service)
+    .where(scoped(schema.service.organizationId, organizationId, inArray(schema.service.id, serviceIds)));
+  const byId = new Map(services.map((service) => [service.id, service]));
+  for (const id of serviceIds) {
+    const service = byId.get(id);
+    if (!service) throw new QuoteError("not_found", "Servicio no encontrado");
+    if (!service.active) {
+      throw new QuoteError("service_inactive", `El servicio "${service.name}" no está activo`);
+    }
+  }
+  const currencies = new Set(services.map((service) => service.currency));
+  if (currencies.size > 1) {
+    throw new QuoteError("currency_mismatch", "Todas las líneas de una cotización deben estar en la misma moneda");
+  }
+  try {
+    const lines = items.map((item, position) => {
+      const service = byId.get(item.serviceId)!;
+      return {
+        serviceId: service.id,
+        position,
+        description: service.name.slice(0, 500),
+        quantityMilli: item.quantityMilli,
+        unitPriceCents: service.priceCents,
+        lineTotalCents: lineTotalCents(item.quantityMilli, service.priceCents),
+      };
+    });
+    return { lines, currency: services[0]!.currency };
+  } catch (err) {
+    if (err instanceof QuoteAmountError) throw new QuoteError("invalid", err.message);
+    throw err;
+  }
+}
+
 /** Crea una cotización en `borrador` para la conversación indicada. */
 export async function createDraftQuote(input: CreateDraftInput): Promise<QuoteView> {
   const { organizationId } = input;
   if (!organizationId) throw new Error("createDraftQuote(): organizationId vacío");
-  if (input.items.length === 0) {
-    throw new QuoteError("invalid", "La cotización necesita al menos una línea");
-  }
-  if (input.items.length > MAX_QUOTE_ITEMS) {
-    throw new QuoteError("invalid", `Máximo ${MAX_QUOTE_ITEMS} líneas por cotización`);
-  }
-  const notes = input.notes?.trim() ? input.notes.trim() : null;
-  if (notes && notes.length > MAX_QUOTE_NOTES) {
-    throw new QuoteError("invalid", `Las notas admiten hasta ${MAX_QUOTE_NOTES} caracteres`);
-  }
+  const notes = validateItemsAndNotes(input.items, input.notes);
 
   const db = getDb();
   const now = input.now ?? new Date();
@@ -133,65 +213,14 @@ export async function createDraftQuote(input: CreateDraftInput): Promise<QuoteVi
     const conversation = conversations[0];
     if (!conversation) throw new QuoteError("not_found", "Conversación no encontrada");
 
-    const serviceIds = [...new Set(input.items.map((item) => item.serviceId))];
-    const services = await tx
-      .select({
-        id: schema.service.id,
-        name: schema.service.name,
-        priceCents: schema.service.priceCents,
-        currency: schema.service.currency,
-        active: schema.service.active,
-      })
-      .from(schema.service)
-      .where(
-        scoped(schema.service.organizationId, organizationId, inArray(schema.service.id, serviceIds))
-      );
-    const byId = new Map(services.map((service) => [service.id, service]));
-    for (const id of serviceIds) {
-      const service = byId.get(id);
-      // Ajeno o inexistente: misma respuesta, sin revelar cuál de los dos.
-      if (!service) throw new QuoteError("not_found", "Servicio no encontrado");
-      if (!service.active) {
-        throw new QuoteError("service_inactive", `El servicio "${service.name}" no está activo`);
-      }
-    }
-    const currencies = new Set(services.map((service) => service.currency));
-    if (currencies.size > 1) {
-      throw new QuoteError(
-        "currency_mismatch",
-        "Todas las líneas de una cotización deben estar en la misma moneda"
-      );
-    }
-    const currency = services[0]!.currency;
-
-    let lines: Omit<QuoteItemView, "id">[];
-    try {
-      lines = input.items.map((item, position) => {
-        const service = byId.get(item.serviceId)!;
-        return {
-          serviceId: service.id,
-          position,
-          description: service.name.slice(0, 500),
-          quantityMilli: item.quantityMilli,
-          unitPriceCents: service.priceCents,
-          lineTotalCents: lineTotalCents(item.quantityMilli, service.priceCents),
-        };
-      });
-    } catch (err) {
-      if (err instanceof QuoteAmountError) throw new QuoteError("invalid", err.message);
-      throw err;
-    }
-
+    const { lines, currency } = await priceLinesFromCatalog(tx, organizationId, input.items);
     const settings = await getQuoteSettings(organizationId, tx);
     const totals = computeQuoteTotals({
       lineTotalsCents: lines.map((line) => line.lineTotalCents),
       pricesIncludeTax: settings.pricesIncludeTax,
       taxRateBps: settings.taxRateBps,
     });
-    const validityDays = input.validityDays ?? settings.defaultValidityDays;
-    if (!Number.isInteger(validityDays) || validityDays < 1 || validityDays > 365) {
-      throw new QuoteError("invalid", "La vigencia debe estar entre 1 y 365 días");
-    }
+    const validUntil = validityToDate(input.validityDays ?? settings.defaultValidityDays, now);
 
     const leads = await tx
       .select({ id: schema.lead.id })
@@ -217,7 +246,7 @@ export async function createDraftQuote(input: CreateDraftInput): Promise<QuoteVi
       subtotalCents: totals.subtotalCents,
       taxCents: totals.taxCents,
       totalCents: totals.totalCents,
-      validUntil: new Date(now.getTime() + validityDays * 86_400_000),
+      validUntil,
       notes,
       source: input.source,
       isTest: conversation.isTest,
@@ -234,6 +263,74 @@ export async function createDraftQuote(input: CreateDraftInput): Promise<QuoteVi
   const created = await getQuote(organizationId, quoteId);
   if (!created) throw new Error("createDraftQuote(): la cotización recién creada no se encontró");
   return created;
+}
+
+/**
+ * Edita un borrador: reemplaza sus líneas (precio del catálogo, de nuevo),
+ * notas y vigencia. Solo `borrador`: una cotización enviada se corrige con
+ * "Duplicar". La tasa de IVA y el modo se mantienen los del borrador.
+ */
+export async function updateDraftQuote(input: {
+  organizationId: string;
+  quoteId: string;
+  items: { serviceId: string; quantityMilli: number }[];
+  notes?: string | null;
+  validityDays?: number;
+  now?: Date;
+}): Promise<QuoteView> {
+  const { organizationId, quoteId } = input;
+  if (!organizationId) throw new Error("updateDraftQuote(): organizationId vacío");
+  const notes = validateItemsAndNotes(input.items, input.notes);
+  const now = input.now ?? new Date();
+
+  await getDb().transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        status: schema.quote.status,
+        pricesIncludeTax: schema.quote.pricesIncludeTax,
+        taxRateBps: schema.quote.taxRateBps,
+        validUntil: schema.quote.validUntil,
+      })
+      .from(schema.quote)
+      .where(scoped(schema.quote.organizationId, organizationId, eq(schema.quote.id, quoteId)))
+      .for("update")
+      .limit(1);
+    const quote = rows[0];
+    if (!quote) throw new QuoteError("not_found", "Cotización no encontrada");
+    if (quote.status !== "borrador") {
+      throw new QuoteError("invalid_transition", "Solo se puede editar un borrador; usa Duplicar para corregirla");
+    }
+    const { lines, currency } = await priceLinesFromCatalog(tx, organizationId, input.items);
+    const totals = computeQuoteTotals({
+      lineTotalsCents: lines.map((line) => line.lineTotalCents),
+      pricesIncludeTax: quote.pricesIncludeTax,
+      taxRateBps: quote.taxRateBps,
+    });
+    await tx
+      .update(schema.quote)
+      .set({
+        currency,
+        subtotalCents: totals.subtotalCents,
+        taxCents: totals.taxCents,
+        totalCents: totals.totalCents,
+        notes,
+        validUntil: input.validityDays === undefined ? quote.validUntil : validityToDate(input.validityDays, now),
+        updatedAt: now,
+      })
+      .where(
+        scoped(schema.quote.organizationId, organizationId, eq(schema.quote.id, quoteId), eq(schema.quote.status, "borrador"))
+      );
+    await tx
+      .delete(schema.quoteItem)
+      .where(scoped(schema.quoteItem.organizationId, organizationId, eq(schema.quoteItem.quoteId, quoteId)));
+    await tx
+      .insert(schema.quoteItem)
+      .values(lines.map((line) => ({ id: newId("quoteItem"), organizationId, quoteId, ...line })));
+  });
+
+  const updated = await getQuote(organizationId, quoteId);
+  if (!updated) throw new Error("updateDraftQuote(): la cotización editada no se encontró");
+  return updated;
 }
 
 /** Una cotización con sus líneas, SOLO si pertenece al negocio. */
@@ -329,8 +426,13 @@ function toView(
     notes: row.notes,
     source: row.source,
     isTest: row.isTest,
+    createdBy: row.createdBy,
     sentAt: row.sentAt,
+    sentVia: row.sentVia,
+    sentBy: row.sentBy,
+    duplicatedFromId: row.duplicatedFromId,
     respondedAt: row.respondedAt,
+    responseNote: row.responseNote,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     items: items.map((item) => ({
