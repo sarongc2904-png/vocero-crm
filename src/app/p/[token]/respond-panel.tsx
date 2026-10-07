@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +20,7 @@ const MAX_COMMENT = 500;
  * respuesta que no se puede deshacer desde aquí.
  */
 export function RespondPanel({ token, businessName }: { token: string; businessName: string }) {
+  const router = useRouter();
   const [state, setState] = useState<State>({ kind: "idle" });
   const [comment, setComment] = useState("");
 
@@ -35,10 +37,12 @@ export function RespondPanel({ token, businessName }: { token: string; businessN
       if (res.ok) {
         const body = (await res.json()) as { status: "aceptada" | "rechazada" };
         setState({ kind: "done", status: body.status });
+        router.refresh(); // la etiqueta de estado del encabezado se actualiza sola
         return;
       }
       if (res.status === 409) {
-        setState({ kind: "error", message: "Esta cotización ya no espera respuesta. Recarga la página para ver su estado." });
+        setState({ kind: "error", message: "Esta cotización ya no espera respuesta." });
+        router.refresh();
         return;
       }
       if (res.status === 429) {
