@@ -16,6 +16,13 @@ const CANCEL_VERB =
   /\b(?:cancel(?:a|ar|en|emos|ala|alo|arla|arlo)|anul(?:a|ar|en|emos|ala|alo|arla|arlo))\b/;
 const CANCEL_PRONOUN = /\b(?:cancelala|anulala|cancelalo|anulalo)\b/;
 const APPOINTMENT_REF = /\b(?:cita|citas|reservaci[oó]n|reserva|turno)\b/;
+/**
+ * "cancela la del domingo", "cancela la de las 10", "anula la próxima": sin la
+ * palabra "cita", el artículo seguido de "del/de/que/próxima" señala una cita.
+ * "cancela el pedido" o "cancela el seguimiento" no.
+ */
+const CANCEL_REFERENCE =
+  /\b(?:cancel|anul)(?:a|en|emos)\s+(?:la|el|esa|ese)\s+(?:del|de|que|proxim[ao]|siguiente)\b/;
 /** "quiero cancelar" sin referencia explícita sigue siendo una orden. */
 const CANCEL_REQUEST =
   /\b(?:quiero|deseo|necesito|quisiera|podrias|puedes)\s+(?:cancelar|anular)\b/;
@@ -42,6 +49,7 @@ export function matchesCancellationIntent(text: string): boolean {
   if (!CANCEL_VERB.test(norm)) return false;
   return (
     APPOINTMENT_REF.test(norm) ||
+    CANCEL_REFERENCE.test(norm) ||
     CANCEL_REQUEST.test(norm) ||
     /^cancelar\b/.test(norm.trim())
   );

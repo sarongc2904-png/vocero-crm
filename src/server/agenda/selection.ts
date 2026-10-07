@@ -296,9 +296,13 @@ export type ConfirmationVerdict = "confirm" | "unclear" | "other";
  */
 const THUMBS_UP = /\u{1F44D}[\u{1F3FB}-\u{1F3FF}]?/gu;
 
-/** Frases de varias palabras que se leen como una sola. */
+/**
+ * Frases de varias palabras que se leen como una sola. "claro que sí" se
+ * conserva como su propia palabra: lleva un "sí" explícito, a diferencia de
+ * "claro" a secas.
+ */
 const CONFIRM_PHRASES: [RegExp, string][] = [
-  [/\bclaro que si\b/g, "claro"],
+  [/\bclaro que si\b/g, "claroquesi"],
   [/\bde acuerdo\b/g, "deacuerdo"],
   [/\besta bien\b/g, "estabien"],
   [/\bpor favor\b/g, "porfavor"],
@@ -308,7 +312,7 @@ const CONFIRM_PHRASES: [RegExp, string][] = [
 
 /** Palabras con las que puede empezar una confirmación. */
 const CONFIRM_OPENERS = new Set([
-  "si", "sip", "claro", "ok", "okay", "oki", "va", "vale", "dale", "perfecto",
+  "si", "sip", "claro", "claroquesi", "ok", "okay", "oki", "va", "vale", "dale", "perfecto",
   "confirmo", "confirmado", "correcto", "exacto", "adelante", "deacuerdo",
   "estabien", "porfavor", "asies", "hazlo", "hazla",
 ]);
@@ -379,11 +383,12 @@ function confirmationWords(text: string): { words: string[]; asks: boolean; hasD
 
 /**
  * Aperturas que, por sí solas, son un "sí" claro. "ok", "dale", "va",
- * "perfecto", "está bien", "gracias" o 👍 son acuses de recibo: confirman una
- * reserva, pero no bastan para cancelar ni mover una cita.
+ * "perfecto", "está bien", "gracias", "claro" o 👍 son acuses de recibo:
+ * confirman una reserva, pero no bastan para cancelar ni mover una cita.
+ * "claro que sí" sí cuenta: lleva el "sí" explícito.
  */
 const CLEAR_OPENERS = new Set([
-  "si", "sip", "claro", "confirmo", "confirmado", "correcto", "exacto", "asies",
+  "si", "sip", "claroquesi", "confirmo", "confirmado", "correcto", "exacto", "asies",
   "deacuerdo", "adelante", "hazlo", "hazla",
 ]);
 
@@ -391,7 +396,7 @@ const CLEAR_OPENERS = new Set([
  * ¿Confirma ESTA acción pendiente? Agendar acepta cualquier confirmación limpia
  * (incluido 👍: en WhatsApp es la forma habitual de aceptar una propuesta, y la
  * reserva no destruye nada). Cancelar y reprogramar exigen además empezar con
- * un "sí" claro ("sí", "confirmo", "sí, cancélala").
+ * un "sí" claro ("sí", "confirmo", "sí, cancélala"); "claro" a secas no basta.
  */
 export function confirmsAgendaAction(
   text: string,
