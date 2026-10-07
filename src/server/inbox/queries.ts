@@ -243,6 +243,20 @@ export async function updateConversation(
     )
     .returning();
 
+  if (patch.aiEnabled !== undefined && !patch.reactivate && updated[0]) {
+    // Pausar o reanudar la IA corta la conversación igual que un handoff: una
+    // pendiente de agenda creada antes ya no responde a lo que el cliente vea
+    // después (un operador pudo hablar con él mientras tanto).
+    await db
+      .delete(schema.pendingAgendaAction)
+      .where(
+        and(
+          eq(schema.pendingAgendaAction.organizationId, organizationId),
+          eq(schema.pendingAgendaAction.conversationId, conversationId)
+        )
+      );
+  }
+
   if (patch.reactivate && updated[0]) {
     // El estado conversacional transitorio también pertenece a la sesión
     // anterior. Si se conservara, un simple "sí" o "2:20" podría ejecutar una

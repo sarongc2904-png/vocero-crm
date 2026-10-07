@@ -170,14 +170,20 @@ async function readPendingAction(
  * - ligada al ÚLTIMO mensaje saliente de la conversación, sea del agente o de
  *   un operador (su id es el de la pregunta que la creó), sin ningún otro
  *   saliente posterior ni con el mismo instante;
- * - sin handoff activo ni reinicio de sesión desde que se creó;
+ * - el "sí" que se procesa (`inboundMessageId`) es un entrante de esta
+ *   conversación recibido DESPUÉS de la pregunta: uno guardado antes (p. ej.
+ *   mientras el turno que creaba la pregunta seguía en curso, o la respuesta a
+ *   un mensaje anterior de un operador) no la ejecuta;
+ * - IA encendida, sin handoff activo ni reinicio de sesión desde que se creó;
  * - cancelar y reprogramar guardan la cita exacta (`booking_id`).
  */
 export async function consumePendingAction(
   organizationId: string,
   conversationId: string,
+  inboundMessageId: string,
   now: Date = new Date()
 ): Promise<PendingAgendaAction | null> {
+  if (!inboundMessageId) return null;
   const db = getDb();
   const rows = await db
     .delete(schema.pendingAgendaAction)
@@ -187,12 +193,12 @@ export async function consumePendingAction(
         organizationId,
         eq(schema.pendingAgendaAction.conversationId, conversationId),
         gt(schema.pendingAgendaAction.expiresAt, now),
-        // La pregunta (cuyo id ES el id de la pendiente) existe y ningún otro
-        // saliente es posterior O SIMULTÁNEO: con dos mensajes en el mismo
+        // La pregunta (cuyo id ES el id de la pendiente) existe, ningún otro
+        // saliente es posterior O SIMULTÁNEO (con dos mensajes en el mismo
         // instante no se sabe cuál vio el cliente al final, y ante la duda no
-        // se ejecuta.
-        sql`exists (select 1 from ${schema.message} as q where q."id" = ${schema.pendingAgendaAction.id} and q."organization_id" = ${organizationId} and q."conversation_id" = ${conversationId} and q."direction" = 'out' and not exists (select 1 from ${schema.message} as o where o."organization_id" = ${organizationId} and o."conversation_id" = ${conversationId} and o."direction" = 'out' and o."id" <> q."id" and o."created_at" >= q."created_at"))`,
-        sql`exists (select 1 from ${schema.conversation} where ${schema.conversation.organizationId} = ${organizationId} and ${schema.conversation.id} = ${conversationId} and ${schema.conversation.handoffAt} is null and (${schema.conversation.aiContextResetAt} is null or ${schema.conversation.aiContextResetAt} < ${schema.pendingAgendaAction.createdAt}))`,
+        // se ejecuta) y el "sí" procesado llegó estrictamente DESPUÉS de ella.
+        sql`exists (select 1 from ${schema.message} as q where q."id" = ${schema.pendingAgendaAction.id} and q."organization_id" = ${organizationId} and q."conversation_id" = ${conversationId} and q."direction" = 'out' and not exists (select 1 from ${schema.message} as o where o."organization_id" = ${organizationId} and o."conversation_id" = ${conversationId} and o."direction" = 'out' and o."id" <> q."id" and o."created_at" >= q."created_at") and exists (select 1 from ${schema.message} as i where i."id" = ${inboundMessageId} and i."organization_id" = ${organizationId} and i."conversation_id" = ${conversationId} and i."direction" = 'in' and i."created_at" > q."created_at"))`,
+        sql`exists (select 1 from ${schema.conversation} where ${schema.conversation.organizationId} = ${organizationId} and ${schema.conversation.id} = ${conversationId} and ${schema.conversation.aiEnabled} = true and ${schema.conversation.handoffAt} is null and (${schema.conversation.aiContextResetAt} is null or ${schema.conversation.aiContextResetAt} < ${schema.pendingAgendaAction.createdAt}))`,
         sql`(${schema.pendingAgendaAction.action} = 'book' or ${schema.pendingAgendaAction.bookingId} is not null)`
       )
     )
