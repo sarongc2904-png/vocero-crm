@@ -83,6 +83,7 @@ import {
   consumePendingAction,
   getPendingAction,
   setPendingAction,
+  type PendingAgendaAction,
 } from "@/server/agenda/pending-actions";
 import {
   advanceOfferCursor,
@@ -493,10 +494,25 @@ async function runAgentTurnCore(
         }
         return;
       }
+    } else if (await askToMoveInstead(agendaAsk, pending, inboundText!)) {
+      // "sí, muévela" ante "¿agendo otra cita?": mover la que ya tiene.
+      return;
     }
     // "ok", "gracias" o 👍 ante una cancelación o reprogramación: la pendiente
     // ya se consumió sin ejecutarse y el turno sigue normal.
   } else if (confirmation) {
+    // "muévela" ante "¿agendo otra cita?": la pendiente de reserva se vuelve
+    // una pregunta de mover la cita que ya tiene.
+    const toMove = wantsToMoveInstead(inboundText!)
+      ? await getPendingAction(organizationId, conversationId)
+      : null;
+    if (
+      toMove &&
+      toMove.id === lastOutboundBeforeInbound?.id &&
+      (await askToMoveInstead(agendaAsk, toMove, inboundText!))
+    ) {
+      return;
+    }
     /**
      * "¿Cuál de tus citas?": si el agente acaba de listar las citas, la
      * respuesta ("la segunda", "la del lunes") elige una y se pide la
@@ -1514,11 +1530,26 @@ async function slotLabel(organizationId: string, startUtc: string): Promise<stri
   return selectedOfferConfirmationLabel(startUtc, timezone);
 }
 
-/** Propone una reserva: queda pendiente `book` con el servicio y el profesional elegidos. */
+/**
+ * Propone una reserva: queda pendiente `book` con el servicio y el profesional
+ * elegidos. Si el cliente ya tiene una cita activa, lo dice y pregunta por OTRA
+ * cita (la pregunta sigue siendo de sí o no); "muévela" la convierte en mover
+ * la que ya tiene (ver `askToMoveInstead`).
+ */
 async function askToBook(ctx: AgendaAsk, chosen: OfferedSlot, label: string): Promise<void> {
+  const active = await listActiveBookingsForConversation({
+    organizationId: ctx.conversation.organizationId,
+    conversationId: ctx.conversation.id,
+  });
+  const existing =
+    active.length === 1 ? `una cita: ${active[0]!.label}.` : `${active.length} citas activas.`;
+  const question =
+    active.length === 0
+      ? `Perfecto. Tengo ${label} disponible. ¿Quieres que agende tu cita?`
+      : `Ya tienes ${existing} Tengo ${label} disponible. ¿Quieres que agende otra cita en ese horario? Si prefieres mover la que tienes, responde «muévela».`;
   const held = await askAndHold(
     ctx,
-    `Perfecto. Tengo ${label} disponible. ¿Quieres que agende tu cita?`,
+    question,
     {
       action: "book",
       startUtc: chosen.startUtc,
@@ -1532,6 +1563,40 @@ async function askToBook(ctx: AgendaAsk, chosen: OfferedSlot, label: string): Pr
       payload: { startUtc: chosen.startUtc },
     });
   }
+}
+
+/** "muévela", "cámbiala", "sí, muévela": mover, sin nombrar otra hora. */
+function wantsToMoveInstead(text: string): boolean {
+  return matchesRescheduleIntent(text) && !/\d/.test(text);
+}
+
+/**
+ * Ante una reserva pendiente (la pregunta que avisa que ya tiene una cita),
+ * "muévela" pide mover la cita que ya tiene a ESA hora: se pregunta de nuevo,
+ * nombrando la hora vieja y la nueva. Devuelve false si no aplica.
+ */
+async function askToMoveInstead(
+  ctx: AgendaAsk,
+  pending: PendingAgendaAction,
+  text: string
+): Promise<boolean> {
+  if (pending.action !== "book" || !pending.startUtc || !wantsToMoveInstead(text)) return false;
+  const active = await listActiveBookingsForConversation({
+    organizationId: ctx.conversation.organizationId,
+    conversationId: ctx.conversation.id,
+  });
+  if (active.length === 0) return false;
+  await askToReschedule(
+    ctx,
+    {
+      startUtc: pending.startUtc,
+      serviceId: pending.serviceId,
+      professionalId: pending.professionalId,
+    },
+    active,
+    [text]
+  );
+  return true;
 }
 
 /**

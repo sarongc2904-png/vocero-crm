@@ -277,7 +277,10 @@ export function toneAwareFixedReply(
     .replace("ya no está disponible para mover tu cita.", "ya no está disponible para mover su cita.")
     .replace("No pude agendar tu cita automáticamente. Un asesor continuará contigo.", "No pude agendar su cita automáticamente. Un asesor continuará con usted.")
     .replace("No pude mover tu cita automáticamente. Un asesor continuará contigo.", "No pude mover su cita automáticamente. Un asesor continuará con usted.")
-    .replace("Si quieres, puedo mostrarte horarios", "Si quiere, puedo mostrarle horarios");
+    .replace("Si quieres, puedo mostrarte horarios", "Si quiere, puedo mostrarle horarios")
+    .replace("Ya tienes ", "Ya tiene ")
+    .replace("¿Quieres que agende otra cita", "¿Quiere que agende otra cita")
+    .replace("Si prefieres mover la que tienes, responde «muévela».", "Si prefiere mover la que tiene, responda «muévela».");
 }
 
 /**

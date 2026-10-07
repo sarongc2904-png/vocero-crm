@@ -149,10 +149,17 @@ const RESCHEDULE_ALWAYS = /\b(?:reprogram\w*|reagend\w*)\b/;
 const RESCHEDULE_PRONOUN = /\b(?:cambiala|cambialo|muevela|muevelo|recorrela|recorrelo|pasala|pasalo)\b/;
 const RESCHEDULE_VERB = /\b(?:cambi(?:ar|a|o|e|en|emos)|mover|muev(?:e|o|a|en)|recorr(?:er|e|o|a)|pasar)\b/;
 const APPOINTMENT_REF = /\b(?:cita|citas|reservacion|reserva|turno|hora|horario)\b/;
+/**
+ * "mejor a las 5", "mejor las 17:00": cambia una hora que ya eligió. Solo
+ * pesa si el cliente tiene una cita activa (lo decide quien llama: sin citas
+ * activas se agenda como siempre).
+ */
+const RESCHEDULE_BETTER_TIME = /^\s*mejor\s+(?:a\s+)?las?\s+\d{1,2}\b/;
 
 /** ¿El cliente quiere mover una cita que ya tiene? (no crear otra). */
 export function matchesRescheduleIntent(text: string): boolean {
   const norm = normalize(text);
   if (RESCHEDULE_ALWAYS.test(norm) || RESCHEDULE_PRONOUN.test(norm)) return true;
+  if (RESCHEDULE_BETTER_TIME.test(norm)) return true;
   return RESCHEDULE_VERB.test(norm) && APPOINTMENT_REF.test(norm);
 }

@@ -395,7 +395,10 @@ describe("las acciones de agenda del modelo NUNCA ejecutan", () => {
       serviceId: null,
       professionalId: null,
     });
-    expect(lastOut()).toContain("¿Quiere que agende su cita?");
+    // El fixture trae una cita activa (BOOKING): la pregunta avisa que ya
+    // tiene una y pregunta por OTRA (revisión ff3913d, A2).
+    expect(lastOut()).toContain("Ya tiene una cita:");
+    expect(lastOut()).toContain("¿Quiere que agende otra cita en ese horario?");
   });
 
   it.each(MODEL_TRIGGERS)("book_slot con servicio y '%s' → la pendiente lleva servicio y profesional", async (text) => {
@@ -628,7 +631,7 @@ describe("la pendiente se invalida con cualquier mensaje que no la confirme", ()
       expect(chatJson).toHaveBeenCalled();
       expect(store.pending).toBeNull();
       const answer = lastOut();
-      expect(answer).not.toMatch(/agende su cita|mueva su cita|cancelar su cita/);
+      expect(answer).not.toMatch(/agende su cita|agende otra cita|mueva su cita|cancelar su cita/);
 
       model({ action: "reply", text: "¿En qué más le ayudo?" });
       await turn([
