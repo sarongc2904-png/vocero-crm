@@ -143,18 +143,50 @@ describe("IA-1 — cancelación segura desde la conversación", () => {
   });
 
   it("'Cancela mi cita' NO cancela: abre confirmación pendiente sin consultar al LLM", async () => {
-    queueTurn("Cancela mi cita");
+    // Tras el turno: la conversación (contacto) y la cita activa que se nombra.
+    queueTurn("Cancela mi cita", [{ contactId: "ct_1" }], [
+      {
+        id: "bk_1",
+        scheduledAt: new Date(Date.now() + 3 * 86_400_000),
+        timezone: "America/Mexico_City",
+      },
+    ]);
 
     const { runAgentTurn } = await import("@/server/ai/pipeline");
     await runAgentTurn("cv_1", "org_1");
 
     expect(cancelBookingForConversation).not.toHaveBeenCalled();
     expect(chatJson).not.toHaveBeenCalled();
-    expect(outboundText()).toContain("Antes de cancelar necesito tu confirmación");
+    // El perfil no define tono: se trata de usted.
+    expect(outboundText()).toContain("Antes de cancelar necesito su confirmación");
     expect(inserts.some((row) => row.action === "cancel")).toBe(true);
     expect(updates).not.toContainEqual(
       expect.objectContaining({ handoffAt: expect.anything() })
     );
+  });
+
+  it("con un perfil que tutea, la pregunta pide 'tu confirmación'", async () => {
+    selectQueue.push(
+      [conversation],
+      [{ ...profile, tone: "Cercano e informal, tutea al cliente" }],
+      [{ id: "m_1", direction: "in", text: "Cancela mi cita", createdAt: new Date() }],
+      [{ contactId: "ct_1" }],
+      [
+        {
+          id: "bk_1",
+          scheduledAt: new Date(Date.now() + 3 * 86_400_000),
+          timezone: "America/Mexico_City",
+        },
+      ]
+    );
+
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_1", "org_1");
+
+    expect(cancelBookingForConversation).not.toHaveBeenCalled();
+    expect(outboundText()).toContain("Antes de cancelar necesito tu confirmación");
+    expect(outboundText()).toContain("¿confirmas que quieres cancelar tu cita");
+    expect(outboundText()).toContain("Responde «sí»");
   });
 
   it("'sí' con pending vigente cancela y confirma", async () => {
@@ -167,12 +199,15 @@ describe("IA-1 — cancelación segura desde la conversación", () => {
     const { runAgentTurn } = await import("@/server/ai/pipeline");
     await runAgentTurn("cv_1", "org_1");
 
+    // Se cancela ESA cita (la de la pendiente), no "la próxima".
     expect(cancelBookingForConversation).toHaveBeenCalledWith({
       organizationId: "org_1",
       conversationId: "cv_1",
+      bookingId: "bk_1",
     });
+    // El éxito sigue nombrando fecha y hora de la cita cancelada.
     expect(outboundText()).toBe(
-      "Listo, cancelé tu cita: domingo, 20 de septiembre a las 10:20."
+      "Listo, cancelé su cita: domingo, 20 de septiembre a las 10:20."
     );
     expect(chatJson).not.toHaveBeenCalled();
   });

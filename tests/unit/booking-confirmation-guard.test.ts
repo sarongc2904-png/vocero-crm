@@ -100,12 +100,25 @@ vi.mock("@/server/agenda/pending-actions", async (importOriginal) => {
       await tick();
       store.pending = null;
     },
-    // Atómico: comprobar y borrar ocurre sin ceder el control.
+    // Atómico: tomar y borrar ocurre sin ceder el control. Como el DELETE de la
+    // BD simulada no filtra, devuelve la fila TAL CUAL (aunque haya vencido) y
+    // decide la comprobación real del módulo (`executablePending`).
     consumePendingAction: async () => {
-      const row = live();
+      const row = store.pending;
       store.pending = null;
       await tick();
-      return row;
+      return original.executablePending(
+        row
+          ? {
+              ...row,
+              organizationId: "org_1",
+              conversationId: "cv_1",
+              startUtc: row.startUtc ? new Date(row.startUtc) : null,
+              createdAt: new Date(row.expiresAt.getTime() - original.PENDING_TTL_MS),
+            }
+          : undefined,
+        new Date()
+      );
     },
   };
 });
@@ -260,9 +273,22 @@ function catalog(withService = false): OfferedSlot[] {
 type Msg = { direction: "in" | "out"; text: string; createdAt: Date };
 
 /** El historial en orden cronológico; la BD lo entrega del más nuevo al más viejo. */
+/** La cita activa del cliente: cancelar y reprogramar se confirman sobre ella. */
+const BOOKING = {
+  id: "bk_1",
+  organizationId: "org_1",
+  contactId: "ct_1",
+  conversationId: "cv_1",
+  kind: "session",
+  status: "agendada",
+  scheduledAt: new Date(at("2026-10-08", "10:00")),
+  timezone: TZ,
+};
+
 function setHistory(history: Msg[]) {
   rowsByTable.conversation = [CONVERSATION];
   rowsByTable.agentProfile = [PROFILE];
+  rowsByTable.booking = [BOOKING];
   rowsByTable.message = history.map((m, i) => ({ id: `m${i}`, ...m })).reverse();
 }
 
@@ -291,7 +317,8 @@ function setPending(
   store.pending = {
     id: "paa_1",
     action,
-    bookingId: null,
+    // Cancelar y reprogramar guardan la cita exacta sobre la que se confirma.
+    bookingId: action === "book" ? null : BOOKING.id,
     startUtc: startTime ? at(TUE, startTime) : null,
     serviceId: null,
     professionalId: null,
@@ -516,6 +543,36 @@ describe("solo una confirmación explícita ejecuta la pendiente, una sola vez",
   });
 });
 
+describe("un mensaje sin texto y la elección entre varias citas", () => {
+  it("un audio, imagen o sticker (sin texto) descarta la pendiente", async () => {
+    for (const action of ["book", "reschedule", "cancel"] as const) {
+      setPending(action, action === "cancel" ? null : "16:00");
+      await turn([
+        { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+        { direction: "in", text: null as unknown as string, createdAt: NOW },
+      ]);
+      nothingExecuted();
+      expect(store.pending, action).toBeNull();
+    }
+  });
+
+  it("con dos citas activas y sin decir cuál, lista ambas y no deja nada ejecutable", async () => {
+    model({ action: "cancel_booking" });
+    setHistory([{ direction: "in", text: "ya no voy a poder ir", createdAt: NOW }]);
+    rowsByTable.booking = [
+      BOOKING,
+      { ...BOOKING, id: "bk_2", scheduledAt: new Date(at("2026-10-12", "18:00")) },
+    ];
+    outbound.length = 0;
+    const { runAgentTurn } = await import("@/server/ai/pipeline");
+    await runAgentTurn("cv_1", "org_1");
+    nothingExecuted();
+    expect(lastOut()).toContain("8 de octubre a las 10:00");
+    expect(lastOut()).toContain("12 de octubre a las 18:00");
+    expect(store.pending).toMatchObject({ action: "cancel", bookingId: null });
+  });
+});
+
 describe("la pendiente se invalida con cualquier mensaje que no la confirme", () => {
   it.each([
     ["cambio de tema", "¿tienen estacionamiento?"],
@@ -547,28 +604,31 @@ describe("la pendiente se invalida con cualquier mensaje que no la confirme", ()
     ).toHaveLength(0);
   });
 
-  it("ante la duda repite la pregunta UNA vez; la segunda duda invalida", async () => {
-    setPending("book", "16:00");
-    await turn([
-      { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
-      { direction: "in", text: "sí, ¿y cuánto cuesta?", createdAt: NOW },
-    ]);
-    nothingExecuted();
-    expect(chatJson).not.toHaveBeenCalled();
-    const reask = lastOut();
-    expect(reask).toContain("16:00");
-    expect(reask).toContain("¿Quiere que agende su cita?");
-    expect(store.pending?.startUtc).toBe(at(TUE, "16:00"));
+  it.each(["book", "reschedule", "cancel"] as const)(
+    "una duda con %s pendiente descarta la pendiente, el modelo responde y un 'sí' posterior NO ejecuta",
+    async (action) => {
+      setPending(action, action === "cancel" ? null : "16:00");
+      model({ action: "reply", text: "Respuesta del modelo a la pregunta." });
+      await turn([
+        { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+        { direction: "in", text: "sí, ¿y cuánto cuesta?", createdAt: NOW },
+      ]);
+      nothingExecuted();
+      expect(chatJson).toHaveBeenCalled();
+      expect(store.pending).toBeNull();
+      const answer = lastOut();
+      expect(answer).not.toMatch(/agende su cita|mueva su cita|cancelar su cita/);
 
-    await turn([
-      { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
-      { direction: "in", text: "sí, ¿y cuánto cuesta?", createdAt: new Date(NOW.getTime() - 5_000) },
-      { direction: "out", text: reask, createdAt: new Date(NOW.getTime() - 3_000) },
-      { direction: "in", text: "va a llover?", createdAt: NOW },
-    ]);
-    nothingExecuted();
-    expect(store.pending).toBeNull();
-  });
+      model({ action: "reply", text: "¿En qué más le ayudo?" });
+      await turn([
+        { direction: "out", text: PROPOSAL, createdAt: SHOWN_AT },
+        { direction: "in", text: "sí, ¿y cuánto cuesta?", createdAt: new Date(NOW.getTime() - 5_000) },
+        { direction: "out", text: answer, createdAt: new Date(NOW.getTime() - 3_000) },
+        { direction: "in", text: "sí", createdAt: NOW },
+      ]);
+      nothingExecuted();
+    }
+  );
 });
 
 /**
@@ -615,15 +675,23 @@ describe("barrido de acciones del modelo", () => {
   }, 120_000);
 
   it("con pendiente: solo las confirmaciones explícitas ejecutan", async () => {
-    const POSITIVE = ["sí", "si", "ok", "va", "dale", "claro", "perfecto", "de acuerdo", "está bien", "sí, gracias", "👍"];
+    // Cancelar y reprogramar exigen un "sí" claro; los acuses de recibo
+    // ("ok", "dale", 👍…) solo confirman una reserva.
+    const CLEAR = ["sí", "si", "claro", "de acuerdo", "sí, gracias", "confirmo", "sí, cancélala"];
+    const ACKNOWLEDGEMENTS = ["ok", "va", "dale", "perfecto", "está bien", "👍"];
+    const POSITIVE = [...CLEAR, ...ACKNOWLEDGEMENTS];
+    const expected = (action: "book" | "reschedule" | "cancel", text: string) =>
+      CLEAR.includes(text) || (action === "book" && ACKNOWLEDGEMENTS.includes(text)) ? 1 : 0;
     const NEGATIVE = [
       "claro que no", "ok no", "por favor no", "sí pero a las 5", "vale, pero mejor el jueves",
       "sí, ¿y cuánto cuesta?", "va a llover?", "no, sí a las 5", "no", "no gracias", "mejor no",
       "si me pudieras decir…",
     ];
-    const branches = { executed: 0, notExecuted: 0 };
+    const branches = { executed: 0, notExecuted: 0, acknowledgementOnly: 0 };
     for (const action of ["book", "reschedule", "cancel"] as const) {
       for (const text of [...POSITIVE, ...NEGATIVE]) {
+        // "sí, cancélala" responde a cancelar; ante una reserva no se fija aquí.
+        if (action === "book" && text === "sí, cancélala") continue;
         setPending(action, action === "cancel" ? null : "16:00");
         createSessionBooking.mockClear();
         rescheduleForConversation.mockClear();
@@ -638,17 +706,16 @@ describe("barrido de acciones del modelo", () => {
           rescheduleForConversation.mock.calls.length +
           cancelBookingForConversation.mock.calls.length;
         const label = `${action} '${text}'`;
-        if (POSITIVE.includes(text)) {
-          expect(executed, label).toBe(1);
-          branches.executed += 1;
-        } else {
-          expect(executed, label).toBe(0);
-          branches.notExecuted += 1;
-        }
+        expect(executed, label).toBe(expected(action, text));
+        if (executed) branches.executed += 1;
+        else branches.notExecuted += 1;
+        if (!executed && ACKNOWLEDGEMENTS.includes(text)) branches.acknowledgementOnly += 1;
       }
     }
     expect(branches.executed).toBeGreaterThan(0);
     expect(branches.notExecuted).toBeGreaterThan(0);
+    // Los acuses de recibo se probaron sin ejecutar en cancelar y reprogramar.
+    expect(branches.acknowledgementOnly).toBe(ACKNOWLEDGEMENTS.length * 2);
   }, 120_000);
 });
 
