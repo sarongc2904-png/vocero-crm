@@ -29,6 +29,12 @@ export const ORGANIZATION_PERMISSIONS = [
   "branding.manage",
   "settings.read",
   "settings.update",
+  // 0037 — cotizaciones. `manage` = borradores (crear, editar, duplicar);
+  // `publish` = lo que llega al cliente o lo retira (enlace, marcar enviada,
+  // cancelar). Separados para que el dueño decida quién compromete precios.
+  "quotes.read",
+  "quotes.manage",
+  "quotes.publish",
 ] as const;
 
 export type OrganizationPermission = (typeof ORGANIZATION_PERMISSIONS)[number];
@@ -60,6 +66,9 @@ const ADMIN_PERMISSIONS = new Set<OrganizationPermission>([
   "teams.manage",
   "settings.read",
   "settings.update",
+  "quotes.read",
+  "quotes.manage",
+  "quotes.publish",
 ]);
 
 const AGENT_PERMISSIONS = new Set<OrganizationPermission>([
@@ -77,6 +86,10 @@ const AGENT_PERMISSIONS = new Set<OrganizationPermission>([
   "appointments.cancel",
   "ai.use",
   "teams.read",
+  // Un agente arma y corrige borradores; publicarlos al cliente es del
+  // dueño o un admin (`quotes.publish`).
+  "quotes.read",
+  "quotes.manage",
 ]);
 
 const ROLE_PERMISSIONS: Record<OrganizationRole, ReadonlySet<OrganizationPermission>> = {

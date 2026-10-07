@@ -10,12 +10,11 @@ export const dynamic = "force-dynamic";
  * Enlace público de una cotización, desde el CRM (usuario con sesión).
  *
  * POST   → emite un enlace nuevo (revoca los anteriores) y devuelve el token
- *          UNA sola vez. Una cotización en `borrador` pasa a `enviada`.
+ *          UNA sola vez. No cambia el estado: en un borrador es vista previa.
  * DELETE → revoca los enlaces vivos; el cliente ve el mismo 404 que con un
  *          token inexistente.
  *
- * Compartir una cotización con el cliente es responderle, así que pide
- * `conversations.reply`. El bot NO tiene esta operación: solo crea borradores.
+ * Pide `quotes.publish`. El bot NO tiene esta operación: solo crea borradores.
  */
 
 const noStore = { "cache-control": "no-store" };
@@ -24,7 +23,7 @@ const guarded = (
   handler: (organizationId: string, quoteId: string) => Promise<Response>
 ) =>
   withOrgPermissions(
-    ["conversations.reply"],
+    ["quotes.publish"],
     async (session, _req: Request, ctx: { params: Promise<{ id: string }> }) => {
       const { id } = await ctx.params;
       try {
