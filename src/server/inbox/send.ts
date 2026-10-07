@@ -50,6 +50,11 @@ export class SendError extends Error {
     | "upload_failed";
   /** 008: presente cuando el fallo ocurrió TRAS persistir el mensaje (failed). */
   messageId?: string;
+  /**
+   * 0038 — Código numérico de Meta cuando lo hubo (131047, 131026…). Permite
+   * traducir el fallo sin mostrar el texto crudo de Meta.
+   */
+  metaCode?: number | null;
 
   constructor(code: SendError["code"], message: string) {
     super(message);
@@ -356,6 +361,13 @@ export async function sendMediaMessage(input: {
   organizationId: string;
   file: { data: Buffer; mimeType: string; fileName?: string };
   caption?: string;
+  /**
+   * 0038 — Lo que se GUARDA y se muestra en el hilo en lugar de `caption`.
+   * A Meta viaja `caption` completo; aquí va una versión enmascarada cuando
+   * el texto lleva algo que no debe quedar en la base (el enlace de una
+   * cotización). Sin él, se guarda `caption`, como siempre.
+   */
+  storedCaption?: string;
 }): Promise<SendResult> {
   // Validación previa (FR-007): tipo y tamaño antes de tocar disco o red.
   const kind = validateOutgoing(input.file.mimeType, input.file.data.byteLength);
@@ -386,7 +398,7 @@ export async function sendMediaMessage(input: {
       mimeType: input.file.mimeType,
       fileName: input.file.fileName ?? null,
       fileSize: input.file.data.byteLength,
-      caption: input.caption ?? null,
+      caption: input.storedCaption ?? input.caption ?? null,
       storagePath,
       fetchStatus: "available",
     })
@@ -559,7 +571,9 @@ export async function callGraphSend(
       if (err.status === 0 || err.status >= 500) {
         throw new SendError("meta_unavailable", "Meta no está disponible ahora");
       }
-      throw new SendError("meta_error", err.message);
+      const sendErr = new SendError("meta_error", err.message);
+      sendErr.metaCode = err.code;
+      throw sendErr;
     }
     throw err;
   }
