@@ -30,23 +30,38 @@ solo `DELETE … RETURNING` cuyo `WHERE` exige, todo a la vez:
    que reactivar tras un handoff.
 5. **Con su cita**: cancelar y reprogramar guardan el `booking_id` exacto. Al
    confirmar se actúa sobre ESA cita, y solo si sigue activa y es del mismo
-   contacto y negocio.
+   contacto y negocio. Si no (la cita es de otro contacto, ya se canceló), no
+   se toca nada y el cliente recibe "No encontré una cita activa para
+   cancelar/reprogramar.". Una pendiente con una cita de OTRO negocio ni
+   siquiera se puede guardar: la FK compuesta `(organization_id, booking_id)`
+   la rechaza. Si la cita se borra, la pendiente se borra con ella (cascada) y
+   el "sí" sigue el flujo normal (responde el modelo).
 
 Además, cualquier mensaje entrante que no sea una confirmación explícita la
 descarta: cambio de tema, otra hora, negativa, duda ("sí, ¿y cuánto
-cuesta?", que se responde normalmente) y mensajes sin texto (audio, imagen,
-sticker). Una pendiente nueva reemplaza a la anterior.
+cuesta?", que se responde normalmente), un emoji que no sea 👍 y mensajes sin
+texto (audio, imagen, sticker). Una pendiente nueva reemplaza a la anterior.
 
 ## Qué confirma
 
-- **Agendar**: cualquier confirmación limpia ("sí", "ok", "dale", "perfecto",
-  "está bien", 👍). El emoji 👍 cuenta como "ok": en WhatsApp es la forma
-  habitual de aceptar una propuesta y una reserva no destruye nada.
+- **Agendar**: cualquier confirmación limpia ("sí", "ok", "okey", "dale",
+  "va", "va que va", "listo", "perfecto", "está bien", 👍). El emoji 👍 cuenta
+  como "ok": en WhatsApp es la forma habitual de aceptar una propuesta y una
+  reserva no destruye nada.
 - **Cancelar y reprogramar**: solo un "sí" claro ("sí", "si", "confirmo",
-  "de acuerdo", "sí, gracias", "sí, cancélala", "claro que sí"). "claro" a
-  secas, "claro, gracias", "ok", "ok gracias", "gracias", "dale", "perfecto",
-  "está bien" y 👍 no bastan: descartan la pendiente. "claro que no" nunca
-  confirma.
+  "de acuerdo", "sí, gracias", "claro que sí"). "claro" a secas, "claro,
+  gracias", "ok", "okey", "ok gracias", "gracias", "dale", "va que va",
+  "listo", "perfecto", "está bien" y 👍 no bastan: descartan la pendiente.
+  "claro que no" nunca confirma.
+- **Un verbo nombra SU acción**: "sí cancela" y "sí, cancélala" solo confirman
+  cancelar; "sí, muévela" o "sí, cámbiala" solo reprogramar; "sí, agéndala" o
+  "sí, resérvala" solo agendar. Ante otra acción no ejecutan nada (la
+  pendiente se consume y el turno sigue normal). Antes "sí, cancélala"
+  también confirmaba agendar y mover.
+- **Emojis**: 👍 (con o sin tono de piel) es "ok". Cualquier otro emoji hace
+  el mensaje dudoso (`unclear`) aunque empiece con "sí": "sí ❌", "sí 🤔",
+  "sí 😡", "sí 👎", "👎👍", "ok 👎", "👍 ❌" e incluso "sí 😊" no confirman; la
+  pendiente se descarta y responde el modelo. "sí 👍" sí confirma.
 
 ## Si ejecutar falla
 
@@ -77,8 +92,30 @@ cambiar" = algún mensaje del cliente en la sesión posterior a la última acci�
 de agenda completada lo pide, o la última pregunta del agente era de mover la
 cita.
 
+La respuesta a "¿cuál de tus citas?" puede llevar un "sí" o un "ok" delante:
+"sí, la 2", "ok, la 2" o "sí, la segunda" eligen la cita 2 y se vuelve a
+preguntar nombrándola (no se ejecuta nada todavía). "sí" a secas no elige.
+
 "Cancela la del domingo" (sin la palabra "cita") también es una orden de
 cancelar: el artículo seguido de "del/de/que/próxima" señala una cita.
+
+## Agendar cuando ya hay una cita
+
+- **"mejor a las 5"** (también "mejor a las 5 de la tarde", "mejor las
+  17:00"), **"pásala a las 5"** y **"cámbiala a las 5"** son intención de
+  mover (`matchesRescheduleIntent`). Si el cliente tiene una cita activa, elegir
+  esa hora deja una pendiente `reschedule` sobre la cita existente ("Tu cita
+  actual: … ¿Confirmas que mueva tu cita a ese horario?"); al confirmar se
+  mueve, no se crea una segunda. Sin citas activas se agenda como siempre.
+- **"quiero a las 5"** (sin "mejor" ni "cambiar") con una cita activa sigue
+  siendo agendar, pero la pregunta avisa: "Ya tienes una cita: … Tengo … ¿Quieres
+  que agende otra cita en ese horario? Si prefieres mover la que tienes,
+  responde «muévela»." La pregunta sigue siendo de sí o no: "sí" agenda OTRA
+  cita. "muévela", "cámbiala" o "sí, muévela" convierten la pendiente en mover
+  la cita existente a esa hora y se vuelve a preguntar.
+- Un "mejor a las 5" dicho mientras el cliente aún elige hora y ya tiene OTRA
+  cita activa (de días antes) también se lee como mover esa cita. La pregunta
+  nombra la hora vieja y la nueva, así que el cliente puede decir que no.
 
 ## Pruebas
 
@@ -90,10 +127,18 @@ cancelar: el artículo seguido de "del/de/que/próxima" señala una cita.
   VOCERO_TEST_PG_URL=postgres://usuario@127.0.0.1:55432/base pnpm vitest run tests/unit/booking-confirmation-postgres.test.ts
   ```
 
-- El resto (`booking-confirmation-guard`, `booking-confirmation-strict`,
-  `pending-action-binding`, `pending-action-consume`, `pending-action-order`,
-  `cancel-intent`, `agent-cancellation-e2e`) corre en `pnpm test` sin base de
-  datos.
+- El resto corre en `pnpm test` sin base de datos:
+  `booking-confirmation-guard`, `booking-confirmation-strict`,
+  `booking-confirmation-detector`, `booking-confirmation-regex-perf`,
+  `booking-confirmation-review-ff3913d`, `booking-target-scope`,
+  `langgraph-shadow-confirmation`, `pending-action-binding`,
+  `pending-action-consume`, `pending-action-order`, `cancel-intent` y
+  `agent-cancellation-e2e`.
+- `booking-target-scope` fija, sin base de datos, cada filtro del WHERE que
+  busca la cita al cancelar o mover (negocio, conversación o contacto, id,
+  estado). Es la única que detecta quitar el filtro por negocio: en Postgres
+  real la FK compuesta de tenant ya impide que una cita de otro negocio apunte
+  a este contacto o a esta pendiente.
 
 ## Deuda técnica
 
@@ -102,6 +147,10 @@ cancelar: el artículo seguido de "del/de/que/próxima" señala una cita.
   `question_message_id` (y un `id` propio de fila) en una **migración futura,
   que requiere autorización**. Hoy nada más usa esa columna como id de fila:
   las filas se buscan siempre por conversación.
+- **`runAgentTurnCore` (`pipeline.ts`) es una sola función de más de 1200
+  líneas** con la confirmación, la elección de cita y el cambio de cita en
+  línea, y la detección de "se habla de cambiar" repetida en la selección
+  determinista y en `book_slot`. Partirla es un refactor aparte.
 
 ## Pendientes conocidos (no resueltos aquí)
 
@@ -119,6 +168,23 @@ cancelar: el artículo seguido de "del/de/que/próxima" señala una cita.
   mensajes, pero si alguien borra en la base la fila del saliente posterior a
   la pregunta, la pregunta vuelve a ser la última y un "sí" posterior la
   ejecutaría.
+- **La pendiente se guarda DESPUÉS de enviar la pregunta.** Su id es el del
+  mensaje enviado, así que primero se envía y luego se guarda. Si el "sí" del
+  cliente se procesa en ese intervalo, no encuentra pendiente y sigue el flujo
+  normal (responde el modelo; no se ejecuta nada). Es seguro, pero ese "sí" se
+  pierde.
+- **Modo sombra (`src/server/ai/graph/graph.ts`).** Su enrutador de pendientes
+  usa `isAffirmativeConfirmation` (sin distinguir la acción) y
+  `getPendingAction` (sin ligar la pendiente a su pregunta): en sombra "ok"
+  todavía "confirma" una cancelación. No ejecuta nada, pero sus decisiones
+  difieren del pipeline real y conviene alinearlo en un PR aparte.
+- **O3: un operador mueve o cancela la cita entre la pregunta y el "sí".** La
+  pendiente guarda la cita, no su hora: si un operador la mueve desde la
+  bandeja sin escribir en la conversación, un "sí" posterior cancela la cita
+  en su hora NUEVA (o la mueve desde ella), aunque la pregunta nombraba la
+  vieja. Si el operador escribe en la conversación, el "sí" ya no ejecuta.
+- **O4: dos citas a la misma hora con etiquetas idénticas.** La lista de "¿cuál
+  de tus citas?" las muestra iguales; el cliente solo puede elegir por número.
 - **Proceso que muere tras consumir.** Si el proceso se cae justo después de
   consumir la pendiente y antes de responder, el reintento del job trata el
   "sí" sin pendiente (respuesta normal del modelo). Los errores capturables ya
