@@ -240,6 +240,35 @@ describe.skipIf(!PG_URL)("cotizaciones: aislamiento por organization_id en Postg
     expect(await sql`select 1 from quote where id = ${quoteD}`).toHaveLength(1);
   });
 
+  it("quote_settings: una sola fila por negocio", async () => {
+    const c = await seedTenant();
+    await sql`insert into quote_settings (organization_id) values (${c.org})`;
+    await expectPgError(
+      () => sql`insert into quote_settings (organization_id, prices_include_tax) values (${c.org}, true)`,
+      UNIQUE_VIOLATION,
+      "quote_settings_pkey"
+    );
+    const rows = await sql`select 1 from quote_settings where organization_id = ${c.org}`;
+    expect(rows).toHaveLength(1);
+  });
+
+  it("quote_settings: defaults seguros (IVA 16 % sumado, 15 días) y tasa acotada", async () => {
+    const c = await seedTenant();
+    const [row] = await sql<{ prices_include_tax: boolean; tax_rate_bps: number; default_validity_days: number }[]>`
+      insert into quote_settings (organization_id) values (${c.org})
+      returning prices_include_tax, tax_rate_bps, default_validity_days`;
+    expect(row).toEqual({ prices_include_tax: false, tax_rate_bps: 1600, default_validity_days: 15 });
+    await expectPgError(
+      () => sql`update quote_settings set tax_rate_bps = 10001 where organization_id = ${c.org}`,
+      CHECK_VIOLATION,
+      "quote_settings_tax_rate_ck"
+    );
+    await expectPgError(
+      () => sql`update quote_settings set prices_include_tax = null where organization_id = ${c.org}`,
+      "23502"
+    );
+  });
+
   it("borrar un servicio deja la línea intacta con su precio copiado", async () => {
     const c = await seedTenant();
     const quoteC = await insertQuote({ org: c.org, contact: c.contact });
