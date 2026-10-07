@@ -30,7 +30,7 @@ vi.hoisted(() => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
   process.env.META_WEBHOOK_VERIFY_TOKEN ??= "pg-test-verify";
   process.env.META_GRAPH_BASE_URL = "http://graph.mock.test";
-  process.env.MEDIA_DIR = "./.tmp-test-media-quotes";
+  process.env.MEDIA_DIR = "./.tmp/test-media-quotes"; // .tmp/ está en .gitignore
 });
 
 const h = vi.hoisted(() => ({
