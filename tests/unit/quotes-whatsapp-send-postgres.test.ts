@@ -356,7 +356,7 @@ describe.skipIf(!PG_URL)("cotizaciones: envío por WhatsApp (Postgres real + Met
   it("ventana cerrada sin plantilla (o no aprobada, o con otras variables): bloquea con mensaje claro y 0 llamadas", async () => {
     const r = await routes();
     as(a);
-    const { d, s, orm } = await mods();
+    const { d, s } = await mods();
     const unapproved = `${a.template}u`;
     const twoVars = `${a.template}v`;
     await d.insert(s.template).values([
