@@ -191,7 +191,7 @@ export function QuoteDetail({ quote, can, editorOptions }: { quote: QuoteDetailD
           )}
           {can.publish && (quote.status === "borrador" || quote.status === "enviada") && (
             <Button variant="destructive" onClick={cancel} disabled={busy !== null}>
-              Cancelar
+              Cancelar cotización
             </Button>
           )}
         </div>
