@@ -93,7 +93,11 @@ function ordinalChoice(norm: string, count: number): number | null {
     }
   }
   // "1", "la 2", "la opción 2", "número 2": solo números sueltos, nunca horas.
-  const bare = norm.trim().match(/^(?:(?:la|el)\s+)?(?:(?:opcion|numero|cita)\s+)?(\d{1,2})[.)]?$/);
+  // Un "sí," delante ("sí, la 2") es la respuesta a "¿cuál?", no otra cosa.
+  const answer = norm
+    .trim()
+    .replace(/^(?:si+|sip|ok|okey|okay|claro|va|vale|dale)\b[\s,.!]*/, "");
+  const bare = answer.match(/^(?:(?:la|el)\s+)?(?:(?:opcion|numero|cita)\s+)?(\d{1,2})[.)]?$/);
   return bare ? Number(bare[1]) : null;
 }
 

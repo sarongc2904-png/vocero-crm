@@ -282,8 +282,9 @@ export function selectedOfferConfirmationLabel(
  * - `confirm`: confirmación explícita y sin condiciones ("sí", "dale",
  *   "de acuerdo", "sí, gracias", "👍"). Solo esto ejecuta la acción.
  * - `unclear`: empieza afirmando pero trae algo más que no es una condición de
- *   hora/día ("sí, ¿y cuánto cuesta?", "ok, pero rápido", "va a llover?").
- *   Ante la duda NO se confirma: se repite la pregunta una vez.
+ *   hora/día ("sí, ¿y cuánto cuesta?", "ok, pero rápido", "va a llover?") o
+ *   un emoji que no es 👍 ("sí ❌", "sí 🤔"). Ante la duda NO se confirma: la
+ *   pendiente se descarta y el turno sigue normal (responde el modelo).
  * - `other`: negativa ("claro que no", "ok no"), condicional ("si me
  *   pudieras…"), otra hora/día ("sí pero a las 5", "vale, pero mejor el
  *   jueves") o un tema distinto. La acción pendiente se descarta.
@@ -292,9 +293,11 @@ export type ConfirmationVerdict = "confirm" | "unclear" | "other";
 
 /**
  * 👍 (con o sin tono de piel) cuenta como "ok": en WhatsApp es la forma más
- * común de aceptar una propuesta. Cualquier otro emoji no confirma.
+ * común de aceptar una propuesta. Cualquier otro emoji hace el mensaje
+ * `unclear`: "sí ❌", "sí 🤔" o "👎👍" no confirman nada.
  */
 const THUMBS_UP = /\u{1F44D}[\u{1F3FB}-\u{1F3FF}]?/gu;
+const OTHER_EMOJI = /\p{Extended_Pictographic}/u;
 
 /**
  * Frases de varias palabras que se leen como una sola. "claro que sí" se
@@ -308,22 +311,38 @@ const CONFIRM_PHRASES: [RegExp, string][] = [
   [/\bpor favor\b/g, "porfavor"],
   [/\basi es\b/g, "asies"],
   [/\bmuchas gracias\b/g, "gracias"],
+  [/\bva que va\b/g, "vaqueva"],
 ];
 
 /** Palabras con las que puede empezar una confirmación. */
 const CONFIRM_OPENERS = new Set([
-  "si", "sip", "claro", "claroquesi", "ok", "okay", "oki", "va", "vale", "dale", "perfecto",
-  "confirmo", "confirmado", "correcto", "exacto", "adelante", "deacuerdo",
-  "estabien", "porfavor", "asies", "hazlo", "hazla",
+  "si", "sip", "claro", "claroquesi", "ok", "okay", "oki", "okey", "va", "vaqueva", "vale",
+  "dale", "perfecto", "listo", "confirmo", "confirmado", "correcto", "exacto", "adelante",
+  "deacuerdo", "estabien", "porfavor", "asies", "hazlo", "hazla",
 ]);
+
+/**
+ * Verbos que nombran UNA acción: "sí, cancélala" solo confirma cancelar,
+ * "sí, muévela" solo reprogramar y "sí, agéndala" solo agendar.
+ */
+const ACTION_VERBS: Record<"book" | "reschedule" | "cancel", Set<string>> = {
+  book: new Set([
+    "agendala", "agendalo", "agendame", "agendamela", "agendamelo", "agendar", "agendarla",
+    "reservala", "reservalo", "reservame", "reservamela", "reservamelo", "reservar", "reservarla",
+  ]),
+  reschedule: new Set([
+    "muevela", "muevelo", "cambiala", "cambialo", "pasala", "pasalo", "moverla", "cambiarla",
+  ]),
+  cancel: new Set(["cancela", "cancelala", "cancelalo", "cancelar", "cancelarla", "cancelarlo"]),
+};
 
 /** Lo que puede acompañar a la confirmación sin cambiarla. */
 const CONFIRM_COMPANIONS = new Set([
   ...CONFIRM_OPENERS,
-  "gracias", "porfa", "listo", "genial", "excelente", "quiero",
-  "agendala", "agendalo", "agendame", "agendamela", "agendamelo",
-  "reservala", "reservalo", "reservame", "reservamela", "reservamelo",
-  "cancelala", "cancelalo", "muevela", "muevelo", "cambiala", "cambialo",
+  "gracias", "porfa", "genial", "excelente", "quiero",
+  ...ACTION_VERBS.book,
+  ...ACTION_VERBS.reschedule,
+  ...ACTION_VERBS.cancel,
 ]);
 
 const NEGATIONS = new Set(["no", "ni", "nunca", "tampoco", "jamas", "nel", "nop", "nope"]);
@@ -353,14 +372,14 @@ const MAX_CONFIRMATION_WORDS = 6;
  * confirma: lo que no sea una confirmación limpia es `unclear` u `other`.
  */
 export function classifyConfirmation(text: string): ConfirmationVerdict {
-  const { words, asks, hasDigits } = confirmationWords(text);
+  const { words, asks, hasDigits, emoji } = confirmationWords(text);
   const first = words[0];
   const opens = first !== undefined && (CONFIRM_OPENERS.has(first) || /^si+p?$/.test(first));
   if (!opens) return "other";
   if (words.some((word) => NEGATIONS.has(word))) return "other";
   if (first.startsWith("si") && words[1] && CONDITIONAL_AFTER_SI.has(words[1])) return "other";
   if (hasDigits || words.some((word) => TIME_OR_DAY.has(word))) return "other";
-  if (asks || words.some((word) => DOUBT_WORDS.has(word))) return "unclear";
+  if (emoji || asks || words.some((word) => DOUBT_WORDS.has(word))) return "unclear";
   if (words.length > MAX_CONFIRMATION_WORDS) return "unclear";
   const rest = words.slice(1);
   return rest.every((word) => CONFIRM_COMPANIONS.has(word) || /^si+p?$/.test(word))
@@ -369,8 +388,14 @@ export function classifyConfirmation(text: string): ConfirmationVerdict {
 }
 
 /** Palabras normalizadas de la respuesta, con las frases fijas ya unidas. */
-function confirmationWords(text: string): { words: string[]; asks: boolean; hasDigits: boolean } {
+function confirmationWords(text: string): {
+  words: string[];
+  asks: boolean;
+  hasDigits: boolean;
+  emoji: boolean;
+} {
   let norm = normalize(text).replace(THUMBS_UP, " ok ");
+  const emoji = OTHER_EMOJI.test(norm);
   const asks = /[?¿]/.test(norm);
   const hasDigits = /\d/.test(norm);
   norm = norm
@@ -378,14 +403,14 @@ function confirmationWords(text: string): { words: string[]; asks: boolean; hasD
     .replace(/\s+/g, " ")
     .trim();
   for (const [phrase, token] of CONFIRM_PHRASES) norm = norm.replace(phrase, token);
-  return { words: norm ? norm.split(" ") : [], asks, hasDigits };
+  return { words: norm ? norm.split(" ") : [], asks, hasDigits, emoji };
 }
 
 /**
- * Aperturas que, por sí solas, son un "sí" claro. "ok", "dale", "va",
- * "perfecto", "está bien", "gracias", "claro" o 👍 son acuses de recibo:
- * confirman una reserva, pero no bastan para cancelar ni mover una cita.
- * "claro que sí" sí cuenta: lleva el "sí" explícito.
+ * Aperturas que, por sí solas, son un "sí" claro. "ok", "okey", "dale", "va",
+ * "va que va", "listo", "perfecto", "está bien", "gracias", "claro" o 👍 son
+ * acuses de recibo: confirman una reserva, pero no bastan para cancelar ni
+ * mover una cita. "claro que sí" sí cuenta: lleva el "sí" explícito.
  */
 const CLEAR_OPENERS = new Set([
   "si", "sip", "claroquesi", "confirmo", "confirmado", "correcto", "exacto", "asies",
@@ -397,14 +422,21 @@ const CLEAR_OPENERS = new Set([
  * (incluido 👍: en WhatsApp es la forma habitual de aceptar una propuesta, y la
  * reserva no destruye nada). Cancelar y reprogramar exigen además empezar con
  * un "sí" claro ("sí", "confirmo", "sí, cancélala"); "claro" a secas no basta.
+ * Un verbo de OTRA acción no confirma: "sí, cancélala" ante "¿agendo tu
+ * cita?" o "sí cancela" ante "¿muevo tu cita?" no ejecutan nada.
  */
 export function confirmsAgendaAction(
   text: string,
   action: "book" | "reschedule" | "cancel"
 ): boolean {
   if (classifyConfirmation(text) !== "confirm") return false;
+  const { words } = confirmationWords(text);
+  const otherVerbs = (Object.keys(ACTION_VERBS) as (keyof typeof ACTION_VERBS)[])
+    .filter((kind) => kind !== action)
+    .map((kind) => ACTION_VERBS[kind]);
+  if (words.some((word) => otherVerbs.some((verbs) => verbs.has(word)))) return false;
   if (action === "book") return true;
-  const first = confirmationWords(text).words[0] ?? "";
+  const first = words[0] ?? "";
   return CLEAR_OPENERS.has(first) || /^si+p?$/.test(first);
 }
 

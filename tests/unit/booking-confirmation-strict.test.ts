@@ -13,10 +13,23 @@ import {
  */
 describe("confirmsAgendaAction", () => {
   const CLEAR = [
-    "sí", "Si", "SÍ", "Sí.", "sí!!", "sip", "siii", "sí, cancélala", "si, cancelala", "sí, muévela",
+    "sí", "Si", "SÍ", "Sí.", "sí!!", "sip", "siii",
     "confirmo", "confirmado", "sí, gracias", "si gracias", "claro que sí", "claro que si", "sí, por favor",
     "correcto", "así es", "de acuerdo", "sí 👍", "Sí, adelante",
   ];
+  // Revisión ff3913d: un verbo nombra SU acción. Antes "sí, cancélala" y
+  // "sí, muévela" confirmaban las tres acciones (también agendar).
+  const ONLY = [
+    ["sí, cancélala", "cancel"],
+    ["si, cancelala", "cancel"],
+    ["sí, muévela", "reschedule"],
+  ] as const;
+
+  it.each(ONLY)("'%s' confirma solo %s", (text, only) => {
+    for (const action of ["book", "reschedule", "cancel"] as const) {
+      expect(confirmsAgendaAction(text, action), action).toBe(action === only);
+    }
+  });
   const ACKNOWLEDGEMENTS = [
     "ok", "OK", "Ok.", "okay", "ok gracias", "ok, gracias", "gracias", "muchas gracias", "👍", "👍🏽",
     "dale", "va", "vale", "perfecto", "está bien", "listo", "genial", "por favor",

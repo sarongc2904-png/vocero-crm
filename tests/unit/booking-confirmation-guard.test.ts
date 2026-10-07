@@ -694,8 +694,15 @@ describe("barrido de acciones del modelo", () => {
     ];
     const ACKNOWLEDGEMENTS = ["ok", "va", "dale", "perfecto", "está bien", "👍", "claro", "claro, gracias"];
     const POSITIVE = [...CLEAR, ...ACKNOWLEDGEMENTS];
+    // Revisión ff3913d: "sí, cancélala" solo confirma cancelar (antes también
+    // movía una cita; ante una reserva no se fijaba).
+    const onlyCancel = (text: string) => text === "sí, cancélala";
     const expected = (action: "book" | "reschedule" | "cancel", text: string) =>
-      CLEAR.includes(text) || (action === "book" && ACKNOWLEDGEMENTS.includes(text)) ? 1 : 0;
+      onlyCancel(text) && action !== "cancel"
+        ? 0
+        : CLEAR.includes(text) || (action === "book" && ACKNOWLEDGEMENTS.includes(text))
+          ? 1
+          : 0;
     const NEGATIVE = [
       "claro que no", "claro, que no", "claro que no la canceles", "claro, entiendo",
       "ok no", "por favor no", "sí pero a las 5", "vale, pero mejor el jueves",
@@ -704,12 +711,10 @@ describe("barrido de acciones del modelo", () => {
     ];
     const branches = { executed: 0, notExecuted: 0, acknowledgementOnly: 0 };
     // No puede pasar en vacío: cada confirmación clara tiene que haberse
-    // ejecutado en las tres acciones (salvo "sí, cancélala" ante una reserva).
+    // ejecutado en las tres acciones (salvo "sí, cancélala", que solo cancela).
     const executedClear = new Set<string>();
     for (const action of ["book", "reschedule", "cancel"] as const) {
       for (const text of [...POSITIVE, ...NEGATIVE]) {
-        // "sí, cancélala" responde a cancelar; ante una reserva no se fija aquí.
-        if (action === "book" && text === "sí, cancélala") continue;
         setPending(action, action === "cancel" ? null : "16:00");
         createSessionBooking.mockClear();
         rescheduleForConversation.mockClear();
@@ -737,7 +742,7 @@ describe("barrido de acciones del modelo", () => {
     expect(branches.acknowledgementOnly).toBe(ACKNOWLEDGEMENTS.length * 2);
     for (const action of ["book", "reschedule", "cancel"] as const) {
       for (const text of CLEAR) {
-        if (action === "book" && text === "sí, cancélala") continue;
+        if (action !== "cancel" && onlyCancel(text)) continue;
         expect(executedClear.has(`${action} ${text}`), `${action} '${text}' debió ejecutarse`).toBe(true);
       }
     }
