@@ -43,6 +43,7 @@ function runWorkerJson(mode) {
 const PG_VITEST_SUITES = [
   { file: "tests/unit/quotes-tenant-isolation-postgres.test.ts", minTests: 13 },
   { file: "tests/unit/quotes-bot-api-postgres.test.ts", minTests: 13 },
+  { file: "tests/unit/quotes-public-postgres.test.ts", minTests: 11 },
 ];
 
 async function runPgVitestSuites() {
