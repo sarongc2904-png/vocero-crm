@@ -1822,7 +1822,12 @@ export const quote = pgTable(
     createdBy: text("created_by").references(() => user.id, {
       onDelete: "set null",
     }),
+    /** Envío: fecha, medio y operador van juntos (quote_sent_ck). */
     sentAt: timestamp("sent_at"),
+    sentVia: text("sent_via", { enum: ["enlace", "whatsapp"] }),
+    sentBy: text("sent_by").references(() => user.id, { onDelete: "set null" }),
+    /** Cotización corregida con "Duplicar" de la que salió esta. */
+    duplicatedFromId: text("duplicated_from_id"),
     respondedAt: timestamp("responded_at"),
     responseNote: text("response_note"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -1852,6 +1857,19 @@ export const quote = pgTable(
       "quote_total_ck",
       sql`${t.totalCents} = case when ${t.pricesIncludeTax} then ${t.subtotalCents} else ${t.subtotalCents} + ${t.taxCents} end`
     ),
+    check(
+      "quote_sent_via_ck",
+      sql`${t.sentVia} is null or ${t.sentVia} in ('enlace', 'whatsapp')`
+    ),
+    check(
+      "quote_sent_ck",
+      sql`(${t.sentAt} is null) = (${t.sentVia} is null) and (${t.status} not in ('enviada', 'aceptada', 'rechazada') or ${t.sentAt} is not null)`
+    ),
+    check(
+      "quote_not_self_duplicate_ck",
+      sql`${t.duplicatedFromId} is null or ${t.duplicatedFromId} <> ${t.id}`
+    ),
+    // quote_duplicated_from_id_tenant_fk (SET NULL de una columna) vive en 0037.
   ]
 );
 

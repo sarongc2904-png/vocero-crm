@@ -55,7 +55,14 @@ CREATE TABLE IF NOT EXISTS "quote" (
   "source" text NOT NULL DEFAULT 'manual',
   "is_test" boolean NOT NULL DEFAULT false,
   "created_by" text REFERENCES "user"("id") ON DELETE SET NULL,
+  -- Envío: cuándo, por qué medio y quién lo hizo. 'enlace' = el operador
+  -- marcó que compartió el enlace por su cuenta; 'whatsapp' = Meta aceptó el
+  -- mensaje. Se llenan juntos o no se llenan (quote_sent_ck).
   "sent_at" timestamp,
+  "sent_via" text,
+  "sent_by" text REFERENCES "user"("id") ON DELETE SET NULL,
+  -- Cotización de la que salió por "Duplicar" (corregir una ya enviada).
+  "duplicated_from_id" text,
   "responded_at" timestamp,
   "response_note" text,
   "created_at" timestamp NOT NULL DEFAULT now(),
@@ -69,7 +76,15 @@ CREATE TABLE IF NOT EXISTS "quote" (
   -- IVA va desglosado dentro); sin IVA incluido, el IVA se suma encima.
   CONSTRAINT "quote_total_ck" CHECK (
     "total_cents" = CASE WHEN "prices_include_tax" THEN "subtotal_cents" ELSE "subtotal_cents" + "tax_cents" END
-  )
+  ),
+  CONSTRAINT "quote_sent_via_ck" CHECK ("sent_via" IS NULL OR "sent_via" IN ('enlace', 'whatsapp')),
+  -- Fecha y medio de envío van juntos; y una cotización que llegó al cliente
+  -- (enviada o ya respondida) siempre sabe cuándo y cómo se envió.
+  CONSTRAINT "quote_sent_ck" CHECK (
+    ("sent_at" IS NULL) = ("sent_via" IS NULL)
+    AND ("status" NOT IN ('enviada', 'aceptada', 'rechazada') OR "sent_at" IS NOT NULL)
+  ),
+  CONSTRAINT "quote_not_self_duplicate_ck" CHECK ("duplicated_from_id" IS NULL OR "duplicated_from_id" <> "id")
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS "quote_organization_id_id_uq" ON "quote" ("organization_id", "id");
@@ -84,6 +99,8 @@ ALTER TABLE "quote" ADD CONSTRAINT "quote_conversation_id_tenant_fk"
   FOREIGN KEY ("organization_id", "conversation_id") REFERENCES "conversation"("organization_id", "id") ON DELETE SET NULL ("conversation_id");
 ALTER TABLE "quote" ADD CONSTRAINT "quote_lead_id_tenant_fk"
   FOREIGN KEY ("organization_id", "lead_id") REFERENCES "lead"("organization_id", "id") ON DELETE SET NULL ("lead_id");
+ALTER TABLE "quote" ADD CONSTRAINT "quote_duplicated_from_id_tenant_fk"
+  FOREIGN KEY ("organization_id", "duplicated_from_id") REFERENCES "quote"("organization_id", "id") ON DELETE SET NULL ("duplicated_from_id");
 
 CREATE TABLE IF NOT EXISTS "quote_item" (
   "id" text PRIMARY KEY NOT NULL,

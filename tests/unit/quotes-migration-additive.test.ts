@@ -60,11 +60,19 @@ describe("0037_quotes.sql", () => {
 
   it("toda relación entre tablas de dominio es una FK compuesta con organization_id", () => {
     const fks = [...sql.matchAll(/FOREIGN KEY \(([^)]*)\) REFERENCES "(\w+)"\(([^)]*)\)/g)];
-    expect(fks.length).toBe(6);
+    expect(fks.length).toBe(7);
     for (const [, cols, , refCols] of fks) {
       expect(cols!.split(",")[0]!.trim()).toBe('"organization_id"');
       expect(refCols!.split(",")[0]!.trim()).toBe('"organization_id"');
     }
+  });
+
+  it("quote registra envío (fecha, medio, operador) amarrado al estado", () => {
+    const body = sql.match(/CREATE TABLE IF NOT EXISTS "quote" \(([\s\S]*?)\n\);/)?.[1] ?? "";
+    expect(body).toMatch(/"sent_at" timestamp,/);
+    expect(body).toMatch(/"sent_via" text,/);
+    expect(body).toMatch(/"sent_by" text REFERENCES "user"\("id"\) ON DELETE SET NULL/);
+    expect(body).toMatch(/CONSTRAINT "quote_sent_ck"/);
   });
 
   it("está registrada en el journal justo después de 0036", () => {
