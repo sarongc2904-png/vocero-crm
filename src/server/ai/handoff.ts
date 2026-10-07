@@ -274,6 +274,9 @@ export function toneAwareFixedReply(
     .replace("No pude cancelar tu cita automáticamente. Un asesor continuará contigo.", "No pude cancelar su cita automáticamente. Un asesor continuará con usted.")
     .replace("¡Listo! Reprogramé tu cita para", "¡Listo! Reprogramé su cita para")
     .replace("ya no sirve para mover tu cita.", "ya no sirve para mover su cita.")
+    .replace("ya no está disponible para mover tu cita.", "ya no está disponible para mover su cita.")
+    .replace("No pude agendar tu cita automáticamente. Un asesor continuará contigo.", "No pude agendar su cita automáticamente. Un asesor continuará con usted.")
+    .replace("No pude mover tu cita automáticamente. Un asesor continuará contigo.", "No pude mover su cita automáticamente. Un asesor continuará con usted.")
     .replace("Si quieres, puedo mostrarte horarios", "Si quiere, puedo mostrarle horarios");
 }
 

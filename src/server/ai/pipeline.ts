@@ -375,9 +375,14 @@ async function runAgentTurnCore(
    * RETURNING), que en la misma sentencia exige que siga vigente, que esté
    * ligada al ÚLTIMO mensaje saliente (la pregunta que la creó: si después
    * escribió un operador o el agente habló de otra cosa, el "sí" ya no
-   * contesta a esa pregunta), que no haya habido handoff ni reinicio de sesión
-   * y que cancelar o reprogramar traiga su cita exacta. Dos "sí" concurrentes
-   * no la ejecutan dos veces.
+   * contesta a esa pregunta), que ESTE "sí" haya llegado después de la
+   * pregunta, que la IA siga encendida sin handoff ni reinicio de sesión y que
+   * cancelar o reprogramar traiga su cita exacta. Dos "sí" concurrentes no la
+   * ejecutan dos veces.
+   *
+   * Si ejecutar falla, el cliente recibe siempre una respuesta determinista
+   * (y, ante un error inesperado, handoff); el error nunca vuelve al job, cuyo
+   * reintento haría improvisar al modelo sobre un "sí" ya consumido.
    *
    * Cualquier otro mensaje la descarta (cambio de tema, otra hora, negativa,
    * duda, un audio, una imagen, un sticker) y sigue su flujo normal: si el
@@ -390,7 +395,7 @@ async function runAgentTurnCore(
   const confirmation =
     agendaEnabled() && inboundText ? classifyConfirmation(inboundText) : null;
   if (confirmation === "confirm") {
-    const pending = await consumePendingAction(organizationId, conversationId);
+    const pending = await consumePendingAction(organizationId, conversationId, lastInbound.id);
     if (!pending) {
       // No hay pendiente, venció o ya no responde a la última pregunta: se
       // descarta y el "sí" sigue el flujo normal sin habilitar nada.
@@ -402,33 +407,42 @@ async function runAgentTurnCore(
       }
 
       if (pending.action === "book" && pending.startUtc) {
-        const turn = await bookSlot({
-          organizationId,
-          conversationId,
-          startUtc: pending.startUtc,
-          serviceId: pending.serviceId ?? undefined,
-          professionalId: pending.professionalId ?? undefined,
-        });
-        await recordAgentAction({
-          action: "book_slot",
-          success: turn.ok,
-          status: turn.ok ? "completed" : "rejected",
-          payload: { startUtc: pending.startUtc },
-        });
-        await deliverReply(
-          conversation,
-          toneAwareFixedReply(turn.text, profile.tone)
-        );
-        if (turn.ok) {
-          publish(organizationId, {
-            type: "conversation.updated",
-            data: { conversation: { id: conversationId } },
+        let executed = false;
+        try {
+          const turn = await bookSlot({
+            organizationId,
+            conversationId,
+            startUtc: pending.startUtc,
+            serviceId: pending.serviceId ?? undefined,
+            professionalId: pending.professionalId ?? undefined,
           });
+          executed = turn.ok;
+          await recordAgentAction({
+            action: "book_slot",
+            success: turn.ok,
+            status: turn.ok ? "completed" : "rejected",
+            payload: { startUtc: pending.startUtc },
+          });
+          await deliverAgendaReply(
+            conversation,
+            toneAwareFixedReply(turn.text, profile.tone)
+          );
+          if (turn.ok) {
+            publish(organizationId, {
+              type: "conversation.updated",
+              data: { conversation: { id: conversationId } },
+            });
+          }
+        } catch (err) {
+          // Error inesperado (BD, proveedor…): `bookSlot` ya responde los
+          // errores de agenda conocidos (horario ocupado o ya no ofrecido).
+          await failPendingAction(conversation, "book", err, profile.tone, executed);
         }
         return;
       }
 
       if (pending.action === "reschedule" && pending.startUtc && pending.bookingId) {
+        let executed = false;
         try {
           const moved = await rescheduleForConversation({
             organizationId,
@@ -436,13 +450,14 @@ async function runAgentTurnCore(
             startUtc: pending.startUtc,
             bookingId: pending.bookingId,
           });
+          executed = true;
           await recordAgentAction({
             action: "reschedule_slot",
             entityType: "booking",
             entityId: pending.bookingId,
             payload: { startUtc: pending.startUtc },
           });
-          await deliverReply(
+          await deliverAgendaReply(
             conversation,
             toneAwareFixedReply(
               moved.meetingLink
@@ -452,19 +467,20 @@ async function runAgentTurnCore(
             )
           );
         } catch (err) {
-          if (err instanceof BookingError && err.code === "slot_not_offered") {
-            const turn = await offerSlots({
-              organizationId,
-              conversationId,
-              intro: "Ese horario ya no sirve para mover tu cita. Elige otro:",
-            });
-            await recordOfferedSlots(organizationId, conversationId, turn);
-            await deliverReply(
-              conversation,
-              toneAwareFixedReply(turn.text, profile.tone)
-            );
-          } else if (err instanceof BookingError && err.code === "not_found") {
-            await deliverReply(
+          if (
+            !executed &&
+            err instanceof BookingError &&
+            (err.code === "slot_not_offered" || err.code === "slot_taken")
+          ) {
+            // El horario ya no sirve o se acaba de ocupar: se ofrecen
+            // alternativas y, al elegir otra, se vuelve a preguntar.
+            await reofferReschedule(conversation, err.code, profile.tone);
+          } else if (
+            !executed &&
+            err instanceof BookingError &&
+            (err.code === "not_found" || err.code === "invalid")
+          ) {
+            await deliverAgendaReply(
               conversation,
               toneAwareFixedReply(
                 "No encontré una cita activa para reprogramar.",
@@ -472,7 +488,7 @@ async function runAgentTurnCore(
               )
             );
           } else {
-            throw err;
+            await failPendingAction(conversation, "reschedule", err, profile.tone, executed);
           }
         }
         return;
@@ -559,6 +575,33 @@ async function runAgentTurnCore(
     )
     .slice(-2)
     .map((message) => message.text!);
+
+  /**
+   * R1 — ¿El cliente está CAMBIANDO una cita que ya tiene? Lo dice algún
+   * mensaje suyo de esta sesión posterior a la última acción de agenda
+   * completada, o la última pregunta del agente (una oferta "para cambiar tu
+   * cita" o "¿confirmas que mueva tu cita…?"). Entonces elegir una hora es
+   * reprogramar esa cita, no agendar otra, venga la hora de la selección
+   * determinista o del `book_slot` del modelo.
+   */
+  const lastCompletedAgendaIndex = history.findLastIndex(
+    (message) =>
+      message.direction === "out" &&
+      /^(?:¡Listo! (?:Te agendé|Reprogramé)|Listo, cancelé)/.test(message.text ?? "")
+  );
+  const rescheduleIntentTexts = [
+    ...history
+      .slice(lastCompletedAgendaIndex + 1)
+      .filter((message) => message.direction === "in")
+      .map((message) => message.text),
+    lastOutboundBeforeInbound?.text,
+  ];
+  const reschedulingTexts = [inboundText, ...[...previousInboundTexts].reverse()];
+  const activeBookingsIfRescheduling = async () =>
+    rescheduleIntentTexts.some((text) => Boolean(text && matchesRescheduleIntent(text)))
+      ? await listActiveBookingsForConversation({ organizationId, conversationId })
+      : [];
+
   const purchaseIntentRetrievalHint = lastInbound.text &&
     /\b(?:quiero|quisiera|necesito)\s+(?:avanzar|contratar|comprar|empezar|iniciar)(?:\s+(?:hoy|ya|ahora))?\b/i.test(
       lastInbound.text.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -880,13 +923,7 @@ async function runAgentTurnCore(
            * reprogramar, no agendar otra: la pendiente es `reschedule` sobre
            * la cita existente y al confirmar se mueve (no se crea una segunda).
            */
-          const reschedulingTexts = [lastInbound.text, ...[...previousInboundTexts].reverse()];
-          const rescheduling = [...reschedulingTexts, lastOutboundBeforeInbound?.text].some(
-            (text) => Boolean(text && matchesRescheduleIntent(text))
-          );
-          const active = rescheduling
-            ? await listActiveBookingsForConversation({ organizationId, conversationId })
-            : [];
+          const active = await activeBookingsIfRescheduling();
           if (active.length > 0) {
             await askToReschedule(agendaAsk, chosen, active, reschedulingTexts);
             return;
@@ -1198,6 +1235,13 @@ async function runAgentTurnCore(
           }
           const chosen = picked.offer;
           if (chosen && isBook) {
+            // R1 — también aquí: un `book_slot` en medio de un cambio de cita
+            // deja una pendiente `reschedule` sobre la cita existente.
+            const moving = await activeBookingsIfRescheduling();
+            if (moving.length > 0) {
+              await askToReschedule(agendaAsk, chosen, moving, reschedulingTexts);
+              return;
+            }
             await askToBook(agendaAsk, chosen, chosen.label);
             return;
           }
@@ -1217,10 +1261,7 @@ async function runAgentTurnCore(
               );
               return;
             }
-            await askToReschedule(agendaAsk, chosen, active, [
-              inboundText,
-              ...[...previousInboundTexts].reverse(),
-            ]);
+            await askToReschedule(agendaAsk, chosen, active, reschedulingTexts);
             return;
           }
           await recordAgentAction({
@@ -1685,62 +1726,155 @@ async function handleCancellation(
   bookingId: string,
   tone: string | null
 ): Promise<void> {
+  let executed = false;
   try {
     const cancelled = await cancelBookingForConversation({
       organizationId: conversation.organizationId,
       conversationId: conversation.id,
       bookingId,
     });
+    executed = true;
     await recordAgentAction({
       action: "cancel_booking",
       entityType: "booking",
       entityId: cancelled.bookingId,
     });
-    await deliverReply(
+    await deliverAgendaReply(
       conversation,
       toneAwareFixedReply(`Listo, cancelé tu cita: ${cancelled.label}.`, tone)
     );
   } catch (err) {
-    if (err instanceof BookingError && err.code === "not_found") {
-      await recordAgentAction({
-        action: "cancel_booking",
-        success: false,
-        status: "rejected",
-        entityType: "booking",
-        entityId: bookingId,
-        payload: { reason: err.code },
-      });
-      await deliverReply(
+    if (!executed && err instanceof BookingError && err.code === "not_found") {
+      await bestEffort("registro de cancelación rechazada", () =>
+        recordAgentAction({
+          action: "cancel_booking",
+          success: false,
+          status: "rejected",
+          entityType: "booking",
+          entityId: bookingId,
+          payload: { reason: err.code },
+        })
+      );
+      await deliverAgendaReply(
         conversation,
         toneAwareFixedReply("No encontré una cita activa para cancelar.", tone)
       );
       return;
     }
-    await recordAgentAction({
-      action: "cancel_booking",
+    await failPendingAction(conversation, "cancel", err, tone, executed, bookingId);
+  }
+}
+
+/** Texto determinista cuando ejecutar una pendiente falla de forma inesperada. */
+const PENDING_FAILURE_REPLY: Record<"book" | "reschedule" | "cancel", string> = {
+  book: "No pude agendar tu cita automáticamente. Un asesor continuará contigo.",
+  reschedule: "No pude mover tu cita automáticamente. Un asesor continuará contigo.",
+  cancel: "No pude cancelar tu cita automáticamente. Un asesor continuará contigo.",
+};
+
+const PENDING_ACTION_NAME = {
+  book: "book_slot",
+  reschedule: "reschedule_slot",
+  cancel: "cancel_booking",
+} as const;
+
+/**
+ * Un error inesperado al ejecutar una pendiente ya consumida: se registra, se
+ * pasa la conversación a un asesor y se le avisa al cliente con un texto fijo.
+ * Si la acción SÍ se ejecutó y lo que falló fue después (registrar o enviar la
+ * confirmación), no se dice que falló: queda el handoff para que un asesor
+ * confirme. Nunca relanza: el reintento del job haría improvisar al modelo.
+ */
+async function failPendingAction(
+  conversation: Conversation,
+  action: "book" | "reschedule" | "cancel",
+  err: unknown,
+  tone: string | null,
+  executed: boolean,
+  bookingId?: string
+): Promise<void> {
+  console.error(
+    `[agente] ejecutar la acción de agenda ${action} falló${executed ? " después de ejecutarla" : ""}: ${String(err).slice(0, 500)}`
+  );
+  await bestEffort("registro del fallo de agenda", () =>
+    recordAgentAction({
+      action: PENDING_ACTION_NAME[action],
       success: false,
       status: "failed",
-      entityType: "booking",
-      entityId: bookingId,
-      payload: { error: String(err) },
+      ...(bookingId ? { entityType: "booking", entityId: bookingId } : {}),
+      payload: { error: String(err), executed },
+    })
+  );
+  const claimed = await bestEffort("handoff tras fallo de agenda", () =>
+    applyHandoff(conversation.id, conversation.organizationId, "error")
+  );
+  if (claimed && !executed) {
+    await deliverAgendaReply(
+      conversation,
+      toneAwareFixedReply(PENDING_FAILURE_REPLY[action], tone)
+    );
+  }
+}
+
+/**
+ * B-2 — Mover una cita a un horario que ya no sirve (`slot_not_offered`) o que
+ * se acaba de ocupar (`slot_taken`): se ofrecen alternativas; al elegir otra,
+ * la selección vuelve a preguntar antes de mover.
+ */
+async function reofferReschedule(
+  conversation: Conversation,
+  code: "slot_not_offered" | "slot_taken",
+  tone: string | null
+): Promise<void> {
+  const { organizationId, id: conversationId } = conversation;
+  try {
+    await recordAgentAction({
+      action: "reschedule_slot",
+      success: false,
+      status: "rejected",
+      payload: { reason: code },
     });
-    console.error(
-      `[agente] la cancelación automática falló: ${String(err).slice(0, 500)}`
+    const turn = await offerSlots({
+      organizationId,
+      conversationId,
+      intro:
+        code === "slot_taken"
+          ? "Ese horario ya no está disponible para mover tu cita. Elige otro:"
+          : "Ese horario ya no sirve para mover tu cita. Elige otro:",
+    });
+    await recordOfferedSlots(organizationId, conversationId, turn);
+    await deliverAgendaReply(conversation, toneAwareFixedReply(turn.text, tone));
+  } catch (err) {
+    await failPendingAction(conversation, "reschedule", err, tone, false);
+  }
+}
+
+/**
+ * Envía una respuesta de agenda sin dejar que un fallo del envío vuelva al
+ * job: si no se pudo enviar, la conversación pasa a un asesor.
+ */
+async function deliverAgendaReply(
+  conversation: Conversation,
+  text: string
+): Promise<string | null> {
+  try {
+    return await deliverReply(conversation, text);
+  } catch (err) {
+    console.error(`[agente] no se pudo enviar la respuesta de agenda: ${String(err).slice(0, 500)}`);
+    await bestEffort("handoff tras fallo de envío", () =>
+      applyHandoff(conversation.id, conversation.organizationId, "error")
     );
-    const claimed = await applyHandoff(
-      conversation.id,
-      conversation.organizationId,
-      "error"
-    );
-    if (claimed) {
-      await deliverReply(
-        conversation,
-        toneAwareFixedReply(
-          "No pude cancelar tu cita automáticamente. Un asesor continuará contigo.",
-          tone
-        )
-      );
-    }
+    return null;
+  }
+}
+
+/** Ejecuta un paso secundario (registro, handoff) sin relanzar su error. */
+async function bestEffort<T>(what: string, fn: () => Promise<T>): Promise<T | null> {
+  try {
+    return await fn();
+  } catch (err) {
+    console.error(`[agente] ${what} falló: ${String(err).slice(0, 300)}`);
+    return null;
   }
 }
 
