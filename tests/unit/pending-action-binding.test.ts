@@ -94,7 +94,7 @@ describe("consumePendingAction: todas las condiciones en la sentencia que borra"
     const { consumePendingAction } = await import("@/server/agenda/pending-actions");
     h.rows = [ROW];
     const now = new Date("2026-10-06T21:45:00.000Z");
-    await consumePendingAction("org_a", "cv_1", now);
+    await consumePendingAction("org_a", "cv_1", "msg_in", now);
 
     const query = new PgDialect().sqlToQuery(h.where[0] as SQL);
     const sql = query.sql.replace(/\s+/g, " ");
@@ -120,7 +120,7 @@ describe("consumePendingAction: todas las condiciones en la sentencia que borra"
     const { consumePendingAction } = await import("@/server/agenda/pending-actions");
     h.rows = [{ ...ROW, bookingId: null }];
     await expect(
-      consumePendingAction("org_a", "cv_1", new Date("2026-10-06T21:45:00.000Z"))
+      consumePendingAction("org_a", "cv_1", "msg_in", new Date("2026-10-06T21:45:00.000Z"))
     ).resolves.toBeNull();
   });
 });

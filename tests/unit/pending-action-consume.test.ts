@@ -63,7 +63,7 @@ describe("consumePendingAction", () => {
     h.rows = [ROW];
     const now = new Date("2026-10-06T21:45:00.000Z");
 
-    const pending = await consumePendingAction("org_a", "cv_1", now);
+    const pending = await consumePendingAction("org_a", "cv_1", "msg_in", now);
 
     expect(pending).toMatchObject({
       action: "book",
@@ -87,8 +87,8 @@ describe("consumePendingAction", () => {
     const now = new Date("2026-10-06T21:45:00.000Z");
 
     const results = await Promise.all([
-      consumePendingAction("org_a", "cv_1", now),
-      consumePendingAction("org_a", "cv_1", now),
+      consumePendingAction("org_a", "cv_1", "msg_in", now),
+      consumePendingAction("org_a", "cv_1", "msg_in", now),
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
@@ -98,12 +98,12 @@ describe("consumePendingAction", () => {
     const { consumePendingAction } = await import("@/server/agenda/pending-actions");
     h.rows = [ROW];
     await expect(
-      consumePendingAction("org_a", "cv_1", new Date("2026-10-06T22:00:00.000Z"))
+      consumePendingAction("org_a", "cv_1", "msg_in", new Date("2026-10-06T22:00:00.000Z"))
     ).resolves.toBeNull();
   });
 
   it("sin fila vigente devuelve null", async () => {
     const { consumePendingAction } = await import("@/server/agenda/pending-actions");
-    await expect(consumePendingAction("org_a", "cv_1")).resolves.toBeNull();
+    await expect(consumePendingAction("org_a", "cv_1", "msg_in")).resolves.toBeNull();
   });
 });

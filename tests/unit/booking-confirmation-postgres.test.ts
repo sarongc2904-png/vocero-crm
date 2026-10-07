@@ -639,6 +639,8 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
       const older = (await lastOutbound(ctx)).id;
       await addMessage(ctx, "out", "¿Confirmas? (pregunta nueva)");
       const newest = (await lastOutbound(ctx)).id;
+      const yes = `msg_pgyes${ctx.conv}`;
+      await addMessage(ctx, "in", "sí", { id: yes });
 
       await actions.setPendingAction({
         organizationId: ctx.org,
@@ -647,7 +649,7 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
         bookingId,
         questionMessageId: older,
       });
-      expect(await actions.consumePendingAction(ctx.org, ctx.conv)).toBeNull();
+      expect(await actions.consumePendingAction(ctx.org, ctx.conv, yes)).toBeNull();
 
       await actions.setPendingAction({
         organizationId: ctx.org,
@@ -656,7 +658,7 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
         bookingId,
         questionMessageId: newest,
       });
-      expect((await actions.consumePendingAction(ctx.org, ctx.conv))?.bookingId).toBe(bookingId);
+      expect((await actions.consumePendingAction(ctx.org, ctx.conv, yes))?.bookingId).toBe(bookingId);
     });
 
     it("el id de la pendiente es el del mensaje de la pregunta que vio el cliente", async () => {
@@ -677,6 +679,8 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
       const question = `msg_mmmm${ctx.conv}`;
       await addMessage(ctx, "out", "¿Confirmas que quieres cancelar tu cita?", { id: question, createdAt: at });
       await addMessage(ctx, "out", "Mensaje del operador", { id: `${prefix}${ctx.conv}`, createdAt: at });
+      const yes = `msg_pgyes${ctx.conv}`;
+      await addMessage(ctx, "in", "sí", { id: yes, createdAt: new Date(at.getTime() + 5) });
       await actions.setPendingAction({
         organizationId: ctx.org,
         conversationId: ctx.conv,
@@ -684,7 +688,7 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
         bookingId,
         questionMessageId: question,
       });
-      expect(await actions.consumePendingAction(ctx.org, ctx.conv)).toBeNull();
+      expect(await actions.consumePendingAction(ctx.org, ctx.conv, yes)).toBeNull();
     });
 
     it("control: el otro saliente un milisegundo ANTES → la pregunta es la última y es ejecutable", async () => {
@@ -695,6 +699,8 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
       const question = `msg_mmmm${ctx.conv}`;
       await addMessage(ctx, "out", "Mensaje del operador", { id: `msg_zzzz${ctx.conv}`, createdAt: new Date(at.getTime() - 1) });
       await addMessage(ctx, "out", "¿Confirmas que quieres cancelar tu cita?", { id: question, createdAt: at });
+      const yes = `msg_pgyes${ctx.conv}`;
+      await addMessage(ctx, "in", "sí", { id: yes, createdAt: new Date(at.getTime() + 5) });
       await actions.setPendingAction({
         organizationId: ctx.org,
         conversationId: ctx.conv,
@@ -702,7 +708,7 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
         bookingId,
         questionMessageId: question,
       });
-      expect((await actions.consumePendingAction(ctx.org, ctx.conv))?.bookingId).toBe(bookingId);
+      expect((await actions.consumePendingAction(ctx.org, ctx.conv, yes))?.bookingId).toBe(bookingId);
     });
 
     it("flujo completo: un operador escribe en el mismo instante que la pregunta → el 'sí' no cancela", async () => {
@@ -750,8 +756,10 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
           bookingId,
           questionMessageId: await lastOut(),
         });
+        const yes = `msg_pgyes${round}${ctx.conv}`;
+        await addMessage(ctx, "in", "sí", { id: yes });
         const got = await Promise.all(
-          Array.from({ length: 20 }, () => actions.consumePendingAction(ctx.org, ctx.conv))
+          Array.from({ length: 20 }, () => actions.consumePendingAction(ctx.org, ctx.conv, yes))
         );
         expect(got.filter(Boolean)).toHaveLength(1);
       }
@@ -765,7 +773,8 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
         questionMessageId: await lastOut(),
       });
       await addMessage(ctx, "out", "Mensaje de un operador");
-      expect(await actions.consumePendingAction(ctx.org, ctx.conv)).toBeNull();
+      await addMessage(ctx, "in", "sí", { id: `msg_pgyesop${ctx.conv}` });
+      expect(await actions.consumePendingAction(ctx.org, ctx.conv, `msg_pgyesop${ctx.conv}`)).toBeNull();
 
       await addMessage(ctx, "out", "¿Confirmas?");
       await actions.setPendingAction({
@@ -775,7 +784,307 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
         questionMessageId: await lastOut(),
       });
       // Cancelar sin bookingId nunca es ejecutable.
-      expect(await actions.consumePendingAction(ctx.org, ctx.conv)).toBeNull();
+      await addMessage(ctx, "in", "sí", { id: `msg_pgyesnb${ctx.conv}` });
+      expect(await actions.consumePendingAction(ctx.org, ctx.conv, `msg_pgyesnb${ctx.conv}`)).toBeNull();
+    });
+  });
+  /**
+   * Correcciones de la revisión independiente sobre f765ecd (Postgres real).
+   */
+  describe("revisión f765ecd: orden del 'sí', fallos, cambio de cita y pausa", { timeout: 30_000 }, () => {
+    const raw = async () => (await import("@/lib/db")).getSql();
+
+    async function lastOutRow(ctx: Ctx) {
+      const sql = await raw();
+      const rows = await sql<{ id: string }[]>`
+        select id from message where conversation_id = ${ctx.conv} and direction = 'out'
+        order by created_at desc, id desc limit 1`;
+      return rows[0]!.id;
+    }
+
+    async function conversationRow(ctx: Ctx) {
+      const sql = await raw();
+      const rows = await sql<{ handoff_reason: string | null; ai_enabled: boolean }[]>`
+        select handoff_reason, ai_enabled from conversation where id = ${ctx.conv}`;
+      return rows[0]!;
+    }
+
+    /** Corre un turno sobre los mensajes ya guardados (como el job de la cola). */
+    async function runTurn(ctx: Ctx, model?: Record<string, unknown>) {
+      h.modelData = model ?? { action: "reply", text: "Respuesta del modelo." };
+      h.modelCalls = 0;
+      const before = (await outbound(ctx)).length;
+      const { runAgentTurn } = await import("@/server/ai/pipeline");
+      await runAgentTurn(ctx.conv, ctx.org);
+      await pause();
+      return (await outbound(ctx)).slice(before);
+    }
+
+    describe("B-1: un 'sí' solo contesta a la pregunta si llegó DESPUÉS de ella", () => {
+      it("un 'sí' guardado ANTES de la pregunta (aunque sea el último entrante) no cancela", async () => {
+        const ctx = await seed();
+        await addBooking(ctx, slotAt(3, "10:00"));
+        await cancelQuestion(ctx);
+        const question = await lastOutRow(ctx);
+        const sql = await raw();
+        await sql`
+          insert into message (id, organization_id, conversation_id, direction, type, text, status, created_at)
+          select ${`msg_pgearly${ctx.conv}`}, organization_id, conversation_id, 'in', 'text', 'sí', 'delivered',
+                 created_at - interval '1 microsecond'
+          from message where id = ${question}`;
+        // El 'sí' es el entrante más reciente (no hay otro), pero es anterior a la pregunta.
+        await runTurn(ctx);
+        expect((await bookings(ctx))[0]!.status).toBe("agendada");
+        expect(await pending(ctx)).toBeNull();
+      });
+
+      it("un 'sí' con el MISMO instante que la pregunta no cancela", async () => {
+        const ctx = await seed();
+        await addBooking(ctx, slotAt(3, "10:00"));
+        await cancelQuestion(ctx);
+        const question = await lastOutRow(ctx);
+        const sql = await raw();
+        await sql`
+          insert into message (id, organization_id, conversation_id, direction, type, text, status, created_at)
+          select ${`msg_pgtie${ctx.conv}`}, organization_id, conversation_id, 'in', 'text', 'sí', 'delivered', created_at
+          from message where id = ${question}`;
+        await runTurn(ctx);
+        expect((await bookings(ctx))[0]!.status).toBe("agendada");
+      });
+
+      it("flujo de la revisión con el turno RETENIDO: el 'sí' al operador, guardado antes de la pregunta, no cancela; un 'sí' después, sí", async () => {
+        const ctx = await seed();
+        await addBooking(ctx, slotAt(3, "10:00"));
+        await addMessage(ctx, "out", "Hola, soy Laura. ¿Te mando la ubicación del local?", { origin: "operator" });
+        await addMessage(ctx, "in", "cancela mi cita");
+
+        // Otra transacción retiene la tabla booking: el turno que crea la
+        // pregunta queda en curso mientras llega el "sí" del cliente.
+        const sql = await raw();
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        let locked!: () => void;
+        const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+        const lockTx = sql.begin(async (tx) => {
+          await tx`lock table booking in access exclusive mode`;
+          locked();
+          await gate;
+        });
+        await lockTaken;
+        const { runAgentTurn } = await import("@/server/ai/pipeline");
+        const job1 = runAgentTurn(ctx.conv, ctx.org);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        await addMessage(ctx, "in", "sí"); // contesta al operador
+        release();
+        await lockTx;
+        await job1;
+
+        const order = await sql<{ direction: string; text: string }[]>`
+          select direction, text from message where conversation_id = ${ctx.conv} order by created_at`;
+        expect(order.map((m) => `${m.direction}:${m.text.slice(0, 18)}`)).toEqual([
+          "out:Hola, soy Laura. ¿",
+          "in:cancela mi cita",
+          "in:sí",
+          "out:Antes de cancelar ",
+        ]);
+        expect((await pending(ctx))?.action).toBe("cancel");
+
+        // El job reprogramado procesa ese "sí": no cancela.
+        await runTurn(ctx);
+        expect((await bookings(ctx))[0]!.status).toBe("agendada");
+
+        // Vida: la pregunta se repite y un "sí" posterior sí cancela.
+        await cancelQuestion(ctx);
+        await turn(ctx, "sí");
+        expect((await bookings(ctx))[0]!.status).toBe("cancelada");
+      });
+
+      it("SQL directo: el entrante debe ser de la conversación, entrante y posterior a la pregunta", async () => {
+        const ctx = await seed();
+        const other = await seed();
+        const bookingId = await addBooking(ctx, slotAt(3, "10:00"));
+        const actions = await import("@/server/agenda/pending-actions");
+        await addMessage(ctx, "in", "sí (antes)", { id: `msg_pgbefore${ctx.conv}` });
+        await addMessage(ctx, "out", "¿Confirmas?");
+        const question = await lastOutRow(ctx);
+        await addMessage(ctx, "in", "sí (después)", { id: `msg_pgafter${ctx.conv}` });
+        await addMessage(other, "in", "sí (otra conversación)", { id: `msg_pgother${other.conv}` });
+        const set = () =>
+          actions.setPendingAction({
+            organizationId: ctx.org,
+            conversationId: ctx.conv,
+            action: "cancel",
+            bookingId,
+            questionMessageId: question,
+          });
+        await set();
+        expect(await actions.consumePendingAction(ctx.org, ctx.conv, `msg_pgbefore${ctx.conv}`)).toBeNull();
+        expect(await actions.consumePendingAction(ctx.org, ctx.conv, `msg_pgother${other.conv}`)).toBeNull();
+        expect(await actions.consumePendingAction(ctx.org, ctx.conv, question)).toBeNull(); // un saliente no es un "sí"
+        expect((await actions.consumePendingAction(ctx.org, ctx.conv, `msg_pgafter${ctx.conv}`))?.bookingId).toBe(bookingId);
+      });
+    });
+
+    describe("B-2: reprogramar con slot_taken ofrece alternativas y vuelve a preguntar", () => {
+      it("el horario se ocupa antes del 'sí' → alternativas; elegir otra → pregunta → 'sí' mueve la MISMA cita", async () => {
+        const ctx = await seed();
+        const id = await addBooking(ctx, slotAt(3, "10:00"));
+        await showOffer(
+          ctx,
+          [
+            { startUtc: slotAt(4, "11:00"), label: "11:00" },
+            { startUtc: slotAt(4, "12:00"), label: "12:00" },
+          ],
+          "quiero cambiar mi cita"
+        );
+        await turn(ctx, "11:00");
+        expect((await pending(ctx))?.action).toBe("reschedule");
+        h.available = [{ startUtc: slotAt(4, "12:00"), label: "12:00" }]; // las 11:00 se ocuparon
+
+        const replies = await turn(ctx, "sí");
+        expect(replies.at(-1)).toContain("Ese horario ya no está disponible para mover tu cita. Elige otro:");
+        expect(replies.at(-1)).toContain("12:00");
+        expect((await bookings(ctx))[0]!.at.toISOString()).toBe(slotAt(3, "10:00"));
+        expect((await conversationRow(ctx)).handoff_reason).toBeNull();
+
+        const question = await turn(ctx, "12:00");
+        expect(question.at(-1)).toMatch(/Tu cita actual: .*10:00.*12:00.*¿Confirmas que mueva tu cita/s);
+        await turn(ctx, "sí");
+        const after = await bookings(ctx);
+        expect(after).toHaveLength(1);
+        expect(after[0]!.id).toBe(id);
+        expect(after[0]!.at.toISOString()).toBe(slotAt(4, "12:00"));
+      });
+    });
+
+    describe("B-3: en medio de un cambio de cita, book_slot del modelo mueve, no crea otra", () => {
+      it("'quiero cambiar mi cita' → oferta → 'quiero las 11' [book_slot] → pregunta de mover → 'sí'", async () => {
+        const ctx = await seed();
+        const id = await addBooking(ctx, slotAt(3, "10:00"));
+        await showOffer(ctx, [{ startUtc: slotAt(4, "11:00"), label: "11:00" }], "quiero cambiar mi cita");
+        const question = await turn(ctx, "quiero las 11", { action: "book_slot", startUtc: slotAt(4, "11:00") });
+        expect(question.at(-1)).toMatch(/Tu cita actual: .*¿Confirmas que mueva tu cita a ese horario\?/);
+        const p = await pending(ctx);
+        expect(p?.action).toBe("reschedule");
+        expect(p?.bookingId).toBe(id);
+
+        await turn(ctx, "sí");
+        const after = await bookings(ctx);
+        expect(after).toHaveLength(1);
+        expect(after[0]!.id).toBe(id);
+        expect(after[0]!.at.toISOString()).toBe(slotAt(4, "11:00"));
+      });
+    });
+
+    describe("F2 / F4: un error de BD al ejecutar responde y hace handoff, sin relanzar", () => {
+      beforeAll(async () => {
+        const sql = await raw();
+        await sql.unsafe(`
+          create table if not exists test_booking_failure (conversation_id text not null, op text not null);
+          create or replace function test_booking_failure_fn() returns trigger language plpgsql as $f$
+          begin
+            if exists (select 1 from test_booking_failure f where f.conversation_id = NEW.conversation_id and f.op = TG_OP) then
+              raise exception 'fallo de BD simulado en % de booking', TG_OP;
+            end if;
+            return NEW;
+          end $f$;
+          drop trigger if exists test_booking_failure_trg on booking;
+          create trigger test_booking_failure_trg before insert or update on booking
+            for each row execute function test_booking_failure_fn();
+        `);
+      });
+
+      afterAll(async () => {
+        const sql = await raw();
+        await sql.unsafe(`
+          drop trigger if exists test_booking_failure_trg on booking;
+          drop function if exists test_booking_failure_fn();
+          drop table if exists test_booking_failure;
+        `);
+      });
+
+      async function failOn(ctx: Ctx, op: "INSERT" | "UPDATE") {
+        const sql = await raw();
+        await sql`insert into test_booking_failure values (${ctx.conv}, ${op})`;
+      }
+
+      it("F2: mover falla en la BD → mensaje determinista + handoff; el reintento no hace improvisar al modelo", async () => {
+        const ctx = await seed();
+        await addBooking(ctx, slotAt(3, "10:00"));
+        await showOffer(ctx, [{ startUtc: slotAt(4, "11:00"), label: "11:00" }], "quiero cambiar mi cita");
+        await turn(ctx, "11:00");
+        await failOn(ctx, "UPDATE");
+
+        const replies = await turn(ctx, "sí", { action: "reply", text: "¡Listo!" });
+        expect(replies).toEqual(["No pude mover tu cita automáticamente. Un asesor continuará contigo."]);
+        expect((await conversationRow(ctx)).handoff_reason).toBe("error");
+        expect((await bookings(ctx))[0]!.at.toISOString()).toBe(slotAt(3, "10:00"));
+
+        // Si el job se repitiera: con el handoff la IA no responde nada más.
+        const retry = await runTurn(ctx, { action: "reply", text: "¡Listo!" });
+        expect(retry).toEqual([]);
+        expect(h.modelCalls).toBe(0);
+      });
+
+      it("F4: agendar falla en la BD (tono usted) → mensaje determinista + handoff, sin cita", async () => {
+        const ctx = await seed("usted");
+        const slots = [{ startUtc: slotAt(2, "16:00"), label: "16:00" }];
+        await showOffer(ctx, slots);
+        await turn(ctx, "a las 4");
+        expect((await pending(ctx))?.action).toBe("book");
+        await failOn(ctx, "INSERT");
+
+        const replies = await turn(ctx, "sí", { action: "reply", text: "¡Listo!" });
+        expect(replies).toEqual(["No pude agendar su cita automáticamente. Un asesor continuará con usted."]);
+        expect((await conversationRow(ctx)).handoff_reason).toBe("error");
+        expect(await bookings(ctx)).toHaveLength(0);
+        expect(await runTurn(ctx, { action: "reply", text: "¡Listo!" })).toEqual([]);
+      });
+    });
+
+    describe("pausar y reanudar la IA invalida la pendiente", () => {
+      it("pausa y reanuda sin escribir → el 'sí' no cancela", async () => {
+        const ctx = await seed();
+        await addBooking(ctx, slotAt(3, "10:00"));
+        await cancelQuestion(ctx);
+        const { updateConversation } = await import("@/server/inbox/queries");
+        await updateConversation(ctx.org, ctx.conv, { aiEnabled: false });
+        await updateConversation(ctx.org, ctx.conv, { aiEnabled: true });
+        expect(await pending(ctx)).toBeNull();
+        await turn(ctx, "sí");
+        expect((await bookings(ctx))[0]!.status).toBe("agendada");
+      });
+
+      it("un 'sí' mientras la IA está en pausa no hace nada, y tras reanudar otro 'sí' tampoco", async () => {
+        const ctx = await seed();
+        await addBooking(ctx, slotAt(3, "10:00"));
+        await cancelQuestion(ctx);
+        const { updateConversation } = await import("@/server/inbox/queries");
+        await updateConversation(ctx.org, ctx.conv, { aiEnabled: false });
+        expect(await turn(ctx, "sí")).toEqual([]);
+        await updateConversation(ctx.org, ctx.conv, { aiEnabled: true });
+        await turn(ctx, "sí");
+        expect((await bookings(ctx))[0]!.status).toBe("agendada");
+      });
+
+      it("SQL directo: con la IA apagada la pendiente no es ejecutable", async () => {
+        const ctx = await seed();
+        const bookingId = await addBooking(ctx, slotAt(3, "10:00"));
+        const actions = await import("@/server/agenda/pending-actions");
+        await addMessage(ctx, "out", "¿Confirmas?");
+        const question = await lastOutRow(ctx);
+        await addMessage(ctx, "in", "sí", { id: `msg_pgpaused${ctx.conv}` });
+        await actions.setPendingAction({
+          organizationId: ctx.org,
+          conversationId: ctx.conv,
+          action: "cancel",
+          bookingId,
+          questionMessageId: question,
+        });
+        const sql = await raw();
+        await sql`update conversation set ai_enabled = false where id = ${ctx.conv}`;
+        expect(await actions.consumePendingAction(ctx.org, ctx.conv, `msg_pgpaused${ctx.conv}`)).toBeNull();
+      });
     });
   });
 });

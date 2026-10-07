@@ -123,3 +123,31 @@ describe("matchesRescheduleIntent", () => {
     }
   );
 });
+
+/**
+ * "claro" a secas es un acuse de recibo: confirma una reserva, pero no basta
+ * para cancelar ni mover una cita. "claro que sí" lleva un "sí" explícito y
+ * sigue confirmando todo.
+ */
+describe("'claro' en cancelar y reprogramar", () => {
+  it.each(["claro que sí", "claro que si", "Claro que sí."])("'%s' confirma cancelar, reprogramar y agendar", (text) => {
+    for (const action of ["cancel", "reschedule", "book"] as const) {
+      expect(confirmsAgendaAction(text, action), `${action} '${text}'`).toBe(true);
+    }
+  });
+
+  it.each(["claro", "Claro.", "claro, gracias", "claro, entiendo"])("'%s' NO confirma cancelar ni reprogramar", (text) => {
+    expect(confirmsAgendaAction(text, "cancel")).toBe(false);
+    expect(confirmsAgendaAction(text, "reschedule")).toBe(false);
+  });
+
+  it.each(["claro", "claro, gracias"])("'%s' sigue confirmando una reserva", (text) => {
+    expect(confirmsAgendaAction(text, "book")).toBe(true);
+  });
+
+  it.each(["claro que no", "claro, que no", "claro que no la canceles"])("'%s' no confirma nada", (text) => {
+    for (const action of ["book", "reschedule", "cancel"] as const) {
+      expect(confirmsAgendaAction(text, action), `${action} '${text}'`).toBe(false);
+    }
+  });
+});

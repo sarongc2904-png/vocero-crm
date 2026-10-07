@@ -172,6 +172,12 @@ vi.mock("@/server/ai/observability", () => ({
 /** Filas por tabla: la conversación, el perfil y el historial del turno. */
 const rowsByTable: Record<string, unknown[]> = {};
 const outbound: string[] = [];
+/** Salientes que se intentaron guardar/enviar (aunque el envío falle). */
+const attemptedOutbound: string[] = [];
+/** `set` de cada UPDATE: el handoff se ve como `handoffAt` + `aiEnabled: false`. */
+const updates: Record<string, unknown>[] = [];
+/** Simula que el envío de un saliente falla (error de red o de la BD). */
+const sendFailure = { on: false };
 
 function thenableChain(rows: unknown[]) {
   const chain: Record<string, unknown> = {};
@@ -192,6 +198,8 @@ vi.mock("@/lib/db", () => ({
     insert: () => ({
       values: (values: Record<string, unknown>) => {
         if (values.direction === "out" && typeof values.text === "string") {
+          attemptedOutbound.push(values.text);
+          if (sendFailure.on) throw new Error("envío simulado fallido");
           outbound.push(values.text);
         }
         const chain = {
@@ -205,7 +213,7 @@ vi.mock("@/lib/db", () => ({
     }),
     delete: () => ({ where: () => Promise.resolve([]) }),
     update: () => ({
-      set: () => ({
+      set: (values: Record<string, unknown>) => (updates.push(values), {
         where: () => ({
           returning: () => Promise.resolve([{}]),
           then: (resolve: (v: unknown) => void) => Promise.resolve([{}]).then(resolve),
@@ -349,6 +357,9 @@ beforeEach(() => {
   store.pending = null;
   for (const key of Object.keys(rowsByTable)) delete rowsByTable[key];
   outbound.length = 0;
+  attemptedOutbound.length = 0;
+  updates.length = 0;
+  sendFailure.on = false;
   createSessionBooking.mockReset();
   createSessionBooking.mockImplementation(async (input: { startUtc: string }) => okBooking(input));
   rescheduleForConversation.mockReset();
@@ -674,20 +685,27 @@ describe("barrido de acciones del modelo", () => {
     expect(branches.cancelPending).toBeGreaterThan(0);
   }, 120_000);
 
-  it("con pendiente: solo las confirmaciones explícitas ejecutan", async () => {
+  it("con pendiente: cancelar y reprogramar solo con un 'sí' explícito; 'claro' a secas solo confirma agendar", async () => {
     // Cancelar y reprogramar exigen un "sí" claro; los acuses de recibo
-    // ("ok", "dale", 👍…) solo confirman una reserva.
-    const CLEAR = ["sí", "si", "claro", "de acuerdo", "sí, gracias", "confirmo", "sí, cancélala"];
-    const ACKNOWLEDGEMENTS = ["ok", "va", "dale", "perfecto", "está bien", "👍"];
+    // ("ok", "dale", 👍, "claro"…) solo confirman una reserva. "claro que sí"
+    // lleva un "sí" explícito y confirma todo.
+    const CLEAR = [
+      "sí", "si", "de acuerdo", "sí, gracias", "confirmo", "sí, cancélala", "claro que sí", "claro que si",
+    ];
+    const ACKNOWLEDGEMENTS = ["ok", "va", "dale", "perfecto", "está bien", "👍", "claro", "claro, gracias"];
     const POSITIVE = [...CLEAR, ...ACKNOWLEDGEMENTS];
     const expected = (action: "book" | "reschedule" | "cancel", text: string) =>
       CLEAR.includes(text) || (action === "book" && ACKNOWLEDGEMENTS.includes(text)) ? 1 : 0;
     const NEGATIVE = [
-      "claro que no", "ok no", "por favor no", "sí pero a las 5", "vale, pero mejor el jueves",
+      "claro que no", "claro, que no", "claro que no la canceles", "claro, entiendo",
+      "ok no", "por favor no", "sí pero a las 5", "vale, pero mejor el jueves",
       "sí, ¿y cuánto cuesta?", "va a llover?", "no, sí a las 5", "no", "no gracias", "mejor no",
       "si me pudieras decir…",
     ];
     const branches = { executed: 0, notExecuted: 0, acknowledgementOnly: 0 };
+    // No puede pasar en vacío: cada confirmación clara tiene que haberse
+    // ejecutado en las tres acciones (salvo "sí, cancélala" ante una reserva).
+    const executedClear = new Set<string>();
     for (const action of ["book", "reschedule", "cancel"] as const) {
       for (const text of [...POSITIVE, ...NEGATIVE]) {
         // "sí, cancélala" responde a cancelar; ante una reserva no se fija aquí.
@@ -709,6 +727,7 @@ describe("barrido de acciones del modelo", () => {
         expect(executed, label).toBe(expected(action, text));
         if (executed) branches.executed += 1;
         else branches.notExecuted += 1;
+        if (executed && CLEAR.includes(text)) executedClear.add(`${action} ${text}`);
         if (!executed && ACKNOWLEDGEMENTS.includes(text)) branches.acknowledgementOnly += 1;
       }
     }
@@ -716,6 +735,12 @@ describe("barrido de acciones del modelo", () => {
     expect(branches.notExecuted).toBeGreaterThan(0);
     // Los acuses de recibo se probaron sin ejecutar en cancelar y reprogramar.
     expect(branches.acknowledgementOnly).toBe(ACKNOWLEDGEMENTS.length * 2);
+    for (const action of ["book", "reschedule", "cancel"] as const) {
+      for (const text of CLEAR) {
+        if (action === "book" && text === "sí, cancélala") continue;
+        expect(executedClear.has(`${action} ${text}`), `${action} '${text}' debió ejecutarse`).toBe(true);
+      }
+    }
   }, 120_000);
 });
 
@@ -735,7 +760,7 @@ describe("el motor de citas solo se invoca tras consumir la pendiente", () => {
   }
 
   it("bookSlot, rescheduleForConversation y handleCancellation: una llamada cada uno, dentro del bloque de consumo", () => {
-    const start = pipeline.indexOf("await consumePendingAction(organizationId, conversationId)");
+    const start = pipeline.indexOf("await consumePendingAction(organizationId, conversationId, lastInbound.id)");
     const end = pipeline.indexOf("matchesCancellationIntent(inboundText)", start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
@@ -749,5 +774,136 @@ describe("el motor de citas solo se invoca tras consumir la pendiente", () => {
     const cancelSites = callSites("cancelBookingForConversation");
     expect(cancelSites).toHaveLength(1);
     expect(cancelSites[0]!).toBeGreaterThan(pipeline.indexOf("async function handleCancellation("));
+  });
+});
+
+/**
+ * B-2 / F2 / F4 — Ejecutar una pendiente nunca deja al cliente sin respuesta
+ * ni relanza el error al job (el reintento haría improvisar al modelo).
+ * Tono usted: el perfil de estas pruebas no tutea.
+ */
+describe("fallos al ejecutar una pendiente: respuesta determinista, sin relanzar", () => {
+  const RESCHEDULE_QUESTION =
+    "Su cita actual: jueves, 8 de octubre a las 10:00. Tengo martes 6 a las 16:00. ¿Confirma que mueva su cita a ese horario?";
+  const handoffs = () => updates.filter((u) => u.handoffAt instanceof Date && u.aiEnabled === false);
+
+  async function confirmPending(action: "book" | "reschedule" | "cancel", question: string) {
+    setPending(action, action === "cancel" ? null : "16:00");
+    await turn([
+      { direction: "out", text: question, createdAt: SHOWN_AT },
+      { direction: "in", text: "sí", createdAt: NOW },
+    ]);
+  }
+
+  it("B-2: reprogramar con slot_taken → ofrece alternativas y vuelve a preguntar, sin handoff", async () => {
+    const { BookingError } = await import("@/server/agenda/service");
+    rescheduleForConversation.mockRejectedValue(new BookingError("slot_taken", "Ese horario ya no está disponible"));
+    await expect(confirmPending("reschedule", RESCHEDULE_QUESTION)).resolves.toBeUndefined();
+    expect(rescheduleForConversation).toHaveBeenCalledTimes(1);
+    expect(lastOut()).toContain("Ese horario ya no está disponible para mover su cita. Elija otro:");
+    expect(lastOut()).toContain("• 12:00");
+    expect(handoffs()).toHaveLength(0);
+    expect(createSessionBooking).not.toHaveBeenCalled();
+  });
+
+  it("F2: reprogramar con un error de BD → mensaje determinista + handoff, sin relanzar", async () => {
+    rescheduleForConversation.mockRejectedValue(new Error("connection terminated unexpectedly"));
+    await expect(confirmPending("reschedule", RESCHEDULE_QUESTION)).resolves.toBeUndefined();
+    expect(lastOut()).toBe("No pude mover su cita automáticamente. Un asesor continuará con usted.");
+    expect(handoffs()).toHaveLength(1);
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
+  it("F4: agendar con un error de BD → mensaje determinista + handoff, sin relanzar", async () => {
+    createSessionBooking.mockRejectedValue(new Error("connection terminated unexpectedly"));
+    await expect(confirmPending("book", PROPOSAL)).resolves.toBeUndefined();
+    expect(lastOut()).toBe("No pude agendar su cita automáticamente. Un asesor continuará con usted.");
+    expect(handoffs()).toHaveLength(1);
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
+  it("F1 se mantiene: cancelar con un error de BD → mensaje determinista + handoff", async () => {
+    cancelBookingForConversation.mockRejectedValue(new Error("connection terminated unexpectedly"));
+    await expect(
+      confirmPending("cancel", "¿Confirma que quiere cancelar su cita: jueves, 8 de octubre a las 10:00? Responda «sí» y la cancelo.")
+    ).resolves.toBeUndefined();
+    expect(lastOut()).toBe("No pude cancelar su cita automáticamente. Un asesor continuará con usted.");
+    expect(handoffs()).toHaveLength(1);
+  });
+
+  it.each(["cancel", "book", "reschedule"] as const)(
+    "fallo del ENVÍO tras %s ejecutado → no relanza, no dice que falló la acción y deja handoff",
+    async (action) => {
+      sendFailure.on = true;
+      const question =
+        action === "book" ? PROPOSAL : action === "reschedule" ? RESCHEDULE_QUESTION : "¿Confirma que quiere cancelar su cita?";
+      await expect(confirmPending(action, question)).resolves.toBeUndefined();
+      const engine = {
+        cancel: cancelBookingForConversation,
+        book: createSessionBooking,
+        reschedule: rescheduleForConversation,
+      }[action];
+      expect(engine).toHaveBeenCalledTimes(1);
+      // Se intentó el mensaje de éxito; nunca uno que diga que no se pudo.
+      expect(attemptedOutbound.length).toBeGreaterThan(0);
+      expect(attemptedOutbound.some((text) => /No pude/.test(text))).toBe(false);
+      expect(handoffs()).toHaveLength(1);
+      expect(chatJson).not.toHaveBeenCalled();
+    }
+  );
+});
+
+/**
+ * B-3 — Si el cliente está cambiando su cita y el modelo responde `book_slot`,
+ * la pendiente es `reschedule` sobre la cita existente: al confirmar se mueve,
+ * no se crea una segunda.
+ */
+describe("book_slot del modelo en medio de un cambio de cita", () => {
+  it("'quiero cambiar mi cita' → oferta → 'quiero las 4' [book_slot] → pregunta de mover → 'sí' mueve", async () => {
+    model({ action: "book_slot", startUtc: at(TUE, "16:00") });
+    const history: Msg[] = [
+      { direction: "in", text: "quiero cambiar mi cita", createdAt: new Date(SHOWN_AT.getTime() - 5_000) },
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text: "quiero las 4", createdAt: NOW },
+    ];
+    await turn(history);
+    expect(currentPending()).toMatchObject({ action: "reschedule", bookingId: BOOKING.id, startUtc: at(TUE, "16:00") });
+    expect(lastOut()).toMatch(/Su cita actual: .*¿Confirma que mueva su cita a ese horario\?/);
+    nothingExecuted();
+
+    const question = lastOut();
+    model({ action: "reply", text: "Respuesta del modelo." });
+    await turn([
+      ...history,
+      { direction: "out", text: question, createdAt: new Date(NOW.getTime() + 1_000) },
+      { direction: "in", text: "sí", createdAt: new Date(NOW.getTime() + 2_000) },
+    ]);
+    expect(rescheduleForConversation).toHaveBeenCalledTimes(1);
+    expect(rescheduleForConversation.mock.calls[0]![0]).toMatchObject({ bookingId: BOOKING.id, startUtc: at(TUE, "16:00") });
+    expect(createSessionBooking).not.toHaveBeenCalled();
+  });
+
+  it("la última pregunta del agente era de mover la cita → book_slot también queda como reschedule", async () => {
+    model({ action: "book_slot", startUtc: at(TUE, "16:00") });
+    await turn([
+      {
+        direction: "out",
+        text: SHOWN.replace("Tengo estos horarios disponibles:", "Para cambiar su cita, elija uno de estos horarios disponibles:"),
+        createdAt: SHOWN_AT,
+      },
+      { direction: "in", text: "quiero las 4", createdAt: NOW },
+    ]);
+    expect(currentPending()).toMatchObject({ action: "reschedule", bookingId: BOOKING.id });
+    nothingExecuted();
+  });
+
+  it("sin cambio de cita en curso, book_slot sigue proponiendo una reserva nueva", async () => {
+    model({ action: "book_slot", startUtc: at(TUE, "16:00") });
+    await turn([
+      { direction: "in", text: "quiero una cita", createdAt: new Date(SHOWN_AT.getTime() - 5_000) },
+      { direction: "out", text: SHOWN, createdAt: SHOWN_AT },
+      { direction: "in", text: "quiero las 4", createdAt: NOW },
+    ]);
+    expect(currentPending()).toMatchObject({ action: "book", bookingId: null });
   });
 });
