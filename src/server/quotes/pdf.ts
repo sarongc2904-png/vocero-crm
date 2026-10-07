@@ -1,6 +1,6 @@
 import { degrees, PDFDocument, rgb, StandardFonts, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { formatMoneyCents } from "@/lib/money";
-import { QUANTITY_SCALE } from "@/server/quotes/totals";
+import { formatQuantity, formatTaxRate } from "@/lib/quote-format";
 
 /**
  * PDF de una cotización con pdf-lib y las fuentes ESTÁNDAR (Helvetica): sin
@@ -123,13 +123,8 @@ export function wrapText(font: PDFFont, text: string, size: number, maxWidth: nu
   return lines;
 }
 
-export function formatQuantity(quantityMilli: number): string {
-  return new Intl.NumberFormat("es-MX", { maximumFractionDigits: 3 }).format(quantityMilli / QUANTITY_SCALE);
-}
-
-export function formatTaxRate(taxRateBps: number): string {
-  return `${new Intl.NumberFormat("es-MX", { maximumFractionDigits: 2 }).format(taxRateBps / 100)} %`;
-}
+// Compartidos con las pantallas del CRM (cliente): viven en lib/.
+export { formatQuantity, formatTaxRate };
 
 function money(cents: number, currency: string): string {
   return formatMoneyCents(cents, currency) ?? `${(cents / 100).toFixed(2)} ${currency}`;

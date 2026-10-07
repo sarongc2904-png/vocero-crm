@@ -20,6 +20,8 @@ export type EventHandlers = {
   }) => void;
   /** 015 — Algo cambió en la agenda (también cuando agenda la IA). */
   onBookingUpdated?: (data: { bookingId: string }) => void;
+  /** 0037 — El cliente aceptó o rechazó una cotización desde su enlace. */
+  onQuoteUpdated?: (data: { quoteId: string; status: string }) => void;
   /** Se llama tras RECONECTAR (no en la conexión inicial): catch-up con refetch. */
   onReconnect?: () => void;
 };
@@ -57,6 +59,9 @@ export function useEvents(handlers: EventHandlers): void {
     listen("lab.run", (d) => handlersRef.current.onLabRun?.(d as never));
     listen("booking.updated", (d) =>
       handlersRef.current.onBookingUpdated?.(d as never)
+    );
+    listen("quote.updated", (d) =>
+      handlersRef.current.onQuoteUpdated?.(d as never)
     );
 
     source.onerror = () => {
