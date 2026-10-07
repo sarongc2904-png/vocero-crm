@@ -368,6 +368,12 @@ export async function sendMediaMessage(input: {
    * cotización). Sin él, se guarda `caption`, como siempre.
    */
   storedCaption?: string;
+  /**
+   * 0038 — Textos que JAMÁS deben quedar en el error guardado ni en el que se
+   * lanza (p. ej. el token de un enlace), por si Meta repitiera lo enviado en
+   * su mensaje de error. Sin él, nada cambia.
+   */
+  secrets?: string[];
 }): Promise<SendResult> {
   // Validación previa (FR-007): tipo y tamaño antes de tocar disco o red.
   const kind = validateOutgoing(input.file.mimeType, input.file.data.byteLength);
@@ -452,6 +458,9 @@ export async function sendMediaMessage(input: {
         "upload_failed",
         "No se pudo subir el adjunto a WhatsApp"
       );
+    }
+    for (const secret of input.secrets ?? []) {
+      if (secret) sendErr.message = sendErr.message.split(secret).join("••••••");
     }
     // El contenido NO se pierde: mensaje failed con el asset ya en disco.
     sendErr.messageId = await persistOutbound({
