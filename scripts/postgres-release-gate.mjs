@@ -34,6 +34,58 @@ function runWorkerJson(mode) {
   return JSON.parse(output);
 }
 
+/**
+ * Suites de Vitest que necesitan un Postgres real. En `pnpm test` se omiten
+ * (no hay `VOCERO_TEST_PG_URL`); aquí corren contra la misma base del gate y
+ * el gate FALLA si alguna prueba se omite, falla o desaparece. `minTests` es
+ * un piso: borrar casos de aislamiento también rompe el gate.
+ */
+const PG_VITEST_SUITES = [
+  { file: "tests/unit/quotes-tenant-isolation-postgres.test.ts", minTests: 13 },
+  { file: "tests/unit/quotes-bot-api-postgres.test.ts", minTests: 13 },
+];
+
+async function runPgVitestSuites() {
+  const outDir = await mkdtemp(join(tmpdir(), "vocero-pg-vitest-"));
+  try {
+    for (const suite of PG_VITEST_SUITES) {
+      const report = join(outDir, "report.json");
+      const result = spawnSync(
+        process.execPath,
+        ["node_modules/vitest/vitest.mjs", "run", suite.file, "--reporter=json", `--outputFile=${report}`],
+        {
+          cwd: process.cwd(),
+          env: { ...process.env, VOCERO_TEST_PG_URL: url },
+          encoding: "utf8",
+        }
+      );
+      let parsed = null;
+      try {
+        parsed = JSON.parse(await readFile(report, "utf8"));
+      } catch {
+        // Sin reporte: el detalle va en stderr.
+      }
+      const detail = parsed
+        ? `total=${parsed.numTotalTests} pasaron=${parsed.numPassedTests} fallaron=${parsed.numFailedTests} omitidas=${parsed.numPendingTests + parsed.numTodoTests}`
+        : (result.stderr || result.stdout).slice(-2000);
+      ok(
+        `vitest con Postgres real: ${suite.file}`,
+        result.status === 0 &&
+          parsed !== null &&
+          parsed.numFailedTests === 0 &&
+          parsed.numPendingTests === 0 &&
+          parsed.numTodoTests === 0 &&
+          parsed.numPassedTests === parsed.numTotalTests &&
+          parsed.numTotalTests >= suite.minTests,
+        detail
+      );
+      await rm(report, { force: true });
+    }
+  } finally {
+    await rm(outDir, { recursive: true, force: true });
+  }
+}
+
 async function verifyUpgradePath() {
   const parsed = new URL(url);
   const database = `vocero_upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -501,6 +553,15 @@ try {
   `;
   ok("poison job alcanza dead-letter sin loop", runWorker("dead-letter-agent") === poisonId);
   ok("dead-letter queda persistido e inreclamable", (await sql`select 1 from durable_job where id = ${poisonId} and dead_letter_at is not null and attempts = 8`).length === 1 && runWorker("recover-agent") === "NONE");
+
+  // 0037 — cotizaciones: tablas presentes y aislamiento por negocio.
+  const quoteTables = await sql`
+    select table_name from information_schema.tables
+    where table_schema = 'public'
+      and table_name in ('quote','quote_item','quote_link','quote_counter','quote_settings')
+  `;
+  ok("tablas de cotizaciones presentes", quoteTables.length === 5, `reales=${quoteTables.length}`);
+  await runPgVitestSuites();
 
   console.log(`\nPOSTGRES RELEASE GATE: ${passed}/${passed} PASS`);
 } finally {
