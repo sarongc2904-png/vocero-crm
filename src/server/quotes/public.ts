@@ -45,7 +45,10 @@ type ResolvedLink = {
 };
 
 async function resolveLink(token: string, now: Date): Promise<ResolvedLink | null> {
-  if (!isWellFormedQuoteToken(token)) return null;
+  // Un token mal formado TAMBIÉN hace la consulta (con un hash que no puede
+  // existir): así todo motivo de 404 tarda y se ve igual, incluso en cómo Next
+  // trocea el HTML de la página.
+  const tokenHash = isWellFormedQuoteToken(token) ? hashQuoteToken(token) : "0".repeat(63) + "x";
   const rows = await getDb()
     .select({
       linkId: schema.quoteLink.id,
@@ -62,7 +65,7 @@ async function resolveLink(token: string, now: Date): Promise<ResolvedLink | nul
     )
     .where(
       and(
-        eq(schema.quoteLink.tokenHash, hashQuoteToken(token)),
+        eq(schema.quoteLink.tokenHash, tokenHash),
         isNull(schema.quoteLink.revokedAt),
         gt(schema.quoteLink.expiresAt, now),
         sql`${schema.quote.status} <> 'cancelada'`,
