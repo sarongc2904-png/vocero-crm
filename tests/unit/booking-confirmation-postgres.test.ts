@@ -1249,4 +1249,189 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
       });
     }
   });
+
+  /**
+   * Revisión ff3913d (E1, A1, A2) de punta a punta: pipeline real, Postgres real.
+   */
+  describe("revisión ff3913d: emojis, confirmaciones legítimas y 'mejor a las 5'", () => {
+    async function rescheduleQuestion(ctx: Ctx) {
+      await showOffer(ctx, [{ startUtc: slotAt(4, "11:00"), label: "11:00" }], "quiero cambiar mi cita");
+      await turn(ctx, "11:00", { action: "reschedule_slot", startUtc: slotAt(4, "11:00") });
+      expect((await pending(ctx))?.action).toBe("reschedule");
+    }
+
+    async function bookQuestion(ctx: Ctx) {
+      await showOffer(ctx, [{ startUtc: slotAt(2, "16:00"), label: "16:00" }]);
+      await turn(ctx, "a las 16:00", { action: "book_slot", startUtc: slotAt(2, "16:00") });
+      expect((await pending(ctx))?.action).toBe("book");
+    }
+
+    it.each(["sí ❌", "sí 🤔", "sí 😡", "sí 👎", "sí 🚫", "sí 🙅", "sí ⛔"])(
+      "E1: cancelación pendiente + '%s' → no cancela, descarta la pendiente y responde el modelo",
+      async (text) => {
+        const ctx = await seed();
+        await addBooking(ctx, slotAt(3, "10:00"));
+        await cancelQuestion(ctx);
+        const replies = await turn(ctx, text);
+        expect((await bookings(ctx))[0]!.status).toBe("agendada");
+        expect(await pending(ctx)).toBeNull();
+        expect(replies).toEqual(["Respuesta del modelo."]);
+      }
+    );
+
+    it.each(["sí 🤔", "sí ❌"])("E1: reprogramación pendiente + '%s' → no mueve", async (text) => {
+      const ctx = await seed();
+      const id = await addBooking(ctx, slotAt(3, "10:00"));
+      await rescheduleQuestion(ctx);
+      await turn(ctx, text);
+      const after = await bookings(ctx);
+      expect(after.find((b) => b.id === id)!.at.toISOString()).toBe(slotAt(3, "10:00"));
+      expect(await pending(ctx)).toBeNull();
+    });
+
+    it.each(["sí 👎", "👎👍", "ok 👎", "👍 ❌"])("E1: reserva pendiente + '%s' → no agenda", async (text) => {
+      const ctx = await seed();
+      await bookQuestion(ctx);
+      await turn(ctx, text);
+      expect(await bookings(ctx)).toHaveLength(0);
+      expect(await pending(ctx)).toBeNull();
+    });
+
+    it("E1: 'sí 👍' sí cancela", async () => {
+      const ctx = await seed();
+      await addBooking(ctx, slotAt(3, "10:00"));
+      await cancelQuestion(ctx);
+      await turn(ctx, "sí 👍");
+      expect((await bookings(ctx))[0]!.status).toBe("cancelada");
+    });
+
+    it.each(["okey", "va que va", "listo"])("A1: reserva pendiente + '%s' → agenda", async (text) => {
+      const ctx = await seed();
+      await bookQuestion(ctx);
+      await turn(ctx, text);
+      expect((await bookings(ctx)).map((b) => b.status)).toEqual(["agendada"]);
+    });
+
+    it.each(["okey", "listo", "va que va"])("A1: cancelación pendiente + '%s' → no cancela", async (text) => {
+      const ctx = await seed();
+      await addBooking(ctx, slotAt(3, "10:00"));
+      await cancelQuestion(ctx);
+      await turn(ctx, text);
+      expect((await bookings(ctx))[0]!.status).toBe("agendada");
+      expect(await pending(ctx)).toBeNull();
+    });
+
+    it("A1: cancelación pendiente + 'sí cancela' → cancela", async () => {
+      const ctx = await seed();
+      await addBooking(ctx, slotAt(3, "10:00"));
+      await cancelQuestion(ctx);
+      await turn(ctx, "sí cancela");
+      expect((await bookings(ctx))[0]!.status).toBe("cancelada");
+    });
+
+    it("A1: reprogramación pendiente + 'sí cancela' → ni mueve ni cancela", async () => {
+      const ctx = await seed();
+      const id = await addBooking(ctx, slotAt(3, "10:00"));
+      await rescheduleQuestion(ctx);
+      await turn(ctx, "sí cancela");
+      const row = (await bookings(ctx)).find((b) => b.id === id)!;
+      expect(row.status).toBe("agendada");
+      expect(row.at.toISOString()).toBe(slotAt(3, "10:00"));
+    });
+
+    it("A1: 'sí, la 2' ante '¿cuál de tus citas?' elige la segunda y vuelve a preguntar; 'sí' la cancela", async () => {
+      const ctx = await seed();
+      const near = await addBooking(ctx, slotAt(2, "10:00"));
+      const far = await addBooking(ctx, slotAt(5, "18:00"));
+      const listing = await turn(ctx, "cancela mi cita");
+      expect(listing.at(-1)).toMatch(/citas activas a tu nombre/);
+
+      const question = await turn(ctx, "sí, la 2");
+      expect(question.at(-1)).toMatch(/confirmas que quieres cancelar tu cita/);
+      expect(question.at(-1)).toContain(dayName(slotAt(5, "18:00")));
+      expect((await pending(ctx))?.bookingId).toBe(far);
+      expect((await bookings(ctx)).every((b) => b.status === "agendada")).toBe(true);
+
+      await turn(ctx, "sí");
+      const after = Object.fromEntries((await bookings(ctx)).map((b) => [b.id, b.status]));
+      expect(after[far]).toBe("cancelada");
+      expect(after[near]).toBe("agendada");
+    });
+
+    /** El cliente agenda a las 16:00 (queda una cita) y vuelve a ver la oferta: 17:00. */
+    async function justBooked(ctx: Ctx): Promise<string> {
+      await showOffer(ctx, [
+        { startUtc: slotAt(2, "16:00"), label: "16:00" },
+        { startUtc: slotAt(2, "17:00"), label: "17:00" },
+      ]);
+      await turn(ctx, "a las 16:00", { action: "book_slot", startUtc: slotAt(2, "16:00") });
+      await turn(ctx, "sí");
+      const rows = await bookings(ctx);
+      expect(rows).toHaveLength(1);
+      // Agendar consume la oferta: el cliente pide ver horarios otra vez.
+      await showOffer(ctx, [{ startUtc: slotAt(2, "17:00"), label: "17:00" }]);
+      return rows[0]!.id;
+    }
+
+    const FIVE = () => ({ action: "book_slot", startUtc: slotAt(2, "17:00") });
+    it.each([
+      ["mejor a las 5", "book_slot"],
+      ["mejor a las 5 de la tarde", "book_slot"],
+      ["pásala a las 5", "book_slot"],
+      ["cámbiala a las 5", "book_slot"],
+      ["mejor a las 5", "selección determinista"],
+    ])("A2: recién agendado, '%s' (%s) → pregunta de mover; 'sí' mueve la misma cita", async (text, via) => {
+      const ctx = await seed();
+      const id = await justBooked(ctx);
+      const question = await turn(ctx, text, via === "book_slot" ? FIVE() : undefined);
+      expect(question.at(-1)).toMatch(/Tu cita actual: .*¿Confirmas que mueva tu cita a ese horario\?/);
+      const p = await pending(ctx);
+      expect(p?.action).toBe("reschedule");
+      expect(p?.bookingId).toBe(id);
+
+      await turn(ctx, "sí");
+      const after = await bookings(ctx);
+      expect(after).toHaveLength(1);
+      expect(after[0]!.id).toBe(id);
+      expect(after[0]!.at.toISOString()).toBe(slotAt(2, "17:00"));
+    });
+
+    it("A2: 'quiero a las 5' con una cita activa → avisa que ya tiene una; 'sí' agenda OTRA", async () => {
+      const ctx = await seed();
+      await justBooked(ctx);
+      const question = await turn(ctx, "quiero a las 5", FIVE());
+      expect(question.at(-1)).toContain("Ya tienes una cita");
+      expect(question.at(-1)).toContain(dayName(slotAt(2, "16:00")));
+      expect(question.at(-1)).toMatch(/¿Quieres que agende otra cita/);
+      expect((await pending(ctx))?.action).toBe("book");
+
+      await turn(ctx, "sí");
+      expect((await bookings(ctx)).map((b) => b.at.toISOString()).sort()).toEqual(
+        [slotAt(2, "16:00"), slotAt(2, "17:00")].sort()
+      );
+    });
+
+    it("A2: tras el aviso, 'muévela' → pregunta de mover la cita existente; 'sí' la mueve", async () => {
+      const ctx = await seed();
+      const id = await justBooked(ctx);
+      await turn(ctx, "quiero a las 5", FIVE());
+      const question = await turn(ctx, "muévela");
+      expect(question.at(-1)).toMatch(/Tu cita actual: .*¿Confirmas que mueva tu cita a ese horario\?/);
+      expect((await pending(ctx))?.bookingId).toBe(id);
+
+      await turn(ctx, "sí");
+      const after = await bookings(ctx);
+      expect(after).toHaveLength(1);
+      expect(after[0]!.at.toISOString()).toBe(slotAt(2, "17:00"));
+    });
+
+    it("A2: el aviso en usted", async () => {
+      const ctx = await seed(null);
+      await justBooked(ctx);
+      const question = await turn(ctx, "quiero a las 5", FIVE());
+      expect(question.at(-1)).toContain("Ya tiene una cita");
+      expect(question.at(-1)).toMatch(/¿Quiere que agende otra cita/);
+      expect(question.at(-1)).toContain("Si prefiere mover la que tiene, responda «muévela».");
+    });
+  });
 });
