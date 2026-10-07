@@ -509,14 +509,19 @@ export async function rescheduleBooking(input: {
 }
 
 /**
- * Reprograma la PRÓXIMA cita activa de la conversación. Es el camino del
- * agente: mover una cita no debería obligar a pausar la IA y pasarle el
- * problema a un humano.
+ * Reprograma una cita activa de la conversación. Es el camino del agente:
+ * mover una cita no debería obligar a pausar la IA y pasarle el problema a un
+ * humano.
+ *
+ * Con `bookingId` mueve ESA cita, y solo si sigue activa y es del contacto de
+ * la conversación y del mismo negocio; si no, `not_found`. Sin `bookingId`
+ * (API del bot) mueve la próxima, como siempre.
  */
 export async function rescheduleForConversation(input: {
   organizationId: string;
   conversationId: string;
   startUtc: string;
+  bookingId?: string;
   now?: Date;
 }): Promise<BookingResult> {
   const db = getDb();
@@ -565,7 +570,8 @@ export async function rescheduleForConversation(input: {
           eq(schema.booking.contactId, conv.contactId),
           eq(schema.booking.kind, "session"),
           eq(schema.booking.status, "agendada"),
-          gte(schema.booking.scheduledAt, now)
+          gte(schema.booking.scheduledAt, now),
+          input.bookingId ? eq(schema.booking.id, input.bookingId) : undefined
         )
       )
     )
@@ -1042,13 +1048,77 @@ async function recordBookingEvent(input: {
 }
 
 /**
- * Cancela la próxima cita activa asociada a una conversación o a su contacto.
- * La conversación, el contacto y la cita se resuelven siempre dentro del
- * mismo tenant; manipular un id de otro tenant equivale a no encontrarlo.
+ * Citas activas (futuras, agendadas) de la conversación o de su contacto, de
+ * la más próxima a la más lejana, con la etiqueta con la que se le nombran al
+ * cliente. Solo lectura: el agente la usa para preguntar CUÁL cita cancelar o
+ * mover y para nombrarla en la confirmación.
+ */
+export async function listActiveBookingsForConversation(input: {
+  organizationId: string;
+  conversationId: string;
+  now?: Date;
+}): Promise<{ id: string; startUtc: string; timezone: string; label: string }[]> {
+  const db = getDb();
+  const now = input.now ?? new Date();
+  const conversations = await db
+    .select({ contactId: schema.conversation.contactId })
+    .from(schema.conversation)
+    .where(
+      scoped(
+        schema.conversation.organizationId,
+        input.organizationId,
+        eq(schema.conversation.id, input.conversationId)
+      )
+    )
+    .limit(1);
+  const conversation = conversations[0];
+  if (!conversation) return [];
+
+  const rows = await db
+    .select()
+    .from(schema.booking)
+    .where(
+      scoped(
+        schema.booking.organizationId,
+        input.organizationId,
+        and(
+          eq(schema.booking.kind, "session"),
+          eq(schema.booking.status, "agendada"),
+          gte(schema.booking.scheduledAt, now),
+          or(
+            eq(schema.booking.conversationId, input.conversationId),
+            eq(schema.booking.contactId, conversation.contactId)
+          )
+        )
+      )
+    )
+    .orderBy(asc(schema.booking.scheduledAt));
+  if (rows.length === 0) return [];
+
+  const settings = await getSettings(input.organizationId);
+  return rows.map((booking) => {
+    const timezone = booking.timezone || settings.timezone;
+    const startUtc = booking.scheduledAt.toISOString();
+    return {
+      id: booking.id,
+      startUtc,
+      timezone,
+      label: `${dayLabelInTz(startUtc, timezone, now)} a las ${timeInTz(startUtc, timezone)}`,
+    };
+  });
+}
+
+/**
+ * Cancela una cita activa asociada a una conversación o a su contacto: con
+ * `bookingId`, ESA cita (si sigue activa y es de esta conversación o de su
+ * contacto); sin él, la próxima. La conversación, el contacto y la cita se
+ * resuelven siempre dentro del mismo tenant; manipular un id de otro tenant
+ * equivale a no encontrarlo.
  */
 export async function cancelBookingForConversation(input: {
   organizationId: string;
   conversationId: string;
+  bookingId?: string;
   now?: Date;
 }): Promise<{ bookingId: string; label: string }> {
   const db = getDb();
@@ -1083,7 +1153,8 @@ export async function cancelBookingForConversation(input: {
           or(
             eq(schema.booking.conversationId, input.conversationId),
             eq(schema.booking.contactId, conversation.contactId)
-          )
+          ),
+          input.bookingId ? eq(schema.booking.id, input.bookingId) : undefined
         )
       )
     )

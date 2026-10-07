@@ -349,16 +349,7 @@ const MAX_CONFIRMATION_WORDS = 6;
  * confirma: lo que no sea una confirmación limpia es `unclear` u `other`.
  */
 export function classifyConfirmation(text: string): ConfirmationVerdict {
-  let norm = normalize(text).replace(THUMBS_UP, " ok ");
-  const asks = /[?¿]/.test(norm);
-  const hasDigits = /\d/.test(norm);
-  norm = norm
-    .replace(/[^a-z0-9ñ\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  for (const [phrase, token] of CONFIRM_PHRASES) norm = norm.replace(phrase, token);
-
-  const words = norm ? norm.split(" ") : [];
+  const { words, asks, hasDigits } = confirmationWords(text);
   const first = words[0];
   const opens = first !== undefined && (CONFIRM_OPENERS.has(first) || /^si+p?$/.test(first));
   if (!opens) return "other";
@@ -371,6 +362,45 @@ export function classifyConfirmation(text: string): ConfirmationVerdict {
   return rest.every((word) => CONFIRM_COMPANIONS.has(word) || /^si+p?$/.test(word))
     ? "confirm"
     : "unclear";
+}
+
+/** Palabras normalizadas de la respuesta, con las frases fijas ya unidas. */
+function confirmationWords(text: string): { words: string[]; asks: boolean; hasDigits: boolean } {
+  let norm = normalize(text).replace(THUMBS_UP, " ok ");
+  const asks = /[?¿]/.test(norm);
+  const hasDigits = /\d/.test(norm);
+  norm = norm
+    .replace(/[^a-z0-9ñ\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (const [phrase, token] of CONFIRM_PHRASES) norm = norm.replace(phrase, token);
+  return { words: norm ? norm.split(" ") : [], asks, hasDigits };
+}
+
+/**
+ * Aperturas que, por sí solas, son un "sí" claro. "ok", "dale", "va",
+ * "perfecto", "está bien", "gracias" o 👍 son acuses de recibo: confirman una
+ * reserva, pero no bastan para cancelar ni mover una cita.
+ */
+const CLEAR_OPENERS = new Set([
+  "si", "sip", "claro", "confirmo", "confirmado", "correcto", "exacto", "asies",
+  "deacuerdo", "adelante", "hazlo", "hazla",
+]);
+
+/**
+ * ¿Confirma ESTA acción pendiente? Agendar acepta cualquier confirmación limpia
+ * (incluido 👍: en WhatsApp es la forma habitual de aceptar una propuesta, y la
+ * reserva no destruye nada). Cancelar y reprogramar exigen además empezar con
+ * un "sí" claro ("sí", "confirmo", "sí, cancélala").
+ */
+export function confirmsAgendaAction(
+  text: string,
+  action: "book" | "reschedule" | "cancel"
+): boolean {
+  if (classifyConfirmation(text) !== "confirm") return false;
+  if (action === "book") return true;
+  const first = confirmationWords(text).words[0] ?? "";
+  return CLEAR_OPENERS.has(first) || /^si+p?$/.test(first);
 }
 
 /**

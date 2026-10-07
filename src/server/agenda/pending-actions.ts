@@ -1,4 +1,4 @@
-import { eq, gt } from "drizzle-orm";
+import { eq, gt, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -11,6 +11,12 @@ import { scoped } from "@/lib/db/tenant";
  * la conversación y a la organización. Sin fila (o con la fila expirada) una
  * confirmación no hace nada; una confirmación vieja jamás puede ejecutar una
  * acción nueva porque cada acción reemplaza la anterior.
+ *
+ * Además, la pendiente se liga a la PREGUNTA que la creó: su `id` es el id del
+ * mensaje saliente que pidió la confirmación (no hace falta otra columna). Solo
+ * es ejecutable mientras esa pregunta siga siendo el último mensaje saliente de
+ * la conversación: si después escribió un operador o el agente respondió otra
+ * cosa, el "sí" del cliente ya no contesta a esa pregunta.
  */
 
 export type AgendaPendingKind = "book" | "reschedule" | "cancel";
@@ -36,12 +42,31 @@ export async function setPendingAction(input: {
   startUtc?: string | null;
   serviceId?: string | null;
   professionalId?: string | null;
+  /**
+   * Id del mensaje saliente con la pregunta de confirmación. Sin él la
+   * pendiente nunca es ejecutable (solo sirve para recordar una elección en
+   * curso, p. ej. "¿cuál de tus citas?").
+   */
+  questionMessageId?: string | null;
   now?: Date;
 }): Promise<void> {
   const db = getDb();
   const now = input.now ?? new Date();
   const values = {
-    id: newId("pendingAgendaAction"),
+    /**
+     * OJO — la columna `id` de `pending_agenda_action` guarda el ID DEL MENSAJE
+     * de la pregunta de confirmación (`message.id`), no un id propio de la
+     * fila: así la pendiente queda ligada a su pregunta sin cambiar el esquema.
+     * `consumePendingAction` lo compara con el último mensaje saliente. Nada más
+     * debe usar este valor como id de fila (la fila se busca siempre por
+     * conversación). Sin pregunta, el id es uno propio (`paa_…`) que no
+     * coincide con ningún mensaje: esa pendiente nunca es ejecutable.
+     *
+     * Deuda técnica (docs/agenda-confirmacion-pendientes.md): mover esto a una
+     * columna `question_message_id` en una migración futura que requiere
+     * autorización.
+     */
+    id: input.questionMessageId ?? newId("pendingAgendaAction"),
     organizationId: input.organizationId,
     conversationId: input.conversationId,
     action: input.action,
@@ -61,6 +86,7 @@ export async function setPendingAction(input: {
     .onConflictDoUpdate({
       target: schema.pendingAgendaAction.conversationId,
       set: {
+        id: values.id,
         action: values.action,
         bookingId: values.bookingId,
         startUtc: values.startUtc,
@@ -135,10 +161,17 @@ async function readPendingAction(
 }
 
 /**
- * Toma la acción pendiente VIGENTE y la borra en una sola sentencia
+ * Toma la acción pendiente EJECUTABLE y la borra en una sola sentencia
  * (`DELETE … RETURNING`). Es la única puerta para ejecutar una acción de
- * agenda: dos confirmaciones concurrentes no pueden recibir la misma fila, y
- * una fila expirada no se devuelve.
+ * agenda: dos confirmaciones concurrentes no pueden recibir la misma fila.
+ *
+ * Ejecutable = todo a la vez, dentro del mismo WHERE:
+ * - vigente (`expires_at > ahora`);
+ * - ligada al ÚLTIMO mensaje saliente de la conversación, sea del agente o de
+ *   un operador (su id es el de la pregunta que la creó), sin ningún otro
+ *   saliente posterior ni con el mismo instante;
+ * - sin handoff activo ni reinicio de sesión desde que se creó;
+ * - cancelar y reprogramar guardan la cita exacta (`booking_id`).
  */
 export async function consumePendingAction(
   organizationId: string,
@@ -153,14 +186,32 @@ export async function consumePendingAction(
         schema.pendingAgendaAction.organizationId,
         organizationId,
         eq(schema.pendingAgendaAction.conversationId, conversationId),
-        gt(schema.pendingAgendaAction.expiresAt, now)
+        gt(schema.pendingAgendaAction.expiresAt, now),
+        // La pregunta (cuyo id ES el id de la pendiente) existe y ningún otro
+        // saliente es posterior O SIMULTÁNEO: con dos mensajes en el mismo
+        // instante no se sabe cuál vio el cliente al final, y ante la duda no
+        // se ejecuta.
+        sql`exists (select 1 from ${schema.message} as q where q."id" = ${schema.pendingAgendaAction.id} and q."organization_id" = ${organizationId} and q."conversation_id" = ${conversationId} and q."direction" = 'out' and not exists (select 1 from ${schema.message} as o where o."organization_id" = ${organizationId} and o."conversation_id" = ${conversationId} and o."direction" = 'out' and o."id" <> q."id" and o."created_at" >= q."created_at"))`,
+        sql`exists (select 1 from ${schema.conversation} where ${schema.conversation.organizationId} = ${organizationId} and ${schema.conversation.id} = ${conversationId} and ${schema.conversation.handoffAt} is null and (${schema.conversation.aiContextResetAt} is null or ${schema.conversation.aiContextResetAt} < ${schema.pendingAgendaAction.createdAt}))`,
+        sql`(${schema.pendingAgendaAction.action} = 'book' or ${schema.pendingAgendaAction.bookingId} is not null)`
       )
     )
     .returning();
 
-  const row = rows[0];
-  // El WHERE ya excluye lo expirado; se comprueba otra vez por defensa.
+  return executablePending(rows[0], now);
+}
+
+/**
+ * La fila que devolvió el DELETE, solo si de verdad es ejecutable. El WHERE ya
+ * excluye lo expirado y lo que no trae su cita; se comprueba otra vez por
+ * defensa (y las pruebas del pipeline la ejercitan sin base de datos).
+ */
+export function executablePending(
+  row: typeof schema.pendingAgendaAction.$inferSelect | undefined,
+  now: Date
+): PendingAgendaAction | null {
   if (!row || row.expiresAt.getTime() <= now.getTime()) return null;
+  if (row.action !== "book" && !row.bookingId) return null;
   return {
     id: row.id,
     action: row.action as AgendaPendingKind,

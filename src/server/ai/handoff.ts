@@ -261,9 +261,20 @@ export function toneAwareFixedReply(
     .replace("elige uno de estos horarios", "elija uno de estos horarios")
     .replace("Para cambiar tu cita,", "Para cambiar su cita,")
     .replace("necesito tu confirmación:", "necesito su confirmación:")
-    .replace("¿confirmas que quieres cancelar tu cita?", "¿confirma que quiere cancelar su cita?")
+    .replace("¿confirmas que quieres cancelar tu cita", "¿confirma que quiere cancelar su cita")
     .replace("¿Confirmas que mueva tu cita a", "¿Confirma que mueva su cita a")
-    .replace("Responde «sí»", "Responda «sí»");
+    .replace("Tu cita actual:", "Su cita actual:")
+    .replace("Responde «sí»", "Responda «sí»")
+    .replace("citas activas a tu nombre:", "citas activas a su nombre:")
+    .replace("¿Cuál quieres cancelar?", "¿Cuál quiere cancelar?")
+    .replace("¿Cuál quieres mover a", "¿Cuál quiere mover a")
+    .replace("Responde con el número o la fecha.", "Responda con el número o la fecha.")
+    .replace("¿Con quién prefieres?", "¿Con quién prefiere?")
+    .replace("Listo, cancelé tu cita:", "Listo, cancelé su cita:")
+    .replace("No pude cancelar tu cita automáticamente. Un asesor continuará contigo.", "No pude cancelar su cita automáticamente. Un asesor continuará con usted.")
+    .replace("¡Listo! Reprogramé tu cita para", "¡Listo! Reprogramé su cita para")
+    .replace("ya no sirve para mover tu cita.", "ya no sirve para mover su cita.")
+    .replace("Si quieres, puedo mostrarte horarios", "Si quiere, puedo mostrarle horarios");
 }
 
 /**

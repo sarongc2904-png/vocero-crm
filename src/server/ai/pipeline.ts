@@ -1,4 +1,4 @@
-import { asc, desc, eq, gte, isNull } from "drizzle-orm";
+import { asc, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
@@ -53,17 +53,26 @@ import {
 import {
   BookingError,
   cancelBookingForConversation,
+  listActiveBookingsForConversation,
   rescheduleForConversation,
 } from "@/server/agenda/service";
+import {
+  bookingChoiceList,
+  matchesRescheduleIntent,
+  resolveBookingReference,
+  type ActiveBookingRef,
+} from "@/server/agenda/booking-reference";
 import {
   currentOffers,
   findOffered,
   getOffers,
   mapaDeHuecosParaModelo,
+  type OfferedSlot,
 } from "@/server/agenda/offers";
 import { resolveExpandRequest, type ExpandWindow } from "@/server/agenda/expand";
 import {
   classifyConfirmation,
+  confirmsAgendaAction,
   hasBookingConfirmation,
   isBareTimeSelection,
   resolveOfferedTimeSelection,
@@ -74,7 +83,6 @@ import {
   consumePendingAction,
   getPendingAction,
   setPendingAction,
-  type PendingAgendaAction,
 } from "@/server/agenda/pending-actions";
 import {
   advanceOfferCursor,
@@ -298,6 +306,16 @@ async function runAgentTurnCore(
           message.createdAt < lastInbound.createdAt &&
           Boolean(message.text?.trim())
       )?.text ?? null;
+  // El último mensaje saliente antes de este entrante, sea del agente o de un
+  // operador: una pendiente solo responde a la pregunta que sigue siendo ésta.
+  const lastOutboundBeforeInbound =
+    [...history]
+      .reverse()
+      .find(
+        (message) =>
+          message.direction === "out" && message.createdAt < lastInbound.createdAt
+      ) ?? null;
+  const agendaAsk: AgendaAsk = { conversation, tone: profile.tone };
 
   // Pedir una persona y aceptar con un "sí" la oferta explícita de asesor que
   // el agente acaba de hacer son la misma petición del cliente.
@@ -347,41 +365,39 @@ async function runAgentTurnCore(
   }
 
   /**
-   * IA-W2 — Una confirmación explícita SOLO ejecuta la acción pendiente VIGENTE
-   * de esta conversación (tabla `pending_agenda_action`, con expiración y
-   * tenant). Sin fila vigente no se ejecuta nada: el estado es del backend, no
-   * del modelo, y una confirmación vieja nunca puede disparar una acción nueva.
+   * IA-W2 — Una confirmación explícita SOLO ejecuta la acción pendiente
+   * EJECUTABLE de esta conversación (tabla `pending_agenda_action`). El estado
+   * es del backend, no del modelo: una confirmación vieja nunca puede disparar
+   * una acción nueva.
    *
    * Este bloque es el ÚNICO que crea, mueve o cancela una cita desde la
    * conversación. La acción se toma con `consumePendingAction` (DELETE …
-   * RETURNING): dos "sí" concurrentes no la ejecutan dos veces.
+   * RETURNING), que en la misma sentencia exige que siga vigente, que esté
+   * ligada al ÚLTIMO mensaje saliente (la pregunta que la creó: si después
+   * escribió un operador o el agente habló de otra cosa, el "sí" ya no
+   * contesta a esa pregunta), que no haya habido handoff ni reinicio de sesión
+   * y que cancelar o reprogramar traiga su cita exacta. Dos "sí" concurrentes
+   * no la ejecutan dos veces.
    *
-   * Cualquier otro mensaje descarta la acción pendiente (cambio de tema, otra
-   * hora, negativa) y sigue su flujo normal. Ante la duda ("sí, ¿y cuánto
-   * cuesta?") se repite la pregunta UNA vez antes de descartarla.
+   * Cualquier otro mensaje la descarta (cambio de tema, otra hora, negativa,
+   * duda, un audio, una imagen, un sticker) y sigue su flujo normal: si el
+   * cliente preguntó algo ("sí, ¿y cuánto cuesta?"), se le responde.
+   * Cancelar y reprogramar exigen un "sí" claro: "ok", "gracias" o 👍 no bastan.
    */
-  const confirmation =
-    agendaEnabled() && inboundText ? classifyConfirmation(inboundText) : null;
-  if (confirmation && confirmation !== "confirm") {
-    const repeated = lastAgentTextBeforeInbound?.startsWith(CONFIRMATION_REPEAT_PREFIX);
-    if (confirmation === "unclear" && !repeated) {
-      const pending = await getPendingAction(organizationId, conversationId);
-      if (pending) {
-        const { timezone } = await getSettings(organizationId);
-        await deliverReply(
-          conversation,
-          toneAwareFixedReply(pendingConfirmationQuestion(pending, timezone), profile.tone)
-        );
-        return;
-      }
-    }
+  if (agendaEnabled() && !inboundText) {
     await clearPendingAction(organizationId, conversationId);
   }
+  const confirmation =
+    agendaEnabled() && inboundText ? classifyConfirmation(inboundText) : null;
   if (confirmation === "confirm") {
     const pending = await consumePendingAction(organizationId, conversationId);
-    if (pending) {
-      if (pending.action === "cancel") {
-        await handleCancellation(conversation);
+    if (!pending) {
+      // No hay pendiente, venció o ya no responde a la última pregunta: se
+      // descarta y el "sí" sigue el flujo normal sin habilitar nada.
+      await clearPendingAction(organizationId, conversationId);
+    } else if (confirmsAgendaAction(inboundText!, pending.action)) {
+      if (pending.action === "cancel" && pending.bookingId) {
+        await handleCancellation(conversation, pending.bookingId, profile.tone);
         return;
       }
 
@@ -412,12 +428,13 @@ async function runAgentTurnCore(
         return;
       }
 
-      if (pending.action === "reschedule" && pending.startUtc) {
+      if (pending.action === "reschedule" && pending.startUtc && pending.bookingId) {
         try {
           const moved = await rescheduleForConversation({
             organizationId,
             conversationId,
             startUtc: pending.startUtc,
+            bookingId: pending.bookingId,
           });
           await recordAgentAction({
             action: "reschedule_slot",
@@ -427,9 +444,12 @@ async function runAgentTurnCore(
           });
           await deliverReply(
             conversation,
-            moved.meetingLink
-              ? `¡Listo! Reprogramé tu cita para ${moved.label}.\nEnlace: ${moved.meetingLink}`
-              : `¡Listo! Reprogramé tu cita para ${moved.label}.`
+            toneAwareFixedReply(
+              moved.meetingLink
+                ? `¡Listo! Reprogramé tu cita para ${moved.label}.\nEnlace: ${moved.meetingLink}`
+                : `¡Listo! Reprogramé tu cita para ${moved.label}.`,
+              profile.tone
+            )
           );
         } catch (err) {
           if (err instanceof BookingError && err.code === "slot_not_offered") {
@@ -446,7 +466,10 @@ async function runAgentTurnCore(
           } else if (err instanceof BookingError && err.code === "not_found") {
             await deliverReply(
               conversation,
-              "No encontré una cita activa para reprogramar."
+              toneAwareFixedReply(
+                "No encontré una cita activa para reprogramar.",
+                profile.tone
+              )
             );
           } else {
             throw err;
@@ -455,24 +478,52 @@ async function runAgentTurnCore(
         return;
       }
     }
-    // Sin pending vigente la confirmación no habilita nada: sigue el flujo
-    // normal y el modelo responde como cualquier otro turno.
+    // "ok", "gracias" o 👍 ante una cancelación o reprogramación: la pendiente
+    // ya se consumió sin ejecutarse y el turno sigue normal.
+  } else if (confirmation) {
+    /**
+     * "¿Cuál de tus citas?": si el agente acaba de listar las citas, la
+     * respuesta ("la segunda", "la del lunes") elige una y se pide la
+     * confirmación nombrándola. Cualquier otra cosa descarta la pendiente.
+     */
+    const choice = isBookingChoiceQuestion(lastOutboundBeforeInbound?.text)
+      ? await getPendingAction(organizationId, conversationId)
+      : null;
+    if (
+      choice &&
+      choice.action !== "book" &&
+      !choice.bookingId &&
+      choice.id === lastOutboundBeforeInbound?.id
+    ) {
+      const active = await listActiveBookingsForConversation({
+        organizationId,
+        conversationId,
+      });
+      const chosen = resolveBookingReference(inboundText!, active, { listed: true });
+      if (chosen && choice.action === "cancel") {
+        await confirmCancellation(agendaAsk, chosen);
+        return;
+      }
+      if (chosen && choice.action === "reschedule" && choice.startUtc) {
+        await confirmReschedule(agendaAsk, chosen, {
+          startUtc: choice.startUtc,
+          serviceId: choice.serviceId,
+          professionalId: choice.professionalId,
+        });
+        return;
+      }
+    }
+    await clearPendingAction(organizationId, conversationId);
   }
 
   /**
-   * IA-1 — Una ORDEN de cancelar NO cancela: abre confirmación pendiente.
-   * `matchesCancellationIntent` ya descarta preguntas e hipótesis, así que
-   * "¿Puedo cancelar mi cita?" cae al flujo normal (informativo) y nunca
-   * llega aquí.
+   * IA-1 — Una ORDEN de cancelar NO cancela: abre confirmación pendiente
+   * nombrando la cita (y, con varias, pregunta cuál). `matchesCancellationIntent`
+   * ya descarta preguntas e hipótesis, así que "¿Puedo cancelar mi cita?" cae
+   * al flujo normal (informativo) y nunca llega aquí.
    */
   if (agendaEnabled() && inboundText && matchesCancellationIntent(inboundText)) {
-    await setPendingAction({
-      organizationId,
-      conversationId,
-      action: "cancel",
-    });
-    await recordAgentAction({ action: "set_pending_cancel" });
-    await deliverReply(conversation, CANCEL_CONFIRMATION_QUESTION);
+    await askToCancel(agendaAsk, inboundText);
     return;
   }
 
@@ -791,7 +842,17 @@ async function runAgentTurnCore(
       });
 
       if (resolution.kind === "match") {
-        const chosen = findOffered(ofertas, resolution.offer.startUtc);
+        const picked = await pickOffer(
+          organizationId,
+          ofertas,
+          resolution.offer.startUtc,
+          lastInbound.text
+        );
+        if (picked.kind === "ambiguous") {
+          await askProfessional(agendaAsk, picked.options, agendaContext.settings.timezone);
+          return;
+        }
+        const chosen = picked.offer;
         const hasCompleteProfessionalContext = Boolean(
           chosen?.serviceId && chosen.professionalId
         );
@@ -814,27 +875,26 @@ async function runAgentTurnCore(
             : null;
 
         if (chosen && stillAvailable) {
-          await setPendingAction({
-            organizationId,
-            conversationId,
-            action: "book",
-            startUtc: chosen.startUtc,
-            serviceId: chosen.serviceId,
-            professionalId: chosen.professionalId,
-          });
-          await recordAgentAction({
-            action: "set_pending_book",
-            payload: { startUtc: chosen.startUtc },
-          });
-          await deliverReply(
-            conversation,
-            toneAwareFixedReply(
-              `Perfecto. Tengo ${selectedOfferConfirmationLabel(
-                chosen.startUtc,
-                agendaContext.settings.timezone
-              )} disponible. ¿Quieres que agende tu cita?`,
-              profile.tone
-            )
+          /**
+           * R1 — Elegir una hora mientras se habla de CAMBIAR una cita es
+           * reprogramar, no agendar otra: la pendiente es `reschedule` sobre
+           * la cita existente y al confirmar se mueve (no se crea una segunda).
+           */
+          const reschedulingTexts = [lastInbound.text, ...[...previousInboundTexts].reverse()];
+          const rescheduling = [...reschedulingTexts, lastOutboundBeforeInbound?.text].some(
+            (text) => Boolean(text && matchesRescheduleIntent(text))
+          );
+          const active = rescheduling
+            ? await listActiveBookingsForConversation({ organizationId, conversationId })
+            : [];
+          if (active.length > 0) {
+            await askToReschedule(agendaAsk, chosen, active, reschedulingTexts);
+            return;
+          }
+          await askToBook(
+            agendaAsk,
+            chosen,
+            selectedOfferConfirmationLabel(chosen.startUtc, agendaContext.settings.timezone)
           );
           return;
         }
@@ -980,18 +1040,7 @@ async function runAgentTurnCore(
   // Cancelar también se confirma: el modelo solo deja la acción pendiente y
   // pregunta; la ejecuta el bloque que consume la pendiente tras un "sí".
   if (action.action === "cancel_booking") {
-    if (agenda) {
-      await setPendingAction({
-        organizationId,
-        conversationId,
-        action: "cancel",
-      });
-      await recordAgentAction({ action: "set_pending_cancel" });
-      await deliverReply(
-        conversation,
-        toneAwareFixedReply(CANCEL_CONFIRMATION_QUESTION, profile.tone)
-      );
-    }
+    if (agenda) await askToCancel(agendaAsk, inboundText ?? "");
     return;
   }
 
@@ -1138,36 +1187,40 @@ async function runAgentTurnCore(
            * pendiente tras un "sí" explícito. Si no está, se vuelve a ofrecer.
            */
           const isBook = action.action === "book_slot";
-          const chosen = findOffered(ofertas, action.startUtc);
+          const picked = await pickOffer(organizationId, ofertas, action.startUtc, inboundText);
+          if (picked.kind === "ambiguous") {
+            await askProfessional(
+              agendaAsk,
+              picked.options,
+              agendaContext?.settings.timezone ?? "America/Mexico_City"
+            );
+            return;
+          }
+          const chosen = picked.offer;
+          if (chosen && isBook) {
+            await askToBook(agendaAsk, chosen, chosen.label);
+            return;
+          }
           if (chosen) {
-            const slot = {
-              startUtc: chosen.startUtc,
-              serviceId: chosen.serviceId,
-              professionalId: chosen.professionalId,
-            };
-            await setPendingAction(
-              isBook
-                ? { organizationId, conversationId, action: "book", ...slot }
-                : {
-                    organizationId,
-                    conversationId,
-                    action: "reschedule",
-                    ...slot,
-                  }
-            );
-            await recordAgentAction({
-              action: isBook ? "set_pending_book" : "set_pending_reschedule",
-              payload: { startUtc: chosen.startUtc },
+            const active = await listActiveBookingsForConversation({
+              organizationId,
+              conversationId,
             });
-            await deliverReply(
-              conversation,
-              toneAwareFixedReply(
-                isBook
-                  ? `Perfecto. Tengo ${chosen.label} disponible. ¿Quieres que agende tu cita?`
-                  : `Tengo ${chosen.label}. ¿Confirmas que mueva tu cita a ese horario?`,
-                profile.tone
-              )
-            );
+            if (active.length === 0) {
+              await clearPendingAction(organizationId, conversationId);
+              await deliverReply(
+                conversation,
+                toneAwareFixedReply(
+                  "No encontré una cita activa para reprogramar. Si quieres, puedo mostrarte horarios disponibles para una nueva cita.",
+                  profile.tone
+                )
+              );
+              return;
+            }
+            await askToReschedule(agendaAsk, chosen, active, [
+              inboundText,
+              ...[...previousInboundTexts].reverse(),
+            ]);
             return;
           }
           await recordAgentAction({
@@ -1368,42 +1421,284 @@ function isBareGreeting(text: string): boolean {
 
 type Conversation = typeof schema.conversation.$inferSelect;
 
-const CANCEL_CONFIRMATION_QUESTION =
-  "Antes de cancelar necesito tu confirmación: ¿confirmas que quieres cancelar tu cita? Responde «sí» y la cancelo.";
+/** Lo que necesita el agente para preguntar y dejar una pendiente. */
+type AgendaAsk = { conversation: Conversation; tone: string | null };
 
-/** Marca la pregunta repetida: ante una segunda duda la pendiente se descarta. */
-const CONFIRMATION_REPEAT_PREFIX = "Solo para confirmar:";
+type SlotChoice = {
+  startUtc: string;
+  serviceId?: string | null;
+  professionalId?: string | null;
+};
 
-/** La pregunta de confirmación de una acción pendiente, repetida una vez. */
-function pendingConfirmationQuestion(
-  pending: PendingAgendaAction,
-  timezone: string
-): string {
-  if (pending.action === "cancel") {
-    return `${CONFIRMATION_REPEAT_PREFIX} ¿confirmas que quieres cancelar tu cita? Responde «sí» y la cancelo.`;
-  }
-  const when = pending.startUtc
-    ? selectedOfferConfirmationLabel(pending.startUtc, timezone)
-    : "ese horario";
-  return pending.action === "reschedule"
-    ? `${CONFIRMATION_REPEAT_PREFIX} ¿Confirmas que mueva tu cita a ${when}? Responde «sí» para confirmar.`
-    : `${CONFIRMATION_REPEAT_PREFIX} tengo ${when} disponible. ¿Quieres que agende tu cita? Responde «sí» para confirmar.`;
+/** La pregunta "¿cuál de tus citas?" (tú y usted). */
+const BOOKING_CHOICE_MARK = /citas activas a (?:tu|su) nombre:/;
+
+function isBookingChoiceQuestion(text: string | null | undefined): boolean {
+  return Boolean(text && BOOKING_CHOICE_MARK.test(text));
 }
 
-async function handleCancellation(conversation: Conversation): Promise<void> {
+/**
+ * Entrega la pregunta y deja la pendiente ligada a ESE mensaje: solo será
+ * ejecutable mientras esta pregunta siga siendo el último mensaje saliente. Si
+ * no se pudo entregar (ventana cerrada), no queda nada que confirmar.
+ */
+async function askAndHold(
+  ctx: AgendaAsk,
+  question: string,
+  pending: Omit<
+    Parameters<typeof setPendingAction>[0],
+    "organizationId" | "conversationId" | "questionMessageId"
+  >
+): Promise<boolean> {
+  const { organizationId, id: conversationId } = ctx.conversation;
+  const questionMessageId = await deliverReply(
+    ctx.conversation,
+    toneAwareFixedReply(question, ctx.tone)
+  );
+  if (!questionMessageId) {
+    await clearPendingAction(organizationId, conversationId);
+    return false;
+  }
+  await setPendingAction({
+    organizationId,
+    conversationId,
+    questionMessageId,
+    ...pending,
+  });
+  return true;
+}
+
+async function slotLabel(organizationId: string, startUtc: string): Promise<string> {
+  const { timezone } = await getSettings(organizationId);
+  return selectedOfferConfirmationLabel(startUtc, timezone);
+}
+
+/** Propone una reserva: queda pendiente `book` con el servicio y el profesional elegidos. */
+async function askToBook(ctx: AgendaAsk, chosen: OfferedSlot, label: string): Promise<void> {
+  const held = await askAndHold(
+    ctx,
+    `Perfecto. Tengo ${label} disponible. ¿Quieres que agende tu cita?`,
+    {
+      action: "book",
+      startUtc: chosen.startUtc,
+      serviceId: chosen.serviceId,
+      professionalId: chosen.professionalId,
+    }
+  );
+  if (held) {
+    await recordAgentAction({
+      action: "set_pending_book",
+      payload: { startUtc: chosen.startUtc },
+    });
+  }
+}
+
+/**
+ * Pide confirmar la cancelación nombrando la cita. Con varias citas activas
+ * y un mensaje que no dice cuál, las lista y pregunta: la pendiente queda sin
+ * cita (nunca ejecutable) hasta que el cliente elija.
+ */
+async function askToCancel(ctx: AgendaAsk, text: string): Promise<void> {
+  const { organizationId, id: conversationId } = ctx.conversation;
+  const active = await listActiveBookingsForConversation({ organizationId, conversationId });
+  if (active.length === 0) {
+    await clearPendingAction(organizationId, conversationId);
+    await deliverReply(
+      ctx.conversation,
+      toneAwareFixedReply("No encontré una cita activa para cancelar.", ctx.tone)
+    );
+    return;
+  }
+  const target = active.length === 1 ? active[0]! : resolveBookingReference(text, active);
+  if (target) {
+    await confirmCancellation(ctx, target);
+    return;
+  }
+  const held = await askAndHold(
+    ctx,
+    `Veo ${active.length} citas activas a tu nombre:\n${bookingChoiceList(active)}\n¿Cuál quieres cancelar? Responde con el número o la fecha.`,
+    { action: "cancel" }
+  );
+  if (held) {
+    await recordAgentAction({
+      action: "set_pending_cancel",
+      payload: { awaitingChoice: true, bookings: active.length },
+    });
+  }
+}
+
+async function confirmCancellation(ctx: AgendaAsk, target: ActiveBookingRef): Promise<void> {
+  const held = await askAndHold(
+    ctx,
+    `Antes de cancelar necesito tu confirmación: ¿confirmas que quieres cancelar tu cita: ${target.label}? Responde «sí» y la cancelo.`,
+    { action: "cancel", bookingId: target.id }
+  );
+  if (held) {
+    await recordAgentAction({
+      action: "set_pending_cancel",
+      entityType: "booking",
+      entityId: target.id,
+    });
+  }
+}
+
+/**
+ * Pide confirmar que se mueva UNA cita a la hora elegida, nombrando la hora
+ * vieja y la nueva. Con varias citas, la elige por lo que dijo el cliente
+ * (este mensaje o los anteriores); si no se distingue, las lista y pregunta.
+ */
+async function askToReschedule(
+  ctx: AgendaAsk,
+  slot: SlotChoice,
+  active: ActiveBookingRef[],
+  texts: (string | null | undefined)[]
+): Promise<void> {
+  const target =
+    active.length === 1
+      ? active[0]!
+      : texts
+          .map((text) => (text ? resolveBookingReference(text, active) : null))
+          .find((found): found is ActiveBookingRef => found !== null) ?? null;
+  if (target) {
+    await confirmReschedule(ctx, target, slot);
+    return;
+  }
+  const newLabel = await slotLabel(ctx.conversation.organizationId, slot.startUtc);
+  const held = await askAndHold(
+    ctx,
+    `Veo ${active.length} citas activas a tu nombre:\n${bookingChoiceList(active)}\n¿Cuál quieres mover a ${newLabel}? Responde con el número o la fecha.`,
+    {
+      action: "reschedule",
+      startUtc: slot.startUtc,
+      serviceId: slot.serviceId,
+      professionalId: slot.professionalId,
+    }
+  );
+  if (held) {
+    await recordAgentAction({
+      action: "set_pending_reschedule",
+      payload: { awaitingChoice: true, startUtc: slot.startUtc },
+    });
+  }
+}
+
+async function confirmReschedule(
+  ctx: AgendaAsk,
+  target: ActiveBookingRef,
+  slot: SlotChoice
+): Promise<void> {
+  const newLabel = await slotLabel(ctx.conversation.organizationId, slot.startUtc);
+  const held = await askAndHold(
+    ctx,
+    `Tu cita actual: ${target.label}. Tengo ${newLabel}. ¿Confirmas que mueva tu cita a ese horario?`,
+    {
+      action: "reschedule",
+      bookingId: target.id,
+      startUtc: slot.startUtc,
+      serviceId: slot.serviceId,
+      professionalId: slot.professionalId,
+    }
+  );
+  if (held) {
+    await recordAgentAction({
+      action: "set_pending_reschedule",
+      entityType: "booking",
+      entityId: target.id,
+      payload: { startUtc: slot.startUtc },
+    });
+  }
+}
+
+type OfferPick =
+  | { kind: "one"; offer: OfferedSlot | null }
+  | { kind: "ambiguous"; options: { offer: OfferedSlot; name: string }[] };
+
+function normalizeName(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+/**
+ * La oferta de ese instante. Si a la misma hora hay ofertas con distinto
+ * profesional, se elige la del profesional que el cliente nombró; si no nombró
+ * a ninguno, es ambigua y se le pregunta (nunca se toma la primera).
+ */
+async function pickOffer(
+  organizationId: string,
+  offers: OfferedSlot[],
+  startUtc: string,
+  text: string | null
+): Promise<OfferPick> {
+  const instant = Date.parse(startUtc);
+  const same = offers.filter((offer) => Date.parse(offer.startUtc) === instant);
+  const professionalIds = [
+    ...new Set(same.map((offer) => offer.professionalId).filter((id): id is string => Boolean(id))),
+  ];
+  if (professionalIds.length <= 1) {
+    return { kind: "one", offer: findOffered(offers, startUtc) };
+  }
+  const rows = await getDb()
+    .select({ id: schema.professional.id, name: schema.professional.name })
+    .from(schema.professional)
+    .where(
+      scoped(
+        schema.professional.organizationId,
+        organizationId,
+        inArray(schema.professional.id, professionalIds)
+      )
+    );
+  const options = same.flatMap((offer) => {
+    const row = rows.find((candidate) => candidate.id === offer.professionalId);
+    return row ? [{ offer, name: row.name }] : [];
+  });
+  const said = normalizeName(text ?? "");
+  const mentioned = options.filter((option) => {
+    const name = normalizeName(option.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|[^a-z0-9ñ])${name}(?:$|[^a-z0-9ñ])`).test(said);
+  });
+  if (mentioned.length === 1) return { kind: "one", offer: mentioned[0]!.offer };
+  return { kind: "ambiguous", options };
+}
+
+/** Dos profesionales a la misma hora: se pregunta con quién, sin dejar pendiente. */
+async function askProfessional(
+  ctx: AgendaAsk,
+  options: { offer: OfferedSlot; name: string }[],
+  timezone: string
+): Promise<void> {
+  const when = selectedOfferConfirmationLabel(options[0]!.offer.startUtc, timezone);
+  await clearPendingAction(ctx.conversation.organizationId, ctx.conversation.id);
+  await deliverReply(
+    ctx.conversation,
+    toneAwareFixedReply(
+      `Tengo ${when} con:\n${options.map((option) => `• ${option.name}`).join("\n")}\n¿Con quién prefieres?`,
+      ctx.tone
+    )
+  );
+}
+
+/** Cancela ESA cita (la de la pendiente): si ya no está activa, no toca otra. */
+async function handleCancellation(
+  conversation: Conversation,
+  bookingId: string,
+  tone: string | null
+): Promise<void> {
   try {
     const cancelled = await cancelBookingForConversation({
       organizationId: conversation.organizationId,
       conversationId: conversation.id,
+      bookingId,
     });
     await recordAgentAction({
       action: "cancel_booking",
-      entityType: "conversation",
-      entityId: conversation.id,
+      entityType: "booking",
+      entityId: cancelled.bookingId,
     });
     await deliverReply(
       conversation,
-      `Listo, cancelé tu cita: ${cancelled.label}.`
+      toneAwareFixedReply(`Listo, cancelé tu cita: ${cancelled.label}.`, tone)
     );
   } catch (err) {
     if (err instanceof BookingError && err.code === "not_found") {
@@ -1411,13 +1706,13 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
         action: "cancel_booking",
         success: false,
         status: "rejected",
-        entityType: "conversation",
-        entityId: conversation.id,
+        entityType: "booking",
+        entityId: bookingId,
         payload: { reason: err.code },
       });
       await deliverReply(
         conversation,
-        "No encontré una cita activa para cancelar."
+        toneAwareFixedReply("No encontré una cita activa para cancelar.", tone)
       );
       return;
     }
@@ -1425,8 +1720,8 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
       action: "cancel_booking",
       success: false,
       status: "failed",
-      entityType: "conversation",
-      entityId: conversation.id,
+      entityType: "booking",
+      entityId: bookingId,
       payload: { error: String(err) },
     });
     console.error(
@@ -1440,7 +1735,10 @@ async function handleCancellation(conversation: Conversation): Promise<void> {
     if (claimed) {
       await deliverReply(
         conversation,
-        "No pude cancelar tu cita automáticamente. Un asesor continuará contigo."
+        toneAwareFixedReply(
+          "No pude cancelar tu cita automáticamente. Un asesor continuará contigo.",
+          tone
+        )
       );
     }
   }
