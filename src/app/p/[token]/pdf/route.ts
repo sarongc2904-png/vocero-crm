@@ -25,6 +25,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
 
     const bytes = await renderQuotePdf({
       business: { name: quote.business.name, logo },
+      draft: quote.status === "borrador",
       folio: quote.folio,
       issuedAt: new Date(quote.issuedAt),
       validUntil: new Date(quote.validUntil),
@@ -46,7 +47,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
       headers: {
         ...PUBLIC_HEADERS,
         "content-type": "application/pdf",
-        "content-disposition": `inline; filename="Cotizacion-${quote.folio}.pdf"`,
+        "content-disposition": `inline; filename="Cotizacion-${quote.folio}${quote.status === "borrador" ? "-BORRADOR" : ""}.pdf"`,
       },
     });
   } catch (err) {

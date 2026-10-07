@@ -56,6 +56,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
         return publicNotFound();
       case "recorded":
         return publicJson({ status: result.status });
+      case "not_open":
+        return publicJson(
+          { error: { code: "not_open", message: "Esta cotización aún no está lista para responder" } },
+          409
+        );
       case "already":
         return publicJson(
           { error: { code: "already_responded", message: "Esta cotización ya no espera respuesta" }, status: result.status },

@@ -1,4 +1,4 @@
-import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import { degrees, PDFDocument, rgb, StandardFonts, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { formatMoneyCents } from "@/lib/money";
 import { QUANTITY_SCALE } from "@/server/quotes/totals";
 
@@ -29,6 +29,8 @@ export type QuotePdfInput = {
   totalCents: number;
   items: { description: string; quantityMilli: number; unitPriceCents: number; lineTotalCents: number }[];
   timeZone?: string;
+  /** Vista previa de un borrador: marca de agua "BORRADOR" en cada página. */
+  draft?: boolean;
 };
 
 const PAGE_W = 612; // Carta
@@ -49,6 +51,7 @@ const COLS = {
 const INK = rgb(0.1, 0.1, 0.12);
 const MUTED = rgb(0.42, 0.42, 0.46);
 const RULE = rgb(0.85, 0.85, 0.88);
+const DRAFT_RED = rgb(0.75, 0.1, 0.1);
 
 /**
  * Deja solo lo que Helvetica estándar puede dibujar. Letras con diacríticos
@@ -260,6 +263,24 @@ export async function renderQuotePdf(input: QuotePdfInput): Promise<Uint8Array> 
       font,
       color: MUTED,
     });
+    if (input.draft) {
+      // Marca de agua en TODAS las páginas: una hoja suelta impresa de un
+      // borrador tampoco debe pasar por cotización válida.
+      const mark = "BORRADOR";
+      const size = 96;
+      const w = bold.widthOfTextAtSize(mark, size);
+      p.drawText(mark, {
+        x: PAGE_W / 2 - (w / 2) * Math.SQRT1_2 + (size / 2) * Math.SQRT1_2,
+        y: PAGE_H / 2 - (w / 2) * Math.SQRT1_2 - (size / 2) * Math.SQRT1_2,
+        size,
+        font: bold,
+        color: DRAFT_RED,
+        opacity: 0.18,
+        rotate: degrees(45),
+      });
+      const notice = "BORRADOR · Vista previa, no válida para aceptar";
+      p.drawText(t(notice), { x: MARGIN, y: PAGE_H - 30, size: 9, font: bold, color: DRAFT_RED });
+    }
   });
 
   return doc.save();

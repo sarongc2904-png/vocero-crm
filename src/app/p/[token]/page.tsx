@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 };
 
 const STATUS_LABEL: Record<PublicQuote["status"], string> = {
-  borrador: "Borrador",
+  borrador: "Vista previa · Borrador",
   enviada: "Esperando tu respuesta",
   aceptada: "Aceptada",
   rechazada: "Rechazada",
@@ -138,6 +138,7 @@ export default async function PublicQuotePage({ params }: { params: Promise<{ to
             <RespondPanel token={token} businessName={quote.business.name} />
           ) : (
             <p className="text-sm text-text-3">
+              {quote.status === "borrador" && "Vista previa: esta cotización aún no está lista para responder."}
               {quote.status === "aceptada" && "Esta cotización ya fue aceptada."}
               {quote.status === "rechazada" && "Esta cotización fue rechazada."}
               {quote.status === "expirada" && "La vigencia de esta cotización terminó. Pide una actualizada al negocio."}

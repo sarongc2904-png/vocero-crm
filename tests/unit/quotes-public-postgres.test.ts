@@ -29,7 +29,8 @@ vi.hoisted(() => {
   process.env.MEDIA_DIR ??= "./.tmp-test-media";
 });
 
-type Tenant = { org: string; name: string; contact: string; conv: string; svc: string };
+type Tenant = { org: string; name: string; contact: string; conv: string; svc: string; user: string };
+const createdUsers: string[] = [];
 
 let seq = 0;
 const created: string[] = [];
@@ -51,8 +52,11 @@ async function seedTenant(label: string): Promise<Tenant> {
     contact: `ct_qp${tag}`,
     conv: `cv_qp${tag}`,
     svc: `svc_qp${tag}`,
+    user: `usr_qp${tag}`,
   };
   created.push(t.org);
+  createdUsers.push(t.user);
+  await d.insert(s.user).values({ id: t.user, name: `Operador ${label}`, email: `${t.user}@example.test` });
   await d.insert(s.organization).values({ id: t.org, name: t.name });
   await d.insert(s.contact).values({ id: t.contact, organizationId: t.org, waIdentity: `52177${tag}`, name: "Cliente", notes: "Nota previa" });
   await d.insert(s.conversation).values({ id: t.conv, organizationId: t.org, contactId: t.contact });
@@ -70,6 +74,9 @@ async function publishedQuote(t: Tenant): Promise<{ quoteId: string; token: stri
     source: "bot",
   });
   const { token } = await issueQuoteLink({ organizationId: t.org, quoteId: quote.id });
+  // Emitir el enlace ya no la envía: el operador la marca como enviada.
+  const { markQuoteSent } = await import("@/server/quotes/transitions");
+  await markQuoteSent({ organizationId: t.org, quoteId: quote.id, userId: t.user });
   return { quoteId: quote.id, token };
 }
 
@@ -124,6 +131,7 @@ describe.skipIf(!PG_URL)("cotizaciones: superficie pública (Postgres real)", ()
     if (created.length === 0) return;
     const { d, s, orm } = await db();
     await d.delete(s.organization).where(orm.inArray(s.organization.id, created));
+    if (createdUsers.length > 0) await d.delete(s.user).where(orm.inArray(s.user.id, createdUsers));
   });
 
   it("el token se muestra una vez: 43 caracteres base64url y en la base solo su SHA-256", async () => {

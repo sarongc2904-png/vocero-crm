@@ -18,6 +18,9 @@ import { QUANTITY_SCALE } from "@/server/quotes/totals";
  * una cotización cancelada dan EXACTAMENTE el mismo resultado (`null` → 404):
  * quien prueba tokens no aprende nada de la respuesta.
  *
+ * El enlace de un `borrador` es una VISTA PREVIA: muestra exactamente los
+ * mismos campos que la versión enviada, sin botones, y no acepta respuestas.
+ *
  * Lo que sale hacia afuera es `PublicQuote`: nombre del negocio, folio,
  * estado, líneas, totales y vigencia. Ningún id interno ni dato del cliente.
  */
@@ -68,8 +71,8 @@ async function resolveLink(token: string, now: Date): Promise<ResolvedLink | nul
         eq(schema.quoteLink.tokenHash, tokenHash),
         isNull(schema.quoteLink.revokedAt),
         gt(schema.quoteLink.expiresAt, now),
-        sql`${schema.quote.status} <> 'cancelada'`,
-        sql`${schema.quote.status} <> 'borrador'`
+        // Un borrador SÍ se resuelve: es la vista previa (sin botones).
+        sql`${schema.quote.status} <> 'cancelada'`
       )
     )
     .limit(1);
@@ -172,6 +175,8 @@ export type QuoteDecision = "aceptar" | "rechazar";
 export type RespondResult =
   | { outcome: "not_found" }
   | { outcome: "recorded"; status: "aceptada" | "rechazada" }
+  /** Vista previa de un borrador: todavía no se puede responder. */
+  | { outcome: "not_open" }
   | { outcome: "already"; status: QuoteStatus };
 
 export const MAX_RESPONSE_NOTE = 500;
@@ -257,6 +262,7 @@ export async function respondToQuote(input: {
       .limit(1);
     const row = current[0];
     if (!row) return { outcome: "not_found" };
+    if (row.status === "borrador") return { outcome: "not_open" };
     return { outcome: "already", status: effectiveQuoteStatus(row, now) };
   }
 
