@@ -1087,4 +1087,166 @@ describe.skipIf(!PG_URL)("guardia de confirmación con Postgres real", { timeout
       });
     });
   });
+
+  /**
+   * Revisión ff3913d (E2): la cita de la pendiente se busca dentro del mismo
+   * negocio y del contacto de la conversación. Se crea la pendiente por el
+   * flujo real y luego se le cambia la cita (fila alterada o vieja): al "sí"
+   * no se cancela ni se mueve NADA y el cliente recibe una respuesta clara.
+   */
+  describe("revisión ff3913d: la cita de la pendiente es de este contacto y negocio", () => {
+    async function foreignBooking(
+      ctx: Ctx,
+      where: "otro-contacto" | "otro-negocio",
+      startUtc: string
+    ): Promise<string> {
+      const { d, s } = await db();
+      const id = `bk_pgfx${Math.random().toString(36).slice(2, 10)}`;
+      if (where === "otro-contacto") {
+        const contact = `${ctx.contact}x`;
+        const conv = `${ctx.conv}x`;
+        await d.insert(s.contact).values({
+          id: contact,
+          organizationId: ctx.org,
+          waIdentity: `${ctx.contact}99`,
+          name: "Otro cliente",
+        } as never);
+        await d.insert(s.conversation).values({
+          id: conv,
+          organizationId: ctx.org,
+          contactId: contact,
+          isTest: true,
+          lastInboundAt: new Date(),
+        });
+        await d.insert(s.booking).values({
+          id, organizationId: ctx.org, kind: "session", status: "agendada", source: "manual",
+          contactId: contact, conversationId: conv, scheduledAt: new Date(startUtc),
+          durationMinutes: 30, timezone: TZ, isTest: true,
+        } as never);
+      } else {
+        // Otro negocio con su propio contacto. La base no deja que una cita de
+        // otro negocio apunte a este contacto (FK compuesta de tenant), así que
+        // aquí la protegen a la vez el negocio y el contacto; la forma del WHERE
+        // (cada filtro por separado) la fija booking-target-scope.test.ts.
+        const other = await seed();
+        await d.insert(s.booking).values({
+          id, organizationId: other.org, kind: "session", status: "agendada", source: "manual",
+          contactId: other.contact, conversationId: other.conv, scheduledAt: new Date(startUtc),
+          durationMinutes: 30, timezone: TZ, isTest: true,
+        } as never);
+      }
+      return id;
+    }
+
+    async function retarget(ctx: Ctx, bookingId: string) {
+      const sql = (await import("@/lib/db")).getSql();
+      await sql`update pending_agenda_action set booking_id = ${bookingId} where conversation_id = ${ctx.conv}`;
+    }
+
+    async function bookingRow(id: string) {
+      const { d, s } = await db();
+      const { eq } = await import("drizzle-orm");
+      const rows = await d
+        .select({ status: s.booking.status, at: s.booking.scheduledAt })
+        .from(s.booking)
+        .where(eq(s.booking.id, id));
+      return rows[0] ?? null;
+    }
+
+    async function rescheduleQuestion(ctx: Ctx) {
+      await showOffer(ctx, [{ startUtc: slotAt(4, "11:00"), label: "11:00" }], "quiero cambiar mi cita");
+      const question = await turn(ctx, "11:00", { action: "reschedule_slot", startUtc: slotAt(4, "11:00") });
+      expect(question.at(-1)).toMatch(/mueva tu cita/);
+      expect((await pending(ctx))?.action).toBe("reschedule");
+    }
+
+    it("otro negocio: la base ni siquiera deja guardar una pendiente con una cita de otro negocio", async () => {
+      // FK compuesta (organization_id, booking_id) → booking: una pendiente de
+      // este negocio no puede apuntar a una cita de otro. Ni el pipeline ni una
+      // fila alterada llegan al UPDATE/DELETE de la cita ajena.
+      const ctx = await seed();
+      const own = await addBooking(ctx, slotAt(3, "10:00"));
+      const foreign = await foreignBooking(ctx, "otro-negocio", slotAt(5, "12:00"));
+      await cancelQuestion(ctx);
+      await expect(retarget(ctx, foreign)).rejects.toMatchObject({ code: "23503" });
+      expect((await pending(ctx))?.bookingId).toBe(own);
+      expect((await bookingRow(foreign))?.status).toBe("agendada");
+
+      const actions = await import("@/server/agenda/pending-actions");
+      await expect(
+        actions.setPendingAction({
+          organizationId: ctx.org,
+          conversationId: ctx.conv,
+          action: "reschedule",
+          bookingId: foreign,
+          startUtc: slotAt(4, "11:00"),
+        })
+      ).rejects.toThrow();
+      expect((await bookingRow(foreign))?.status).toBe("agendada");
+    });
+
+    for (const where of ["otro-contacto"] as const) {
+      it(`cancelar: pendiente con la cita de ${where} → no cancela nada y lo dice`, async () => {
+        const ctx = await seed();
+        const own = await addBooking(ctx, slotAt(3, "10:00"));
+        const foreign = await foreignBooking(ctx, where, slotAt(5, "12:00"));
+        await cancelQuestion(ctx);
+        await retarget(ctx, foreign);
+
+        const replies = await turn(ctx, "sí");
+        expect(replies).toEqual(["No encontré una cita activa para cancelar."]);
+        expect((await bookingRow(foreign))?.status).toBe("agendada");
+        expect((await bookingRow(own))?.status).toBe("agendada");
+        expect(await pending(ctx)).toBeNull();
+      });
+
+      it(`reprogramar: pendiente con la cita de ${where} → no mueve nada y lo dice`, async () => {
+        const ctx = await seed();
+        const own = await addBooking(ctx, slotAt(3, "10:00"));
+        const foreign = await foreignBooking(ctx, where, slotAt(5, "12:00"));
+        await rescheduleQuestion(ctx);
+        await retarget(ctx, foreign);
+
+        const replies = await turn(ctx, "sí");
+        expect(replies).toEqual(["No encontré una cita activa para reprogramar."]);
+        expect((await bookingRow(foreign))!.at.toISOString()).toBe(slotAt(5, "12:00"));
+        expect((await bookingRow(own))!.at.toISOString()).toBe(slotAt(3, "10:00"));
+        // Ninguna cita nueva en el negocio: la propia y la del otro contacto.
+        expect(await bookings(ctx)).toHaveLength(2);
+      });
+    }
+
+    it("reprogramar: la cita ya se canceló antes del 'sí' → no mueve ni crea nada y lo dice", async () => {
+      const ctx = await seed();
+      const own = await addBooking(ctx, slotAt(3, "10:00"));
+      await rescheduleQuestion(ctx);
+      const sql = (await import("@/lib/db")).getSql();
+      await sql`update booking set status = 'cancelada' where id = ${own}`;
+
+      const replies = await turn(ctx, "sí");
+      expect(replies).toEqual(["No encontré una cita activa para reprogramar."]);
+      const after = await bookings(ctx);
+      expect(after).toHaveLength(1);
+      expect(after[0]!.status).toBe("cancelada");
+      expect(after[0]!.at.toISOString()).toBe(slotAt(3, "10:00"));
+    });
+
+    for (const action of ["cancel", "reschedule"] as const) {
+      it(`${action}: la cita ya no existe (se borró) → la pendiente desaparece con ella y el 'sí' no ejecuta nada`, async () => {
+        const ctx = await seed();
+        const own = await addBooking(ctx, slotAt(3, "10:00"));
+        if (action === "cancel") await cancelQuestion(ctx);
+        else await rescheduleQuestion(ctx);
+        const sql = (await import("@/lib/db")).getSql();
+        await sql`delete from booking where id = ${own}`;
+        // La FK borra la pendiente en cascada: no queda nada que confirmar.
+        expect(await pending(ctx)).toBeNull();
+
+        const replies = await turn(ctx, "sí");
+        expect(await bookings(ctx)).toHaveLength(0);
+        // Sin pendiente el "sí" sigue el flujo normal: responde el modelo.
+        expect(replies).toEqual(["Respuesta del modelo."]);
+      });
+    }
+  });
 });
