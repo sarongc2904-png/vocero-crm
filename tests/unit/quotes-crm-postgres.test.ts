@@ -127,7 +127,7 @@ async function api() {
     markSent: (id: string) => markSent.POST(req(`/api/quotes/${id}/mark-sent`, { method: "POST" }), p(id)),
     cancel: (id: string) => cancel.POST(req(`/api/quotes/${id}/cancel`, { method: "POST" }), p(id)),
     duplicate: (id: string) => dup.POST(req(`/api/quotes/${id}/duplicate`, { method: "POST" }), p(id)),
-    options: () => options.GET(req("/api/quotes/options")),
+    options: () => options.GET(),
   };
 }
 
