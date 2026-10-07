@@ -7,6 +7,8 @@ import { getBranding } from "@/server/branding";
 import { AppShell } from "@/components/app-shell";
 import { resolveBuildCommit } from "@/lib/version";
 import { agendaEnabled } from "@/server/agenda/flag";
+import { quotesEnabled } from "@/server/quotes/flag";
+import { hasOrganizationPermission } from "@/lib/auth/permissions";
 import { getCommercialAccess } from "@/server/commercial/entitlement";
 
 export default async function AppLayout({
@@ -58,6 +60,11 @@ export default async function AppLayout({
       // prop, igual que los canales de la Bandeja. El nav es un componente de
       // cliente: no puede —ni debe— leer variables de entorno.
       agenda={agendaEnabled()}
+      // 0037 — bandera de la instancia Y permiso del usuario.
+      quotes={
+        quotesEnabled() &&
+        hasOrganizationPermission(session.role, "quotes.read", { isSuperadmin: session.isSuperadmin })
+      }
     >
       {children}
     </AppShell>

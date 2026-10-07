@@ -30,6 +30,7 @@ export function AppShell({
   theme,
   commit,
   agenda = false,
+  quotes = false,
   children,
 }: {
   branding: Branding;
@@ -42,6 +43,8 @@ export function AppShell({
   commit?: string;
   /** 015 — ¿esta instancia tiene agenda? Lo decide el servidor. */
   agenda?: boolean;
+  /** 0037 — ¿cotizaciones encendidas y visibles para este usuario? */
+  quotes?: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -82,6 +85,7 @@ export function AppShell({
         activeOrganizationId={activeOrganizationId}
         theme={theme}
         agenda={agenda}
+        quotes={quotes}
         open={navOpen}
         onClose={() => setNavOpen(false)}
       />

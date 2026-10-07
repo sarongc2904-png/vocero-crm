@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   CalendarDays,
+  FileText,
   FlaskConical,
   Inbox,
   Kanban,
@@ -52,6 +53,25 @@ const AGENDA_ITEM: NavItem = {
   icon: CalendarDays,
 };
 
+/** 0037 — "Cotizaciones" solo existe con la bandera COTIZACIONES encendida. */
+const QUOTES_ITEM: NavItem = {
+  href: "/quotes",
+  label: "Cotizaciones",
+  icon: FileText,
+};
+
+/**
+ * Menú principal según los módulos que existen en esta instancia. El flujo
+ * sigue el trabajo diario: Mensajes → Prospectos → Citas → Cotizaciones →
+ * Clientes. Exportado para poder probar que un módulo apagado no aparece.
+ */
+export function buildPrimaryNav(modules: { agenda: boolean; quotes: boolean }): NavItem[] {
+  const pipelineIndex = PRIMARY_NAV.findIndex((item) => item.href === "/pipeline");
+  const extra = [...(modules.agenda ? [AGENDA_ITEM] : []), ...(modules.quotes ? [QUOTES_ITEM] : [])];
+  if (extra.length === 0 || pipelineIndex < 0) return PRIMARY_NAV;
+  return [...PRIMARY_NAV.slice(0, pipelineIndex + 1), ...extra, ...PRIMARY_NAV.slice(pipelineIndex + 1)];
+}
+
 /**
  * Un renglón del menú, como el `side-item` del mockup de la landing: texto
  * semibold, esquinas de 9px y, activo, lavado del acento con tinta azul.
@@ -74,6 +94,7 @@ export function AppNav({
   theme,
   commit,
   agenda = false,
+  quotes = false,
   open = false,
   onClose,
 }: {
@@ -94,6 +115,11 @@ export function AppNav({
    * todavía debe ver la entrada igual.
    */
   agenda?: boolean;
+  /**
+   * 0037 — ¿hay cotizaciones en esta instancia Y el usuario puede verlas?
+   * Lo decide el servidor (bandera + `quotes.read`).
+   */
+  quotes?: boolean;
   /** Solo aplica por debajo de `lg`: en escritorio el lateral es fijo. */
   open?: boolean;
   onClose?: () => void;
@@ -122,16 +148,7 @@ export function AppNav({
 
   const sha = commit || BUILD_COMMIT;
   const settingsActive = pathname.startsWith("/settings");
-  // El flujo principal sigue el trabajo diario del usuario:
-  // Mensajes → Prospectos → Citas → Clientes.
-  const pipelineIndex = PRIMARY_NAV.findIndex((item) => item.href === "/pipeline");
-  const primaryItems = agenda && pipelineIndex >= 0
-    ? [
-        ...PRIMARY_NAV.slice(0, pipelineIndex + 1),
-        AGENDA_ITEM,
-        ...PRIMARY_NAV.slice(pipelineIndex + 1),
-      ]
-    : PRIMARY_NAV;
+  const primaryItems = buildPrimaryNav({ agenda, quotes });
 
   return (
     <aside
