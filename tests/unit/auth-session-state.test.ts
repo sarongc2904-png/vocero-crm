@@ -42,6 +42,7 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/lib/auth/permissions", () => ({
   isConfiguredSuperadmin: () => false,
+  hasOrganizationPermission: () => true,
 }));
 
 vi.mock("@/server/auth/organizations", () => ({
