@@ -263,7 +263,7 @@ describe.skipIf(!PG_URL)("cotizaciones: CRM (API + pantallas) en Postgres real",
       expect(issued.status).toBe(201);
       expect(issued.headers.get("cache-control")).toContain("no-store");
       const { url, token } = (await issued.json()) as { url: string; token: string };
-      expect(url).toBe(`http://localhost:3000/p/${token}`);
+      expect(url).toBe(`${process.env.APP_BASE_URL}/p/${token}`);
       expect((await r.markSent(quote)).status).toBe(200);
       const dup = await r.duplicate(quote);
       expect(dup.status).toBe(201);
