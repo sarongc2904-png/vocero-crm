@@ -5,7 +5,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * layout del CRM decide con la bandera Y el permiso `quotes.read`.
  */
 
-const h = vi.hoisted(() => ({ role: "owner" as "owner" | "admin" | "agent", isSuperadmin: false }));
+const h = vi.hoisted(() => ({
+  role: "owner" as "owner" | "admin" | "agent",
+  isSuperadmin: false,
+  hasOrganizationPermission: vi.fn(() => true),
+  redirect: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  redirect: h.redirect,
+  usePathname: () => "/inbox",
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
+
+vi.mock("@/lib/auth/permissions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth/permissions")>();
+  return { ...actual, hasOrganizationPermission: h.hasOrganizationPermission };
+});
 
 vi.mock("@/lib/auth/session", () => ({
   getSessionState: async () => ({
@@ -27,12 +43,23 @@ afterEach(() => {
   vi.unstubAllEnvs();
   h.role = "owner";
   h.isSuperadmin = false;
+  h.hasOrganizationPermission.mockReset();
+  h.hasOrganizationPermission.mockReturnValue(true);
+  h.redirect.mockClear();
 });
 
 async function layoutQuotesProp(): Promise<boolean> {
   const { default: AppLayout } = await import("@/app/(app)/layout");
   const element = (await AppLayout({ children: null })) as { props: { quotes?: boolean } };
   return Boolean(element.props.quotes);
+}
+
+async function quotesLinkFromLayout() {
+  const { buildPrimaryNav } = await import("@/components/app-nav");
+  const quotes = await layoutQuotesProp();
+  return buildPrimaryNav({ agenda: false, quotes }).find(
+    (item) => item.href === "/quotes"
+  );
 }
 
 describe("navegación de cotizaciones", () => {
@@ -70,11 +97,41 @@ describe("navegación de cotizaciones", () => {
     expect(await layoutQuotesProp()).toBe(false);
   });
 
-  it("con la bandera encendida, la entrada aparece para quien tiene quotes.read", async () => {
+  it("con la bandera encendida y permiso concedido, renderiza el enlace sin redirección", async () => {
     vi.stubEnv("COTIZACIONES", "on");
-    for (const role of ["owner", "admin", "agent"] as const) {
-      h.role = role;
-      expect(await layoutQuotesProp()).toBe(true);
-    }
+    h.hasOrganizationPermission.mockReturnValue(true);
+
+    expect(await quotesLinkFromLayout()).toEqual(
+      expect.objectContaining({ href: "/quotes", label: "Cotizaciones" })
+    );
+    expect(h.hasOrganizationPermission).toHaveBeenCalledWith("owner", "quotes.read", {
+      isSuperadmin: false,
+    });
+    expect(h.redirect).not.toHaveBeenCalled();
+  });
+
+  it("con la bandera encendida y permiso negado, omite el enlace sin redirección", async () => {
+    vi.stubEnv("COTIZACIONES", "on");
+    h.hasOrganizationPermission.mockReturnValue(false);
+
+    expect(await quotesLinkFromLayout()).toBeUndefined();
+    expect(h.redirect).not.toHaveBeenCalled();
+  });
+
+  it("si falla el cálculo del permiso, conserva el CRM y omite el enlace", async () => {
+    vi.stubEnv("COTIZACIONES", "on");
+    h.hasOrganizationPermission.mockImplementation(() => {
+      throw new Error("permission backend unavailable");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(await quotesLinkFromLayout()).toBeUndefined();
+    expect(h.redirect).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      "[cotizaciones] no se pudo calcular el permiso de navegación:",
+      expect.any(Error)
+    );
+
+    consoleError.mockRestore();
   });
 });
