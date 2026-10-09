@@ -113,8 +113,8 @@ vi.mock("@/server/instagram/send", () => ({ sendInstagramText: vi.fn() }));
 vi.mock("@/server/messenger/send", () => ({ sendMessengerText: vi.fn() }));
 vi.mock("@/server/channels/enabled", () => ({ isChannelEnabled: () => true }));
 
-import { sendMediaMessage, SendError } from "@/server/inbox/send";
-import { sendTemplate } from "@/server/whatsapp/templates";
+const { sendMediaMessage } = await import("@/server/inbox/send");
+const { sendTemplate } = await import("@/server/whatsapp/templates");
 
 const mediaInput = {
   organizationId: "org-test", conversationId: "conversation-test",
@@ -169,7 +169,7 @@ describe("sendMediaMessage: backward compatibility and redaction (no DB / no net
     ["regex characters", [".?+*[]()"], "wrong .?+*[]() and .?+*[]()", "wrong •••••• and ••••••"],
   ])("%s secrets redaction is applied to stored and thrown errors", async (_name, secrets, raw, expected) => {
     const { MetaApiError } = await import("@/lib/meta/client");
-    h.graphError = new MetaApiError(raw, 400, 131026);
+    h.graphError = new (MetaApiError as unknown as new (message: string, status: number, code: number) => Error)(raw, 400, 131026);
     const payload = { ...mediaInput, storedCaption: "Cotización " + mask, ...(secrets === undefined ? {} : { secrets }) };
     await expect(sendMediaMessage(payload)).rejects.toMatchObject({
       code: "meta_error",
