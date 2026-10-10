@@ -1,0 +1,142 @@
+import { randomBytes } from "node:crypto";
+import { eq, isNull } from "drizzle-orm";
+import { getDb, schema } from "@/lib/db";
+import { newId } from "@/lib/db/ids";
+import { scoped } from "@/lib/db/tenant";
+import { QuoteError } from "@/server/quotes/service";
+import { hashQuoteToken } from "@/server/quotes/token-hash";
+
+export { hashQuoteToken } from "@/server/quotes/token-hash";
+
+/**
+ * Enlaces públicos /p/[token].
+ *
+ * - El token son 32 bytes aleatorios (256 bits) en base64url: 43 caracteres.
+ * - En la base vive SOLO su SHA-256; el token en claro se devuelve UNA vez, al
+ *   emitirlo, y nunca más se puede volver a leer.
+ * - Expira con la vigencia de la cotización y se puede revocar. Emitir uno
+ *   nuevo revoca los anteriores de esa cotización.
+ */
+
+export const QUOTE_TOKEN_BYTES = 32;
+const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+
+export function generateQuoteToken(): string {
+  return randomBytes(QUOTE_TOKEN_BYTES).toString("base64url");
+}
+
+/** Descarta sin tocar la base lo que ni siquiera tiene forma de token. */
+export function isWellFormedQuoteToken(token: string): boolean {
+  return TOKEN_RE.test(token);
+}
+
+export type IssuedQuoteLink = {
+  /** En claro, solo en esta respuesta. */
+  token: string;
+  expiresAt: Date;
+};
+
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/**
+ * Dentro de una transacción ya abierta (y con la cotización bloqueada por el
+ * llamador): revoca los enlaces vivos de la cotización y guarda el hash del
+ * token nuevo. Devuelve el id del enlace, nunca el token.
+ */
+export async function replaceQuoteLinkInTx(
+  tx: Tx,
+  input: { organizationId: string; quoteId: string; token: string; expiresAt: Date; now: Date }
+): Promise<string> {
+  const { organizationId, quoteId, now } = input;
+  await tx
+    .update(schema.quoteLink)
+    .set({ revokedAt: now })
+    .where(
+      scoped(
+        schema.quoteLink.organizationId,
+        organizationId,
+        eq(schema.quoteLink.quoteId, quoteId),
+        isNull(schema.quoteLink.revokedAt)
+      )
+    );
+  const id = newId("quoteLink");
+  await tx.insert(schema.quoteLink).values({
+    id,
+    organizationId,
+    quoteId,
+    tokenHash: hashQuoteToken(input.token),
+    expiresAt: input.expiresAt,
+    createdAt: now,
+  });
+  return id;
+}
+
+/**
+ * Emite (o reemite) el enlace de una cotización del negocio, en `borrador` o
+ * `enviada`. NO cambia el estado: el enlace de un borrador es una vista
+ * previa sin botones; pasar a `enviada` es una acción aparte
+ * (`markQuoteSent`, o un envío por WhatsApp aceptado por Meta).
+ * Solo un usuario del CRM con sesión llega aquí; el bot no puede.
+ */
+export async function issueQuoteLink(input: {
+  organizationId: string;
+  quoteId: string;
+  now?: Date;
+}): Promise<IssuedQuoteLink> {
+  const { organizationId, quoteId } = input;
+  if (!organizationId) throw new Error("issueQuoteLink(): organizationId vacío");
+  const now = input.now ?? new Date();
+  const token = generateQuoteToken();
+
+  const expiresAt = await getDb().transaction(async (tx) => {
+    const rows = await tx
+      .select({ status: schema.quote.status, validUntil: schema.quote.validUntil })
+      .from(schema.quote)
+      .where(scoped(schema.quote.organizationId, organizationId, eq(schema.quote.id, quoteId)))
+      .for("update")
+      .limit(1);
+    const quote = rows[0];
+    if (!quote) throw new QuoteError("not_found", "Cotización no encontrada");
+    if (quote.status !== "borrador" && quote.status !== "enviada") {
+      throw new QuoteError("invalid", `La cotización ya está ${quote.status}; no se puede volver a compartir`);
+    }
+    if (quote.validUntil.getTime() <= now.getTime()) {
+      throw new QuoteError("invalid", "La vigencia de la cotización ya terminó");
+    }
+
+    await replaceQuoteLinkInTx(tx, { organizationId, quoteId, token, expiresAt: quote.validUntil, now });
+    return quote.validUntil;
+  });
+
+  return { token, expiresAt };
+}
+
+/** Revoca todos los enlaces vivos de una cotización del negocio. */
+export async function revokeQuoteLinks(input: {
+  organizationId: string;
+  quoteId: string;
+  now?: Date;
+}): Promise<{ revoked: number }> {
+  const { organizationId, quoteId } = input;
+  if (!organizationId) throw new Error("revokeQuoteLinks(): organizationId vacío");
+  const db = getDb();
+  const owned = await db
+    .select({ id: schema.quote.id })
+    .from(schema.quote)
+    .where(scoped(schema.quote.organizationId, organizationId, eq(schema.quote.id, quoteId)))
+    .limit(1);
+  if (!owned[0]) throw new QuoteError("not_found", "Cotización no encontrada");
+  const revoked = await db
+    .update(schema.quoteLink)
+    .set({ revokedAt: input.now ?? new Date() })
+    .where(
+      scoped(
+        schema.quoteLink.organizationId,
+        organizationId,
+        eq(schema.quoteLink.quoteId, quoteId),
+        isNull(schema.quoteLink.revokedAt)
+      )
+    )
+    .returning({ id: schema.quoteLink.id });
+  return { revoked: revoked.length };
+}

@@ -7,7 +7,29 @@ import { getBranding } from "@/server/branding";
 import { AppShell } from "@/components/app-shell";
 import { resolveBuildCommit } from "@/lib/version";
 import { agendaEnabled } from "@/server/agenda/flag";
+import { quotesEnabled } from "@/server/quotes/flag";
+import { hasOrganizationPermission } from "@/lib/auth/permissions";
 import { getCommercialAccess } from "@/server/commercial/entitlement";
+
+function canShowQuotesNavigation(
+  role: Parameters<typeof hasOrganizationPermission>[0],
+  isSuperadmin: boolean
+): boolean {
+  if (!quotesEnabled()) return false;
+
+  try {
+    return hasOrganizationPermission(role, "quotes.read", { isSuperadmin });
+  } catch (error) {
+    // La navegación de un módulo opcional no debe tumbar todo el CRM. Ante
+    // una avería inesperada, se degrada a "sin permiso" y se conserva el resto
+    // del layout; las rutas y APIs de cotizaciones mantienen sus propios gates.
+    console.error(
+      "[cotizaciones] no se pudo calcular el permiso de navegación:",
+      error
+    );
+    return false;
+  }
+}
 
 export default async function AppLayout({
   children,
@@ -58,6 +80,8 @@ export default async function AppLayout({
       // prop, igual que los canales de la Bandeja. El nav es un componente de
       // cliente: no puede —ni debe— leer variables de entorno.
       agenda={agendaEnabled()}
+      // 0037 — bandera de la instancia Y permiso del usuario.
+      quotes={canShowQuotesNavigation(session.role, session.isSuperadmin)}
     >
       {children}
     </AppShell>

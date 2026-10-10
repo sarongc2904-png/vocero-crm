@@ -21,6 +21,8 @@ export type SseEvent =
   | { type: "conversation.updated"; data: { conversation: unknown } }
   /** 015 — algo cambió en la agenda: la pantalla de Citas se refresca sola. */
   | { type: "booking.updated"; data: { bookingId: string } }
+  /** 0037 — el cliente aceptó o rechazó una cotización desde su enlace. */
+  | { type: "quote.updated"; data: { quoteId: string; status: string } }
   | {
       type: "lab.run";
       data: {

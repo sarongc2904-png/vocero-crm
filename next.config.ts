@@ -25,6 +25,20 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_APP_VERSION: version,
     NEXT_PUBLIC_BUILD_COMMIT: process.env.SOURCE_COMMIT ?? "",
   },
+  // 0037 — la página pública de cotizaciones lleva el token en la URL: que
+  // no se indexe, no se cachee y no viaje en el Referer. Las rutas de API de
+  // /p y /api/p ya ponen estos encabezados en cada respuesta.
+  async headers() {
+    const privateLink = [
+      { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+      { key: "Referrer-Policy", value: "no-referrer" },
+      { key: "Cache-Control", value: "no-store, max-age=0" },
+    ];
+    return [
+      { source: "/p/:path*", headers: privateLink },
+      { source: "/api/p/:path*", headers: privateLink },
+    ];
+  },
 };
 
 export default nextConfig;

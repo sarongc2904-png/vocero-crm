@@ -276,6 +276,12 @@ export async function sendTemplate(input: {
   conversationId: string;
   templateId: string;
   variables?: string[];
+  /**
+   * 0038 — Valores con que se GUARDA el cuerpo en el hilo, en lugar de
+   * `variables` (que sí viajan a Meta). Para enmascarar un enlace con token.
+   * Sin él, se guarda el cuerpo con `variables`, como siempre.
+   */
+  storedVariables?: string[];
 }): Promise<{ messageId: string }> {
   const db = getDb();
 
@@ -389,7 +395,10 @@ export async function sendTemplate(input: {
       waMessageId,
       direction: "out",
       type: "template",
-      text: renderBody(template.body, values),
+      text: renderBody(
+        template.body,
+        input.storedVariables ? input.storedVariables.slice(0, variableCount).map((v) => v.trim()) : values
+      ),
       status: "pending",
       origin: "template",
     })

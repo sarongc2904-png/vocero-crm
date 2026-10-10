@@ -53,6 +53,12 @@ const prefixes = {
   labProfile: "lbp",
   // IA-1 / IA-W2 — confirmación pendiente de una acción de agenda
   pendingAgendaAction: "paa",
+  // 0037 — cotizaciones
+  quote: "qt",
+  quoteItem: "qti",
+  quoteLink: "qtl",
+  // 0038 — intentos de envío por WhatsApp
+  quoteSend: "qts",
 } as const;
 
 export type IdKind = keyof typeof prefixes;

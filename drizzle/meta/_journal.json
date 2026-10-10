@@ -260,6 +260,20 @@
       "when": 1791224000000,
       "tag": "0036_agent_observability_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791310400000,
+      "tag": "0037_quotes",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791396800000,
+      "tag": "0038_quote_send",
+      "breakpoints": true
     }
   ]
 }

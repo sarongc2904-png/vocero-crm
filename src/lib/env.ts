@@ -52,6 +52,10 @@ const envSchema = z.object({
   // conversacion, no se le reporta nada a Meta y la superficie da 404.
   // Ej.: ATRIBUCION=on
   ATRIBUCION: z.string().optional(),
+  // 0037: cotizaciones (crear, PDF, enlace público para aceptar o rechazar).
+  // Apagadas por defecto: sin ella toda su superficie responde 404.
+  // Ej.: COTIZACIONES=on
+  COTIZACIONES: z.string().optional(),
   // 015: bases de los conectores. Solo se sobreescriben para apuntar a los
   // mocks en el self-test; en producción se usan las reales.
   ZOOM_BASE_URL: z.string().url().default("https://api.zoom.us/v2"),

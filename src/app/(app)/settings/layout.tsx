@@ -1,6 +1,7 @@
 import { SettingsNav } from "@/components/settings/settings-nav";
 import { agendaEnabled } from "@/server/agenda/flag";
 import { atribucionEnabled } from "@/server/attribution/flag";
+import { quotesEnabled } from "@/server/quotes/flag";
 import { isChannelEnabled } from "@/server/channels/enabled";
 import { redirect } from "next/navigation";
 import { requireSession } from "@/lib/auth/session";
@@ -27,6 +28,7 @@ export default async function SettingsLayout({
           agenda={agendaEnabled()}
           atribucion={atribucionEnabled()}
           messenger={isChannelEnabled("messenger")}
+          quotes={quotesEnabled()}
         />
         <div className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">{children}</div>
       </div>

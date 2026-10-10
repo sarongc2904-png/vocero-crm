@@ -40,9 +40,14 @@ vi.mock("@/lib/auth", () => ({
   }),
 }));
 
-vi.mock("@/lib/auth/permissions", () => ({
-  isConfiguredSuperadmin: () => false,
-}));
+vi.mock("@/lib/auth/permissions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth/permissions")>();
+  return {
+    ...actual,
+    isConfiguredSuperadmin: () => false,
+    hasOrganizationPermission: vi.fn(() => true),
+  };
+});
 
 vi.mock("@/server/auth/organizations", () => ({
   organizationExists: async () => true,

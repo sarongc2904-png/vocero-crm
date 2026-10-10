@@ -41,13 +41,16 @@ jobs:
           - name: default
             channels: ""
             agenda: ""
+            cotizaciones: ""
           - name: completo
             channels: "whatsapp,instagram,messenger"
             agenda: "on"
+            cotizaciones: "on"
 
     env:
       CHANNELS: ${{ matrix.config.channels }}
       AGENDA: ${{ matrix.config.agenda }}
+      COTIZACIONES: ${{ matrix.config.cotizaciones }}
 
     steps:
       - uses: actions/checkout@v7
@@ -128,6 +131,7 @@ jobs:
       CHANNELS: whatsapp,instagram,messenger
       AGENDA: "on"
       ATRIBUCION: "on"
+      COTIZACIONES: "on"
       GOOGLE_CAL_BASE_URL: http://127.0.0.1:3000/api/dev/google-mock
       GOOGLE_OAUTH_BASE_URL: http://127.0.0.1:3000/api/dev/google-mock
       ZOOM_BASE_URL: http://127.0.0.1:3000/api/dev/zoom-mock
