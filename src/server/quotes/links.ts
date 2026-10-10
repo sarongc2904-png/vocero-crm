@@ -1,9 +1,12 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { eq, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { QuoteError } from "@/server/quotes/service";
+import { hashQuoteToken } from "@/server/quotes/token-hash";
+
+export { hashQuoteToken } from "@/server/quotes/token-hash";
 
 /**
  * Enlaces públicos /p/[token].
@@ -20,10 +23,6 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
 export function generateQuoteToken(): string {
   return randomBytes(QUOTE_TOKEN_BYTES).toString("base64url");
-}
-
-export function hashQuoteToken(token: string): string {
-  return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
 /** Descarta sin tocar la base lo que ni siquiera tiene forma de token. */
