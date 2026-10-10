@@ -1,5 +1,5 @@
 import { checkRateLimit } from "@/lib/rate-limit";
-import { hashQuoteToken } from "@/server/quotes/links";
+import { hashQuoteToken } from "@/server/quotes/token-hash";
 
 /**
  * Contrato HTTP de la superficie pública /p/[token] y /api/p/[token]/*.
@@ -7,8 +7,10 @@ import { hashQuoteToken } from "@/server/quotes/links";
  * - Toda respuesta lleva `noindex`, `no-store` y `no-referrer`: la URL con el
  *   token no debe quedar en buscadores, cachés intermedios ni en el Referer de
  *   otro sitio.
- * - Todo "no existe" es ESTE 404, byte por byte: token mal formado, ajeno,
- *   vencido, revocado o bandera apagada son indistinguibles.
+ * - Todo "no existe" es un 404 que no distingue la causa del fallo: token mal
+ *   formado, ajeno, vencido, revocado o bandera apagada. El cuerpo de la
+ *   página de Next.js repite el token de la URL pedida, que el visitante ya
+ *   tiene.
  * - Nada aquí registra el token: los errores se loguean sin URL ni params.
  */
 
@@ -27,6 +29,12 @@ export function publicJson(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: PUBLIC_HEADERS });
 }
 
+/**
+ * La IP sale del primer valor de X-Forwarded-For. Solo es confiable porque
+ * Caddy es el único camino hacia la app: el compose no publica el puerto 3000
+ * y Oracle solo abre 22, 80 y 443. Si se pone una CDN delante o se publica
+ * otro puerto, hay que configurar proxies de confianza antes de usar esta IP.
+ */
 function clientIp(req: Request): string {
   return (
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
@@ -38,6 +46,10 @@ function clientIp(req: Request): string {
 /**
  * Límite por IP y por enlace. La llave del enlace es el HASH del token, para
  * que ni siquiera la memoria del rate-limiter guarde tokens en claro.
+ *
+ * La página /p/[token] (por el middleware), el PDF y el logo comparten el
+ * grupo "view" (60 por minuto por token y 120 por IP), así que una carga de
+ * página con logo cuenta dos veces.
  */
 export function publicRateLimited(
   req: Request,
@@ -49,8 +61,13 @@ export function publicRateLimited(
       ? { ip: { windowMs: 60_000, max: 10 }, token: { windowMs: 60_000, max: 5 } }
       : { ip: { windowMs: 60_000, max: 120 }, token: { windowMs: 60_000, max: 60 } };
   const byIp = checkRateLimit(`quote-public:${scope}:ip:${clientIp(req)}`, limits.ip);
+  if (!byIp.allowed) return publicRateLimitResponse();
   const byToken = checkRateLimit(`quote-public:${scope}:tk:${hashQuoteToken(token)}`, limits.token);
-  if (byIp.allowed && byToken.allowed) return null;
+  if (byToken.allowed) return null;
+  return publicRateLimitResponse();
+}
+
+function publicRateLimitResponse(): Response {
   return new Response(
     JSON.stringify({ error: { code: "rate_limited", message: "Demasiadas solicitudes; intenta en un minuto" } }),
     { status: 429, headers: { ...PUBLIC_HEADERS, "content-type": "application/json", "retry-after": "60" } }
