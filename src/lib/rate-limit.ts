@@ -10,6 +10,7 @@ type Bucket = number[]; // timestamps (ms) de los intentos
 const globalForRl = globalThis as unknown as {
   __voceroRateLimit?: Map<string, Bucket>;
   __voceroRateLimitExpiry?: Map<string, number>;
+  __voceroRateLimitMaxWindow?: Map<string, number>;
   __voceroRateLimitNextExpiry?: number;
   __voceroRateLimitNextSweep?: number;
 };
@@ -31,6 +32,13 @@ function expiryStore(): Map<string, number> {
   return globalForRl.__voceroRateLimitExpiry;
 }
 
+function maxWindowStore(): Map<string, number> {
+  if (!globalForRl.__voceroRateLimitMaxWindow) {
+    globalForRl.__voceroRateLimitMaxWindow = new Map();
+  }
+  return globalForRl.__voceroRateLimitMaxWindow;
+}
+
 /**
  * Recorre el almacén solo cuando al menos una llave ya puede haber vencido, y a
  * lo sumo una vez cada SWEEP_INTERVAL_MS (acota el costo O(n) bajo ráfagas de
@@ -46,11 +54,13 @@ function removeExpiredEntries(now: number): void {
 
   const buckets = store();
   const expiries = expiryStore();
+  const maxWindows = maxWindowStore();
   let next: number | undefined;
   for (const [key, expiresAt] of expiries) {
     if (expiresAt <= now) {
       expiries.delete(key);
       buckets.delete(key);
+      maxWindows.delete(key);
     } else if (next === undefined || expiresAt < next) {
       next = expiresAt;
     }
@@ -61,7 +71,10 @@ function removeExpiredEntries(now: number): void {
 function rememberExpiry(key: string, bucket: Bucket, windowMs: number): void {
   const last = bucket[bucket.length - 1];
   if (last === undefined) return;
-  const expiresAt = last + windowMs;
+  const windows = maxWindowStore();
+  const maxWindowMs = Math.max(windows.get(key) ?? 0, windowMs);
+  windows.set(key, maxWindowMs);
+  const expiresAt = last + maxWindowMs;
   expiryStore().set(key, expiresAt);
   const next = globalForRl.__voceroRateLimitNextExpiry;
   if (next === undefined || expiresAt < next) {
@@ -96,6 +109,7 @@ export function checkRateLimit(
 export function resetRateLimit(): void {
   store().clear();
   expiryStore().clear();
+  maxWindowStore().clear();
   globalForRl.__voceroRateLimitNextExpiry = undefined;
   globalForRl.__voceroRateLimitNextSweep = undefined;
 }

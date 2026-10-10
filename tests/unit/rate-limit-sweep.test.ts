@@ -5,6 +5,7 @@ import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
 const rl = globalThis as unknown as {
   __voceroRateLimit?: Map<string, number[]>;
   __voceroRateLimitExpiry?: Map<string, number>;
+  __voceroRateLimitMaxWindow?: Map<string, number>;
   __voceroRateLimitNextExpiry?: number;
   __voceroRateLimitNextSweep?: number;
 };
@@ -34,6 +35,21 @@ describe("rate limit: pasada de limpieza acotada a una cada 10 s", () => {
     expect(checkRateLimit("ip:1", opts, t0 + 60_001).allowed).toBe(true);
   });
 
+  it("vence exactamente en el borde de la ventana", () => {
+    const opts = { windowMs: 1_000, max: 1 };
+    const t0 = 7_000_000;
+
+    expect(checkRateLimit("borde", opts, t0)).toEqual({ allowed: true, remaining: 0 });
+    expect(checkRateLimit("borde", opts, t0 + 999)).toEqual({
+      allowed: false,
+      remaining: 0,
+    });
+    expect(checkRateLimit("borde", opts, t0 + 1_000)).toEqual({
+      allowed: true,
+      remaining: 0,
+    });
+  });
+
   it("las claves vencidas se eliminan tras la ventana más el intervalo, y nunca antes de vencer", () => {
     const windowMs = 60_000;
     const t0 = 10_000_000;
@@ -59,6 +75,8 @@ describe("rate limit: pasada de limpieza acotada a una cada 10 s", () => {
 
     tick(t0 + windowMs + SWEEP_INTERVAL_MS);
     expect(hasKey("vieja")).toBe(false);
+    expect(rl.__voceroRateLimitExpiry?.has("vieja")).toBe(false);
+    expect(rl.__voceroRateLimitMaxWindow?.has("vieja")).toBe(false);
   });
 
   it("con 20 000 claves nuevas por segundo la pasada ocurre a lo sumo una vez cada 10 s", () => {
@@ -106,6 +124,7 @@ describe("rate limit: pasada de limpieza acotada a una cada 10 s", () => {
 
     expect(rl.__voceroRateLimit?.size ?? 0).toBe(0);
     expect(rl.__voceroRateLimitExpiry?.size ?? 0).toBe(0);
+    expect(rl.__voceroRateLimitMaxWindow?.size ?? 0).toBe(0);
     expect(rl.__voceroRateLimitNextExpiry).toBeUndefined();
     expect(rl.__voceroRateLimitNextSweep).toBeUndefined();
     // Sin pasada pendiente heredada y sin contadores previos.
@@ -136,5 +155,27 @@ describe("rate limit: pasada de limpieza acotada a una cada 10 s", () => {
     expect(checkRateLimit("otra", short, t0 + 60_002 + SWEEP_INTERVAL_MS).allowed).toBe(true);
     expect(hasKey("corta")).toBe(false);
     expect(hasKey("larga")).toBe(true);
+  });
+
+  it("una ventana corta no adelanta la expiración de un contador compartido con una ventana larga", () => {
+    const long = { windowMs: 60_000, max: 2 };
+    const short = { windowMs: 1_000, max: 2 };
+    const t0 = 50_000_000;
+
+    expect(checkRateLimit("compartida", long, t0)).toEqual({
+      allowed: true,
+      remaining: 1,
+    });
+    expect(checkRateLimit("compartida", short, t0 + 500)).toEqual({
+      allowed: true,
+      remaining: 0,
+    });
+    expect(rl.__voceroRateLimitMaxWindow?.get("compartida")).toBe(long.windowMs);
+    expect(rl.__voceroRateLimitExpiry?.get("compartida")).toBe(t0 + 500 + long.windowMs);
+
+    expect(checkRateLimit("compartida", long, t0 + 1_500)).toEqual({
+      allowed: false,
+      remaining: 0,
+    });
   });
 });

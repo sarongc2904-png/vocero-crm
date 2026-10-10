@@ -137,6 +137,9 @@ describe("Middleware de la cotización pública", () => {
     const passThrough = middleware(request(`/p/${TOKEN}`));
     expect(passThrough.status).toBe(200);
     expect(passThrough.headers.get("x-middleware-next")).toBe("1");
+    for (const [name, value] of Object.entries(PUBLIC_HEADERS)) {
+      expect(passThrough.headers.get(name), name).toBe(value);
+    }
     expect(publicQuote.getPublicQuote).not.toHaveBeenCalled();
 
     const response = await pageResponse(TOKEN);
@@ -213,6 +216,23 @@ describe("Middleware de la cotización pública", () => {
     expect(middleware(request(path, ip, "GET")).status).toBe(429);
     expect(middleware(request(path, ip, "HEAD")).status).toBe(429);
   });
+
+  it.each(["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])(
+    "%s no consume cuota de la vista pública",
+    (method) => {
+      const path = `/p/${TOKEN}`;
+      const ip = "198.51.100.57";
+
+      for (let i = 0; i < 61; i += 1) {
+        expect(middleware(request(path, ip, method)).status).toBe(200);
+      }
+      for (let i = 0; i < 60; i += 1) {
+        expect(middleware(request(path, ip, "GET")).status).toBe(200);
+      }
+      expect(middleware(request(path, ip, "GET")).status).toBe(429);
+    }
+  );
+
   it("no registra el token", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
