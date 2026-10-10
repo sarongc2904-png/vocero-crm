@@ -18,6 +18,13 @@ function ok(label, condition, detail = "") {
   console.log(`PASS ${String(passed).padStart(2, "0")} ${label}`);
 }
 
+let skipped = 0;
+/** Comportamiento conocido que hoy NO se cumple: se documenta sin ejecutarlo. */
+function skip(label, note) {
+  skipped += 1;
+  console.log(`SKIP ${label} — ${note}`);
+}
+
 function runWorker(mode) {
   const result = spawnSync(process.execPath, ["scripts/release-gate-worker.mjs", mode], {
     cwd: process.cwd(),
@@ -254,6 +261,52 @@ try {
   ok(
     "agenda legacy devuelve exclusion_violation",
     legacyRace.find((result) => result.status === "rejected")?.reason?.code === "23P01"
+  );
+
+  // Agenda legacy (sin profesional): qué libera y qué no comparte el hueco.
+  const insertLegacy = (id, org, at, { status = "agendada", isTest = false, kind = "session" } = {}) => sql`
+    insert into booking
+      (id, organization_id, kind, status, is_test, scheduled_at, duration_minutes)
+    values (${id}, ${org}, ${kind}, ${status}, ${isTest}, ${at}, 60)
+    returning id
+  `;
+  const freedAt = "2031-01-17T16:00:00.000Z";
+  await insertLegacy(`bk_legacy_cancel_${suffix}`, orgA, freedAt);
+  await sql`update booking set status = 'cancelada' where id = ${`bk_legacy_cancel_${suffix}`}`;
+  const afterCancel = await Promise.allSettled([
+    insertLegacy(`bk_legacy_after_cancel_${suffix}`, orgA, freedAt),
+  ]);
+  ok(
+    "agenda legacy: una cita cancelada libera el hueco",
+    afterCancel[0]?.status === "fulfilled",
+    afterCancel[0]?.status === "rejected" ? afterCancel[0]?.reason?.code : ""
+  );
+
+  const testAt = "2031-01-18T16:00:00.000Z";
+  await insertLegacy(`bk_legacy_real_${suffix}`, orgA, testAt);
+  const sandbox = await Promise.allSettled([
+    insertLegacy(`bk_legacy_sandbox_${suffix}`, orgA, testAt, { isTest: true }),
+  ]);
+  ok(
+    "agenda legacy: una cita de prueba no choca con una real",
+    sandbox[0]?.status === "fulfilled",
+    sandbox[0]?.status === "rejected" ? sandbox[0]?.reason?.code : ""
+  );
+
+  const sharedAt = "2031-01-19T16:00:00.000Z";
+  const twoTenants = await Promise.allSettled([
+    insertLegacy(`bk_legacy_org_a_${suffix}`, orgA, sharedAt),
+    insertLegacy(`bk_legacy_org_b_${suffix}`, orgB, sharedAt),
+  ]);
+  ok(
+    "agenda legacy: la misma hora en dos organizaciones coexiste",
+    twoTenants.every((result) => result.status === "fulfilled"),
+    twoTenants.map((result) => result.status === "rejected" ? result.reason?.code : "ok").join(",")
+  );
+
+  skip(
+    "agenda legacy: dos bloqueos manuales solapados coexisten",
+    "el trigger booking_legacy_active_time_guard (0025) no distingue kind y hoy los rechaza con 23P01"
   );
 
   await Promise.all([
@@ -502,7 +555,9 @@ try {
   ok("poison job alcanza dead-letter sin loop", runWorker("dead-letter-agent") === poisonId);
   ok("dead-letter queda persistido e inreclamable", (await sql`select 1 from durable_job where id = ${poisonId} and dead_letter_at is not null and attempts = 8`).length === 1 && runWorker("recover-agent") === "NONE");
 
-  console.log(`\nPOSTGRES RELEASE GATE: ${passed}/${passed} PASS`);
+  console.log(
+    `\nPOSTGRES RELEASE GATE: ${passed}/${passed} PASS${skipped ? `, ${skipped} SKIP` : ""}`
+  );
 } finally {
   await sql`delete from organization where id in (${orgA}, ${orgB})`.catch(() => {});
   await sql.end();

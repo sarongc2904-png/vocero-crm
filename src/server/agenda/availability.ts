@@ -120,9 +120,13 @@ export async function computeAvailability(
  * Solo recalcula ±1 día alrededor del instante pedido.
  *
  * OJO: esto reduce la ventana de la carrera, no la cierra — entre este SELECT
- * y el INSERT cabe otra confirmación. Quien cierra de verdad es el índice
- * único parcial de `booking` (research D7); esto existe para dar una respuesta
- * útil (con alternativas) en el caso normal.
+ * y el INSERT cabe otra confirmación. Quien cierra de verdad es la base: para
+ * citas sin profesional, el trigger `booking_legacy_active_time_guard`
+ * (migración 0025, lock por organización); con profesional, la exclusion
+ * constraint `booking_org_professional_active_time_excl` (0029). Ambos fallan
+ * con 23P01, que el servicio traduce a `slot_taken`. El índice único de la
+ * research D7 ya no existe: la 0021 lo eliminó. Esto existe para dar una
+ * respuesta útil (con alternativas) en el caso normal.
  */
 export async function findSlot(
   organizationId: string,
